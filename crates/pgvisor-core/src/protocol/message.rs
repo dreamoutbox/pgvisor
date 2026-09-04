@@ -1,7 +1,6 @@
-use std::collections::HashMap;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
-
+use std::collections::HashMap;
 
 pub const SSL_REQUEST_CODE: i32 = 80877103;
 pub const CANCEL_REQUEST_CODE: i32 = 80877102;
@@ -337,7 +336,8 @@ impl BackendMessage {
                 } else {
                     b'I'
                 };
-                let status = TransactionStatus::from_u8(status_byte).unwrap_or(TransactionStatus::Idle);
+                let status =
+                    TransactionStatus::from_u8(status_byte).unwrap_or(TransactionStatus::Idle);
                 Self::ReadyForQuery { status }
             }
             b'C' => {
@@ -352,6 +352,12 @@ impl BackendMessage {
                     .unwrap_or_default()
                     .to_string();
                 Self::ErrorResponse { message: err_str }
+            }
+            b'N' => {
+                let msg_str = std::str::from_utf8(&payload)
+                    .unwrap_or_default()
+                    .to_string();
+                Self::NoticeResponse { message: msg_str }
             }
             _ => Self::Raw { tag, payload },
         };
@@ -402,6 +408,15 @@ impl BackendMessage {
                 dst.put_i32(len);
                 dst.put_slice(body.as_bytes());
             }
+            Self::BackendKeyData {
+                process_id,
+                secret_key,
+            } => {
+                dst.put_u8(b'K');
+                dst.put_i32(12);
+                dst.put_u32(*process_id);
+                dst.put_u32(*secret_key);
+            }
             Self::Raw { tag, payload } => {
                 dst.put_u8(*tag);
                 let len = (4 + payload.len()) as i32;
@@ -449,7 +464,9 @@ mod tests {
             parameters: HashMap::new(),
         };
         startup.parameters.insert("user".into(), "postgres".into());
-        startup.parameters.insert("database".into(), "testdb".into());
+        startup
+            .parameters
+            .insert("database".into(), "testdb".into());
 
         let mut buf = BytesMut::new();
         InitialClientMessage::encode_startup(&startup, &mut buf);
@@ -500,5 +517,33 @@ mod tests {
             }
         );
     }
-}
 
+    #[test]
+    fn test_backend_key_data_encode_decode() {
+        let key_data = BackendMessage::BackendKeyData {
+            process_id: 12345,
+            secret_key: 67890,
+        };
+        let mut buf = BytesMut::new();
+        key_data.encode(&mut buf);
+
+        let decoded = BackendMessage::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(decoded, key_data);
+    }
+
+    #[test]
+    fn test_notice_response_decode() {
+        let notice = BackendMessage::NoticeResponse {
+            message: "table does not exist".into(),
+        };
+        let mut buf = BytesMut::new();
+        notice.encode(&mut buf);
+
+        let decoded = BackendMessage::decode(&mut buf).unwrap().unwrap();
+        if let BackendMessage::NoticeResponse { message } = decoded {
+            assert!(message.contains("table does not exist"));
+        } else {
+            panic!("expected NoticeResponse message");
+        }
+    }
+}

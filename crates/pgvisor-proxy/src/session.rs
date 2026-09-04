@@ -78,9 +78,44 @@ impl ClientSession {
                             "Client handshake initialized"
                         );
                         self.startup_params = Some(startup);
-                        // Complete handshake by sending AuthenticationOk + ReadyForQuery
+                        // Complete handshake by sending AuthenticationOk + ParameterStatus + BackendKeyData + ReadyForQuery
                         let mut resp = BytesMut::new();
                         BackendMessage::AuthenticationOk.encode(&mut resp);
+
+                        // Standard parameter statuses expected by Postgres clients
+                        BackendMessage::ParameterStatus {
+                            name: "server_version".into(),
+                            value: "16.3".into(),
+                        }
+                        .encode(&mut resp);
+                        BackendMessage::ParameterStatus {
+                            name: "server_encoding".into(),
+                            value: "UTF8".into(),
+                        }
+                        .encode(&mut resp);
+                        BackendMessage::ParameterStatus {
+                            name: "client_encoding".into(),
+                            value: "UTF8".into(),
+                        }
+                        .encode(&mut resp);
+                        BackendMessage::ParameterStatus {
+                            name: "standard_conforming_strings".into(),
+                            value: "on".into(),
+                        }
+                        .encode(&mut resp);
+                        BackendMessage::ParameterStatus {
+                            name: "TimeZone".into(),
+                            value: "UTC".into(),
+                        }
+                        .encode(&mut resp);
+
+                        // BackendKeyData providing cancellation keys for psql (PQcancel / Ctrl+C)
+                        BackendMessage::BackendKeyData {
+                            process_id: std::process::id(),
+                            secret_key: 12345678,
+                        }
+                        .encode(&mut resp);
+
                         BackendMessage::ReadyForQuery {
                             status: TransactionStatus::Idle,
                         }
@@ -155,12 +190,19 @@ impl ClientSession {
 
         // If no backend is held, acquire one from pool with failover buffering
         if self.active_backend.is_none() {
-            match self.pool.acquire_with_retry(role, &self.failover_config, user, database).await {
+            match self
+                .pool
+                .acquire_with_retry(role, &self.failover_config, user, database)
+                .await
+            {
                 Ok(backend) => {
                     self.active_backend = Some(backend);
                 }
                 Err(err) => {
-                    warn!(?err, "Failed to acquire backend within failover window; notifying client");
+                    warn!(
+                        ?err,
+                        "Failed to acquire backend within failover window; notifying client"
+                    );
                     let mut err_resp = BytesMut::new();
                     BackendMessage::ErrorResponse {
                         message: format!("PgVisor failover timeout: {}", err),
@@ -187,9 +229,16 @@ impl ClientSession {
 
         // Forward query to the backend
         if let Err(e) = backend.stream.write_all(&forward_buf).await {
-            warn!(?e, "Failed to write query to backend; attempting transparent failover re-acquire");
+            warn!(
+                ?e,
+                "Failed to write query to backend; attempting transparent failover re-acquire"
+            );
             // Discard broken backend and attempt transparent failover retry
-            match self.pool.acquire_with_retry(role, &self.failover_config, user, database).await {
+            match self
+                .pool
+                .acquire_with_retry(role, &self.failover_config, user, database)
+                .await
+            {
                 Ok(mut new_backend) => {
                     new_backend.stream.write_all(&forward_buf).await?;
                     backend = new_backend;
@@ -213,6 +262,7 @@ impl ClientSession {
         // Stream backend responses back to client and watch for ReadyForQuery ('Z')
         let mut backend_read_buf = BytesMut::with_capacity(4096);
         let mut should_release = false;
+        let mut ready_for_query_received = false;
         let mut client_bytes_written = 0usize;
 
         loop {
@@ -229,7 +279,11 @@ impl ClientSession {
                 // If 0 bytes were sent to client, we can transparently retry query on new leader!
                 if client_bytes_written == 0 {
                     info!("Backend terminated before sending response; retrying query on newly promoted leader");
-                    match self.pool.acquire_with_retry(role, &self.failover_config, user, database).await {
+                    match self
+                        .pool
+                        .acquire_with_retry(role, &self.failover_config, user, database)
+                        .await
+                    {
                         Ok(mut new_backend) => {
                             new_backend.stream.write_all(&forward_buf).await?;
                             backend = new_backend;
@@ -255,7 +309,8 @@ impl ClientSession {
                     warn!("Backend terminated after partial response streamed to client; sending ErrorResponse");
                     let mut err_resp = BytesMut::new();
                     BackendMessage::ErrorResponse {
-                        message: "PgVisor: backend connection lost during failover mid-response".into(),
+                        message: "PgVisor: backend connection lost during failover mid-response"
+                            .into(),
                     }
                     .encode(&mut err_resp);
                     BackendMessage::ReadyForQuery {
@@ -267,24 +322,29 @@ impl ClientSession {
                 }
             }
 
-            // Inspect packets to update transaction status
-            let mut inspect_buf = backend_read_buf.clone();
-            while let Some(msg) = BackendMessage::decode(&mut inspect_buf)? {
-                if let BackendMessage::ReadyForQuery { status } = msg {
+            // Frame and forward complete backend messages
+            while let Some((tag, frame)) = extract_backend_frame(&mut backend_read_buf) {
+                if tag == b'Z' {
+                    ready_for_query_received = true;
+                    let status_byte = if frame.len() >= 6 { frame[5] } else { b'I' };
+                    let status =
+                        TransactionStatus::from_u8(status_byte).unwrap_or(TransactionStatus::Idle);
                     self.tracker.on_ready_for_query(status);
 
                     if status == TransactionStatus::Idle {
                         should_release = true;
                     }
                 }
+
+                client_bytes_written += frame.len();
+                self.client_stream.write_all(&frame).await?;
+
+                if ready_for_query_received {
+                    break;
+                }
             }
 
-            // Write raw bytes directly to client
-            client_bytes_written += backend_read_buf.len();
-            self.client_stream.write_all(&backend_read_buf).await?;
-            backend_read_buf.clear();
-
-            if self.tracker.is_idle() || should_release {
+            if ready_for_query_received {
                 break;
             }
         }
@@ -297,5 +357,69 @@ impl ClientSession {
         }
 
         Ok(())
+    }
+}
+
+/// Extracts a single PostgreSQL wire protocol frame from `buf` if complete.
+/// A complete frame consists of 1 byte tag + 4 bytes length + (length - 4) payload bytes.
+pub fn extract_backend_frame(buf: &mut BytesMut) -> Option<(u8, BytesMut)> {
+    if buf.len() < 5 {
+        return None;
+    }
+    let tag = buf[0];
+    let len = i32::from_be_bytes([buf[1], buf[2], buf[3], buf[4]]) as usize;
+    if buf.len() < 1 + len {
+        return None;
+    }
+    Some((tag, buf.split_to(1 + len)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_backend_frame_partial_and_complete() {
+        let mut buf = BytesMut::new();
+
+        // 1. Partial header (< 5 bytes)
+        buf.extend_from_slice(&[b'C', 0, 0]);
+        assert_eq!(extract_backend_frame(&mut buf), None);
+        assert_eq!(buf.len(), 3); // Unconsumed
+
+        // 2. Complete header but partial body
+        // CommandComplete 'C', len = 9 (4 header + 5 body: "DROP\0")
+        buf.extend_from_slice(&[0, 9, b'D', b'R']);
+        assert_eq!(extract_backend_frame(&mut buf), None);
+
+        // 3. Complete body
+        buf.extend_from_slice(&[b'O', b'P', 0]);
+        let extracted = extract_backend_frame(&mut buf);
+        assert!(extracted.is_some());
+        let (tag, frame) = extracted.unwrap();
+        assert_eq!(tag, b'C');
+        assert_eq!(frame.len(), 10);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_extract_multiple_frames_with_ready_for_query() {
+        let mut buf = BytesMut::new();
+
+        // Frame 1: NoticeResponse 'N', len = 8 (4 + 4 body)
+        buf.extend_from_slice(&[b'N', 0, 0, 0, 8, b'W', b'A', b'R', 0]);
+        // Frame 2: ReadyForQuery 'Z', len = 5 (4 + 1 body: 'I')
+        buf.extend_from_slice(&[b'Z', 0, 0, 0, 5, b'I']);
+
+        let (tag1, frame1) = extract_backend_frame(&mut buf).unwrap();
+        assert_eq!(tag1, b'N');
+        assert_eq!(frame1.len(), 9);
+
+        let (tag2, frame2) = extract_backend_frame(&mut buf).unwrap();
+        assert_eq!(tag2, b'Z');
+        assert_eq!(frame2.len(), 6);
+        assert_eq!(frame2[5], b'I');
+
+        assert!(extract_backend_frame(&mut buf).is_none());
     }
 }

@@ -16,9 +16,15 @@ use tracing::{error, info};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
-    let listen_addr = env::var("PGVISOR_PROXY_LISTEN").unwrap_or_else(|_| "0.0.0.0:5432".to_string());
+    let listen_addr =
+        env::var("PGVISOR_PROXY_LISTEN").unwrap_or_else(|_| "0.0.0.0:5432".to_string());
     let leader_addr = env::var("PGVISOR_LEADER_ADDR").ok();
     let standby_addrs_str = env::var("PGVISOR_STANDBY_ADDRS").unwrap_or_default();
     let standby_addrs: Vec<String> = standby_addrs_str
@@ -30,12 +36,15 @@ async fn main() -> Result<()> {
     info!(%listen_addr, ?leader_addr, ?standby_addrs, "pgvisor-proxy service starting up");
 
     let pool = ConnectionPool::new(10);
-    pool.update_topology(leader_addr.clone(), standby_addrs.clone()).await;
+    pool.update_topology(leader_addr.clone(), standby_addrs.clone())
+        .await;
 
     // Spawn embedded dashboard on PGVISOR_DASHBOARD_LISTEN (default 0.0.0.0:8080)
-    let dashboard_listen = env::var("PGVISOR_DASHBOARD_LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
+    let dashboard_listen =
+        env::var("PGVISOR_DASHBOARD_LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
     if let Ok(dash_addr) = dashboard_listen.parse::<SocketAddr>() {
-        let cluster_id = env::var("PGVISOR_CLUSTER_ID").unwrap_or_else(|_| "pgvisor-cluster".to_string());
+        let cluster_id =
+            env::var("PGVISOR_CLUSTER_ID").unwrap_or_else(|_| "pgvisor-cluster".to_string());
         let admin_token = env::var("PGVISOR_ADMIN_TOKEN").ok();
         let dash_state = Arc::new(DashboardState::new(&cluster_id, admin_token));
 

@@ -50,6 +50,7 @@ services:
       S3_BUCKET: pgvisor-backups
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
+      RUST_LOG: info
     volumes:
       - node1_data:/var/lib/postgresql/data
     depends_on:
@@ -75,6 +76,7 @@ services:
       PGVISOR_CLUSTER_ID: pgvisor-cluster
       PGVISOR_NODE_ID: 2
       PGVISOR_ROLE: standby
+      RUST_LOG: info
     volumes:
       - node2_data:/var/lib/postgresql/data
     depends_on:
@@ -100,6 +102,7 @@ services:
       PGVISOR_CLUSTER_ID: pgvisor-cluster
       PGVISOR_NODE_ID: 3
       PGVISOR_ROLE: standby
+      RUST_LOG: info
     volumes:
       - node3_data:/var/lib/postgresql/data
     depends_on:
@@ -127,6 +130,7 @@ services:
       PGVISOR_LEADER_ADDR: pgvisor-node1:5432
       PGVISOR_STANDBY_ADDRS: pgvisor-node2:5432,pgvisor-node3:5432
       PGVISOR_CLUSTER_ID: pgvisor-cluster
+      RUST_LOG: info
     volumes:
       - ./scripts:/scripts:ro
     depends_on:

@@ -12,7 +12,12 @@ use tracing::{info, warn};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
     let data_dir = env::var("PGDATA")
         .map(PathBuf::from)
@@ -29,7 +34,9 @@ async fn main() -> Result<()> {
     info!(?data_dir, port, %superuser, "pgvisor-sidecar supervisor starting up");
 
     let supervisor = PostgresSupervisor::new(&data_dir);
-    supervisor.ensure_initialized(&superuser, primary_conninfo.as_deref()).await?;
+    supervisor
+        .ensure_initialized(&superuser, primary_conninfo.as_deref())
+        .await?;
 
     let config = PostgresConfig {
         port,
