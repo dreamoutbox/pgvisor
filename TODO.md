@@ -34,13 +34,31 @@
       - assert surviving standby replicates from the new leader.
       - restart node1 and verify split-brain prevention (rejoins as standby).
 
+- [ ] investigate rejoin node (from docker container remove/stop) Supervision Status is "Fenced (Quorum Lost)" and role is "Standby (Replica)". the rejoin (old node1 leader) should join the cluster as a standby replica.
+
 - [ ] chore: show "Optional Label / Note" in table at "Basebackups & Snapshots" page.
 
 - [ ] add web dashboard auth.
 
-- [ ] add audit logs view in web dashboard for node up/down. backup/restore perform. dangerous SQL (DROP TABLE/TRUNCATE/DELETE) logging when it happens so we can use the time to restore with PITR.
+- [ ] very bad disaster testing: 3 nodes setup. 2 nodes down.
+      - start as 3 nodes 
+      - down node1, node2
+      - assert only node3 left.
+      - try write to it. expected fail.
+      - start back node1.
+      - assert node1 rejoin as standby.
+      - assert database cluster is working, data is ok and have leader.
+      - start back node2.
+      - assert node2 rejoin as standby.
+      - assert database cluster is working, data is ok and have leader.
+
+- [ ] add audit logs view in web dashboard for node up/down. backup/restore perform. dangerous SQL (DROP TABLE/TRUNCATE/DELETE) logging. so when it happens, we can use the time to restore with PITR.
 
 - [ ] add page for manage databaser users and permissions.
+
+- [ ] testing two proxy. 3 nodes. then stop proxy1 and assert still access DB with proxy2.
+
+- [ ] run `cargo test`
 
 ---
 

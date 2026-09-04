@@ -239,6 +239,11 @@ async fn handle_resync(
             )
         })?;
 
+    {
+        let mut r = state.role.write().await;
+        *r = "standby".to_string();
+    }
+
     Ok(Json(serde_json::json!({
         "status": "ok",
         "message": "Standby re-synced successfully and PostgreSQL ready"
@@ -372,6 +377,63 @@ async fn main() -> Result<()> {
 
                 let local_role = monitor_state.role.read().await.clone();
                 if local_role == "fenced" {
+                    // Check if an active leader is operating and available for auto-rejoin
+                    let mut active_leader: Option<(u64, String)> = None;
+
+                    for peer in &peers {
+                        let self_tag = format!("node{}", monitor_state.node_id);
+                        if peer.contains(&self_tag) {
+                            continue;
+                        }
+                        let url = format!("{}/control/status", peer.trim_end_matches('/'));
+                        if let Ok(resp) = client.get(&url).send().await {
+                            if let Ok(st) = resp.json::<StatusResponse>().await {
+                                if st.role == "leader" && st.status == "running" {
+                                    let conninfo = format!(
+                                        "host=pgvisor-node{} port=5432 user=postgres",
+                                        st.node_id
+                                    );
+                                    active_leader = Some((st.node_id, conninfo));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some((leader_id, conninfo)) = active_leader {
+                        info!(
+                            node_id = monitor_state.node_id,
+                            leader_id,
+                            "Fenced node detected active cluster leader. Initiating auto-rejoin as standby replica."
+                        );
+
+                        let mut standby_config = monitor_state.config.clone();
+                        standby_config.primary_conninfo = Some(conninfo.clone());
+
+                        match monitor_state.supervisor.resync_from_primary(&conninfo, &standby_config).await {
+                            Ok(()) => {
+                                info!(
+                                    node_id = monitor_state.node_id,
+                                    leader_id,
+                                    "Successfully auto-rejoined cluster as standby replica."
+                                );
+                                {
+                                    let mut r = monitor_state.role.write().await;
+                                    *r = "standby".to_string();
+                                }
+                                missed_heartbeats = 0;
+                            }
+                            Err(e) => {
+                                error!(
+                                    node_id = monitor_state.node_id,
+                                    leader_id,
+                                    ?e,
+                                    "Failed to auto-rejoin as standby; will retry on next cycle"
+                                );
+                                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                            }
+                        }
+                    }
                     continue;
                 }
 

@@ -428,6 +428,29 @@ impl PostgresSupervisor {
             tokio::fs::create_dir_all(&self.data_dir).await?;
         }
 
+        // Wait for primary to accept replication connections
+        let mut retries = 15;
+        while retries > 0 {
+            let status = Command::new("pg_isready")
+                .arg("-d")
+                .arg(primary_conninfo)
+                .status()
+                .await;
+            if let Ok(s) = status {
+                if s.success() {
+                    info!("Primary is ready, proceeding with pg_basebackup re-sync");
+                    break;
+                }
+            }
+            retries -= 1;
+            if retries == 0 {
+                return Err(SupervisorError::CommandFailed(
+                    "Primary did not become ready for replication re-sync".into(),
+                ));
+            }
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
+
         // 3. Clone fresh baseline from primary
         let status = Command::new("pg_basebackup")
             .arg("-d")
@@ -447,7 +470,9 @@ impl PostgresSupervisor {
         }
 
         // 4. Start Postgres with standby configuration
-        self.start(config).await?;
+        let mut standby_config = config.clone();
+        standby_config.primary_conninfo = Some(primary_conninfo.to_string());
+        self.start(&standby_config).await?;
         if self.child_pid() > 0 {
             let _ = self.wait_ready(config.port, 30).await;
         }
