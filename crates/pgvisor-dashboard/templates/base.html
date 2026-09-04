@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}PgVisor Dashboard{% endblock %}</title>
+    <style>
+        :root {
+            --bg-main: #0f172a;
+            --bg-card: #1e293b;
+            --bg-card-hover: #334155;
+            --border: #334155;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #38bdf8;
+            --success: #4ade80;
+            --warning: #facc15;
+            --danger: #f87171;
+            --accent: #818cf8;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            display: flex;
+            min-height: 100vh;
+        }
+        aside {
+            width: 260px;
+            background-color: var(--bg-card);
+            border-right: 1px solid var(--border);
+            padding: 24px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+        nav { display: flex; flex-direction: column; gap: 8px; }
+        nav a {
+            color: var(--text-muted);
+            text-decoration: none;
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        nav a:hover, nav a.active {
+            background-color: var(--bg-card-hover);
+            color: var(--text-main);
+        }
+        main {
+            flex: 1;
+            padding: 32px 40px;
+            overflow-y: auto;
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 32px;
+        }
+        h1 { font-size: 1.75rem; font-weight: 700; }
+        .badge {
+            padding: 4px 10px;
+            border-radius: 9999px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge-healthy { background: rgba(74, 222, 128, 0.2); color: var(--success); }
+        .badge-degraded { background: rgba(250, 204, 21, 0.2); color: var(--warning); }
+        .badge-fenced, .badge-offline { background: rgba(248, 113, 113, 0.2); color: var(--danger); }
+        .badge-leader { background: rgba(56, 189, 248, 0.2); color: var(--primary); }
+        .badge-standby { background: rgba(148, 163, 184, 0.2); color: var(--text-muted); }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 20px;
+            margin-bottom: 32px;
+        }
+        .card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+        }
+        .card h3 { font-size: 0.875rem; color: var(--text-muted); margin-bottom: 8px; }
+        .card .value { font-size: 1.75rem; font-weight: 700; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        th, td {
+            padding: 14px 18px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        th { background: rgba(0, 0, 0, 0.2); font-size: 0.85rem; color: var(--text-muted); }
+        tr:last-child td { border-bottom: none; }
+        tr:hover td { background-color: rgba(255, 255, 255, 0.02); }
+    </style>
+</head>
+<body>
+    <aside>
+        <div class="logo">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+            </svg>
+            PgVisor
+        </div>
+        <nav>
+            <a href="/" class="{% block nav_overview %}{% endblock %}">Overview</a>
+            <a href="/nodes" class="{% block nav_nodes %}{% endblock %}">Cluster Nodes</a>
+            <a href="/sql" class="{% block nav_sql %}{% endblock %}">SQL Console</a>
+        </nav>
+    </aside>
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

@@ -3,6 +3,10 @@ name = "pgvisor-dashboard"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "pgvisor_dashboard"
+path = "src/lib.rs"
+
 [[bin]]
 name = "pgvisor-dashboard"
 path = "src/main.rs"
@@ -14,3 +18,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+axum = { workspace = true }
+askama = { workspace = true }
+tower = { workspace = true }
+async-trait = { workspace = true }

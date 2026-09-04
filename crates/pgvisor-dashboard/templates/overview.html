@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}PgVisor - Cluster Overview{% endblock %}
+{% block nav_overview %}active{% endblock %}
+
+{% block content %}
+<header>
+    <div>
+        <h1>Cluster: {{ overview.cluster_id }}</h1>
+        <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 4px;">Consensus Term: {{ overview.current_term }} | Quorum Required: {{ overview.quorum_size }}</p>
+    </div>
+    <div>
+        <span class="badge badge-healthy">Quorum Active</span>
+    </div>
+</header>
+
+<div class="grid">
+    <div class="card">
+        <h3>Total Nodes</h3>
+        <div class="value">{{ overview.total_nodes }}</div>
+    </div>
+    <div class="card">
+        <h3>Healthy Nodes</h3>
+        <div class="value" style="color: var(--success);">{{ overview.healthy_nodes }}</div>
+    </div>
+    <div class="card">
+        <h3>Current Raft Leader</h3>
+        <div class="value" style="font-size: 1.25rem; color: var(--primary);">
+            {% match overview.leader_id %}
+                {% when Some with (id) %}
+                    Node #{{ id }}
+                {% when None %}
+                    None (Election in progress)
+            {% endmatch %}
+        </div>
+    </div>
+    <div class="card">
+        <h3>Total Basebackups</h3>
+        <div class="value">{{ overview.total_backups }}</div>
+    </div>
+</div>
+
+<h2 style="font-size: 1.25rem; margin-bottom: 16px;">Node Topology</h2>
+<table>
+    <thead>
+        <tr>
+            <th>Node ID</th>
+            <th>Address</th>
+            <th>Raft Role</th>
+            <th>Status</th>
+            <th>Replication Lag</th>
+            <th>Uptime</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for node in overview.nodes %}
+        <tr>
+            <td><strong>#{{ node.node_id }}</strong> {% if node.is_local %}<span style="font-size: 0.75rem; color: var(--accent);">(local)</span>{% endif %}</td>
+            <td><code>{{ node.address }}</code></td>
+            <td>
+                {% match node.role %}
+                    {% when NodeRole::Leader %}
+                        <span class="badge badge-leader">Leader</span>
+                    {% when NodeRole::Standby %}
+                        <span class="badge badge-standby">Standby</span>
+                    {% when NodeRole::Learner %}
+                        <span class="badge badge-standby">Learner</span>
+                {% endmatch %}
+            </td>
+            <td>
+                {% match node.state %}
+                    {% when NodeHealthState::Healthy %}
+                        <span class="badge badge-healthy">Healthy</span>
+                    {% when NodeHealthState::Degraded %}
+                        <span class="badge badge-degraded">Degraded</span>
+                    {% when NodeHealthState::Fenced %}
+                        <span class="badge badge-fenced">Fenced</span>
+                    {% when NodeHealthState::Offline %}
+                        <span class="badge badge-offline">Offline</span>
+                {% endmatch %}
+            </td>
+            <td>{{ node.replication_lag_bytes }} bytes</td>
+            <td>{{ node.uptime_secs }}s</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

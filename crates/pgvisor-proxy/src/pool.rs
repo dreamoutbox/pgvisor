@@ -49,6 +49,16 @@ pub struct PooledConnection {
     pub created_at: Instant,
 }
 
+impl std::fmt::Debug for PooledConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PooledConnection")
+            .field("role", &self.role)
+            .field("addr", &self.addr)
+            .field("created_at", &self.created_at)
+            .finish()
+    }
+}
+
 impl PooledConnection {
     pub async fn connect(addr: &str, role: BackendRole) -> Result<Self, PoolError> {
         debug!(addr, ?role, "Opening new backend connection");
@@ -253,7 +263,8 @@ mod tests {
         assert!(result.is_err());
         match result {
             Err(PoolError::FailoverTimeout(_)) => {}
-            other => panic!("Expected FailoverTimeout, got {:?}", other),
+            Err(e) => panic!("Expected FailoverTimeout, got error: {}", e),
+            Ok(_) => panic!("Expected FailoverTimeout, but connection succeeded"),
         }
     }
 }

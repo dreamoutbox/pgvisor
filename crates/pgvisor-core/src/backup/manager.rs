@@ -22,11 +22,67 @@ pub enum BackupError {
     WalNotFound(String),
 }
 
+/// Type of backup snapshot performed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackupType {
+    /// Hourly incremental WAL archive / delta snapshot.
+    Incremental,
+    /// Full basebackup physical snapshot (daily after midnight).
+    Full,
+}
+
+/// Backup scheduling configuration: default hourly incremental, full after midnight to MinIO.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupScheduleConfig {
+    pub minio_endpoint: String,
+    pub minio_bucket: String,
+    pub access_key: String,
+    pub secret_key: String,
+    /// Default incremental backup interval in seconds (default: 3600 = 1 hour).
+    pub incremental_interval_secs: u64,
+    /// Hour of the day in UTC for full basebackup (default: 1 = 01:00 UTC, after midnight).
+    pub full_backup_hour_utc: u32,
+    /// Retention window in days (default: 7).
+    pub retention_days: u32,
+}
+
+impl Default for BackupScheduleConfig {
+    fn default() -> Self {
+        Self {
+            minio_endpoint: "http://127.0.0.1:9000".into(),
+            minio_bucket: "pgvisor-backups".into(),
+            access_key: "minioadmin".into(),
+            secret_key: "minioadmin".into(),
+            incremental_interval_secs: 3600, // hourly
+            full_backup_hour_utc: 1,         // 01:00 UTC (after midnight)
+            retention_days: 7,
+        }
+    }
+}
+
+impl BackupScheduleConfig {
+    /// Creates an OpenDAL S3 Operator targeting the local MinIO development server.
+    pub fn build_operator(&self) -> Result<Operator, BackupError> {
+        let mut builder = opendal::services::S3::default();
+        builder = builder
+            .endpoint(&self.minio_endpoint)
+            .bucket(&self.minio_bucket)
+            .access_key_id(&self.access_key)
+            .secret_access_key(&self.secret_key)
+            .region("us-east-1");
+
+        let op = Operator::new(builder)?.finish();
+        Ok(op)
+    }
+}
+
 /// Metadata describing a physical basebackup snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BasebackupMeta {
     pub snapshot_id: String,
     pub created_at: DateTime<Utc>,
+    pub backup_type: BackupType,
     pub start_wal: String,
     pub stop_wal: Option<String>,
     pub total_bytes: u64,
@@ -240,6 +296,7 @@ mod tests {
         let meta1 = BasebackupMeta {
             snapshot_id: "snap-1".into(),
             created_at: Utc::now() - chrono::Duration::hours(2),
+            backup_type: BackupType::Incremental,
             start_wal: "000000010000000000000001".into(),
             stop_wal: Some("000000010000000000000002".into()),
             total_bytes: 1024,
@@ -248,6 +305,7 @@ mod tests {
         let meta2 = BasebackupMeta {
             snapshot_id: "snap-2".into(),
             created_at: Utc::now() - chrono::Duration::hours(1),
+            backup_type: BackupType::Full,
             start_wal: "000000010000000000000003".into(),
             stop_wal: Some("000000010000000000000004".into()),
             total_bytes: 2048,
@@ -274,5 +332,17 @@ mod tests {
         let remaining = manager.list_basebackups().await.unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].snapshot_id, "snap-2");
+    }
+
+    #[test]
+    fn test_backup_schedule_defaults_minio() {
+        let config = BackupScheduleConfig::default();
+        assert_eq!(config.minio_endpoint, "http://127.0.0.1:9000");
+        assert_eq!(config.minio_bucket, "pgvisor-backups");
+        assert_eq!(config.incremental_interval_secs, 3600); // 1 hour
+        assert_eq!(config.full_backup_hour_utc, 1);          // 01:00 UTC (after midnight)
+
+        let op = config.build_operator();
+        assert!(op.is_ok());
     }
 }

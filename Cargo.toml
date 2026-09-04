@@ -21,5 +21,12 @@ byteorder = "1.5"
 crc32fast = "1.4"
 openraft = { version = "0.9", features = ["serde", "storage-v2"] }
 tokio-util = { version = "0.7", features = ["codec"] }
-opendal = { version = "0.50", default-features = false, features = ["services-s3", "services-fs"] }
+opendal = { version = "0.50", default-features = false, features = [
+    "services-s3",
+    "services-fs",
+] }
 chrono = { version = "0.4", features = ["serde"] }
+axum = "0.7"
+askama = "0.12"
+tower = { version = "0.5", features = ["util"] }
+async-trait = "0.1"

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}PgVisor - Cluster Nodes{% endblock %}
+{% block nav_nodes %}active{% endblock %}
+
+{% block content %}
+<header>
+    <div>
+        <h1>Cluster Nodes</h1>
+        <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 4px;">Detailed health, replication lag, and process supervision status</p>
+    </div>
+</header>
+
+<table>
+    <thead>
+        <tr>
+            <th>Node</th>
+            <th>Endpoint</th>
+            <th>Postgres Version</th>
+            <th>Role</th>
+            <th>Supervision Status</th>
+            <th>Replication Lag</th>
+            <th>Uptime</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for node in nodes %}
+        <tr>
+            <td><strong>Node #{{ node.node_id }}</strong> {% if node.is_local %}<span style="color: var(--accent); font-size: 0.8rem;">(Sidecar Local)</span>{% endif %}</td>
+            <td><code>{{ node.address }}</code></td>
+            <td>{{ node.pg_version }}</td>
+            <td>
+                {% match node.role %}
+                    {% when NodeRole::Leader %}
+                        <span class="badge badge-leader">Raft Leader (Primary)</span>
+                    {% when NodeRole::Standby %}
+                        <span class="badge badge-standby">Standby (Replica)</span>
+                    {% when NodeRole::Learner %}
+                        <span class="badge badge-standby">Learner</span>
+                {% endmatch %}
+            </td>
+            <td>
+                {% match node.state %}
+                    {% when NodeHealthState::Healthy %}
+                        <span class="badge badge-healthy">Online / Healthy</span>
+                    {% when NodeHealthState::Degraded %}
+                        <span class="badge badge-degraded">Degraded</span>
+                    {% when NodeHealthState::Fenced %}
+                        <span class="badge badge-fenced">Fenced (Quorum Lost)</span>
+                    {% when NodeHealthState::Offline %}
+                        <span class="badge badge-offline">Offline</span>
+                {% endmatch %}
+            </td>
+            <td>{{ node.replication_lag_bytes }} B</td>
+            <td>{{ node.uptime_secs }}s</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
