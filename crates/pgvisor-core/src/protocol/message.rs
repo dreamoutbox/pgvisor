@@ -388,6 +388,20 @@ impl BackendMessage {
                 dst.put_slice(value.as_bytes());
                 dst.put_u8(0);
             }
+            Self::ErrorResponse { message } => {
+                dst.put_u8(b'E');
+                let body = format!("SERROR\0C57P01\0M{}\0\0", message);
+                let len = (4 + body.len()) as i32;
+                dst.put_i32(len);
+                dst.put_slice(body.as_bytes());
+            }
+            Self::NoticeResponse { message } => {
+                dst.put_u8(b'N');
+                let body = format!("SNOTICE\0M{}\0\0", message);
+                let len = (4 + body.len()) as i32;
+                dst.put_i32(len);
+                dst.put_slice(body.as_bytes());
+            }
             Self::Raw { tag, payload } => {
                 dst.put_u8(*tag);
                 let len = (4 + payload.len()) as i32;

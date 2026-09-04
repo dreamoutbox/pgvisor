@@ -6,9 +6,9 @@ use pgvisor_core::protocol::tracker::TransactionTracker;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
-use crate::pool::{BackendRole, ConnectionPool, PooledConnection};
+use crate::pool::{BackendRole, ConnectionPool, FailoverConfig, PooledConnection};
 
 #[derive(Debug, Error)]
 pub enum SessionError {
@@ -29,6 +29,7 @@ pub struct ClientSession {
     tracker: TransactionTracker,
     active_backend: Option<PooledConnection>,
     startup_params: Option<StartupMessage>,
+    failover_config: FailoverConfig,
 }
 
 impl ClientSession {
@@ -39,7 +40,14 @@ impl ClientSession {
             tracker: TransactionTracker::new(),
             active_backend: None,
             startup_params: None,
+            failover_config: FailoverConfig::default(),
         }
+    }
+
+    /// Sets custom failover buffering parameters.
+    pub fn with_failover_config(mut self, config: FailoverConfig) -> Self {
+        self.failover_config = config;
+        self
     }
 
     /// Returns the initial startup parameters provided by the client.
@@ -133,7 +141,7 @@ impl ClientSession {
         Ok(())
     }
 
-    /// Handles a simple query ('Q') with read/write splitting and transaction boundary release.
+    /// Handles a simple query ('Q') with failover buffering, read/write splitting, and reconnect.
     async fn handle_query(&mut self, sql: &str) -> Result<(), SessionError> {
         let requires_leader = self.tracker.requires_leader(sql);
         let role = if requires_leader {
@@ -142,30 +150,118 @@ impl ClientSession {
             BackendRole::Standby
         };
 
-        // If no active backend connection is held for this transaction, acquire one from the pool.
+        // If no backend is held, acquire one from pool with failover buffering
         if self.active_backend.is_none() {
-            let backend = self.pool.acquire(role).await?;
-            self.active_backend = Some(backend);
+            match self.pool.acquire_with_retry(role, &self.failover_config).await {
+                Ok(backend) => {
+                    self.active_backend = Some(backend);
+                }
+                Err(err) => {
+                    warn!(?err, "Failed to acquire backend within failover window; notifying client");
+                    let mut err_resp = BytesMut::new();
+                    BackendMessage::ErrorResponse {
+                        message: format!("PgVisor failover timeout: {}", err),
+                    }
+                    .encode(&mut err_resp);
+                    BackendMessage::ReadyForQuery {
+                        status: TransactionStatus::Idle,
+                    }
+                    .encode(&mut err_resp);
+                    self.client_stream.write_all(&err_resp).await?;
+                    return Ok(());
+                }
+            }
         }
 
-        let mut backend = self
-            .active_backend
-            .take()
-            .ok_or_else(|| SessionError::Protocol("No backend assigned".into()))?;
+        let mut backend = match self.active_backend.take() {
+            Some(b) => b,
+            None => return Err(SessionError::Protocol("No backend assigned".into())),
+        };
 
-        // Forward query to the borrowed backend
+        // Buffer the outbound query message
         let mut forward_buf = BytesMut::new();
         FrontendMessage::Query(sql.to_string()).encode(&mut forward_buf);
-        backend.stream.write_all(&forward_buf).await?;
+
+        // Forward query to the backend
+        if let Err(e) = backend.stream.write_all(&forward_buf).await {
+            warn!(?e, "Failed to write query to backend; attempting transparent failover re-acquire");
+            // Discard broken backend and attempt transparent failover retry
+            match self.pool.acquire_with_retry(role, &self.failover_config).await {
+                Ok(mut new_backend) => {
+                    new_backend.stream.write_all(&forward_buf).await?;
+                    backend = new_backend;
+                }
+                Err(err) => {
+                    let mut err_resp = BytesMut::new();
+                    BackendMessage::ErrorResponse {
+                        message: format!("PgVisor backend write failed during failover: {}", err),
+                    }
+                    .encode(&mut err_resp);
+                    BackendMessage::ReadyForQuery {
+                        status: TransactionStatus::Idle,
+                    }
+                    .encode(&mut err_resp);
+                    self.client_stream.write_all(&err_resp).await?;
+                    return Ok(());
+                }
+            }
+        }
 
         // Stream backend responses back to client and watch for ReadyForQuery ('Z')
         let mut backend_read_buf = BytesMut::with_capacity(4096);
         let mut should_release = false;
+        let mut client_bytes_written = 0usize;
 
         loop {
-            let n = backend.stream.read_buf(&mut backend_read_buf).await?;
+            let n = match backend.stream.read_buf(&mut backend_read_buf).await {
+                Ok(n) => n,
+                Err(e) => {
+                    warn!(?e, "Backend socket error during query read");
+                    0
+                }
+            };
+
             if n == 0 {
-                return Err(SessionError::Protocol("Backend unexpectedly closed connection".into()));
+                // If backend terminated mid-query:
+                // If 0 bytes were sent to client, we can transparently retry query on new leader!
+                if client_bytes_written == 0 {
+                    info!("Backend terminated before sending response; retrying query on newly promoted leader");
+                    match self.pool.acquire_with_retry(role, &self.failover_config).await {
+                        Ok(mut new_backend) => {
+                            new_backend.stream.write_all(&forward_buf).await?;
+                            backend = new_backend;
+                            backend_read_buf.clear();
+                            continue;
+                        }
+                        Err(err) => {
+                            let mut err_resp = BytesMut::new();
+                            BackendMessage::ErrorResponse {
+                                message: format!("PgVisor failover retry failed: {}", err),
+                            }
+                            .encode(&mut err_resp);
+                            BackendMessage::ReadyForQuery {
+                                status: TransactionStatus::Idle,
+                            }
+                            .encode(&mut err_resp);
+                            self.client_stream.write_all(&err_resp).await?;
+                            return Ok(());
+                        }
+                    }
+                } else {
+                    // Bytes were already sent to client, cannot transparently retry
+                    warn!("Backend terminated after partial response streamed to client; sending ErrorResponse");
+                    let mut err_resp = BytesMut::new();
+                    BackendMessage::ErrorResponse {
+                        message: "PgVisor: backend connection lost during failover mid-response".into(),
+                    }
+                    .encode(&mut err_resp);
+                    BackendMessage::ReadyForQuery {
+                        status: TransactionStatus::Idle,
+                    }
+                    .encode(&mut err_resp);
+                    self.client_stream.write_all(&err_resp).await?;
+                    return Ok(());
+                }
             }
 
             // Inspect packets to update transaction status
@@ -174,7 +270,6 @@ impl ClientSession {
                 if let BackendMessage::ReadyForQuery { status } = msg {
                     self.tracker.on_ready_for_query(status);
 
-                    // In transaction pooling: if transaction is committed/idle, release backend back to pool!
                     if status == TransactionStatus::Idle {
                         should_release = true;
                     }
@@ -182,6 +277,7 @@ impl ClientSession {
             }
 
             // Write raw bytes directly to client
+            client_bytes_written += backend_read_buf.len();
             self.client_stream.write_all(&backend_read_buf).await?;
             backend_read_buf.clear();
 

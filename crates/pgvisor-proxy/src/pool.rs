@@ -1,11 +1,26 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
-use tracing::{debug, info};
+use tokio::sync::{watch, Mutex};
+use tracing::{debug, info, warn};
+
+#[derive(Debug, Clone)]
+pub struct FailoverConfig {
+    pub failover_timeout: Duration,
+    pub retry_interval: Duration,
+}
+
+impl Default for FailoverConfig {
+    fn default() -> Self {
+        Self {
+            failover_timeout: Duration::from_secs(10),
+            retry_interval: Duration::from_millis(100),
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum PoolError {
@@ -14,6 +29,9 @@ pub enum PoolError {
 
     #[error("Pool exhausted or backend unavailable: {0}")]
     BackendUnavailable(String),
+
+    #[error("Failover timeout exceeded waiting for healthy backend: {0}")]
+    FailoverTimeout(String),
 }
 
 /// Node routing target for Postgres operations.
@@ -48,6 +66,7 @@ impl PooledConnection {
 #[derive(Clone)]
 pub struct ConnectionPool {
     inner: Arc<Mutex<PoolInner>>,
+    topology_notifier: Arc<watch::Sender<u64>>,
 }
 
 struct PoolInner {
@@ -56,10 +75,12 @@ struct PoolInner {
     idle_leaders: VecDeque<PooledConnection>,
     idle_standbys: VecDeque<PooledConnection>,
     max_idle_per_node: usize,
+    version: u64,
 }
 
 impl ConnectionPool {
     pub fn new(max_idle_per_node: usize) -> Self {
+        let (tx, _rx) = watch::channel(0);
         Self {
             inner: Arc::new(Mutex::new(PoolInner {
                 leader_addr: None,
@@ -67,7 +88,9 @@ impl ConnectionPool {
                 idle_leaders: VecDeque::new(),
                 idle_standbys: VecDeque::new(),
                 max_idle_per_node,
+                version: 0,
             })),
+            topology_notifier: Arc::new(tx),
         }
     }
 
@@ -83,6 +106,13 @@ impl ConnectionPool {
         }
 
         inner.standby_addrs = standbys;
+        inner.version = inner.version.wrapping_add(1);
+        let _ = self.topology_notifier.send(inner.version);
+    }
+
+    /// Returns a receiver for topology updates.
+    pub fn subscribe_topology(&self) -> watch::Receiver<u64> {
+        self.topology_notifier.subscribe()
     }
 
     /// Acquires an idle connection or establishes a new one for the specified role.
@@ -119,6 +149,49 @@ impl ConnectionPool {
             Ok(conn)
         } else {
             PooledConnection::connect(&target_addr, role).await
+        }
+    }
+
+    /// Acquires a connection, pausing and retrying if the cluster is undergoing failover.
+    pub async fn acquire_with_retry(
+        &self,
+        role: BackendRole,
+        config: &FailoverConfig,
+    ) -> Result<PooledConnection, PoolError> {
+        let start = Instant::now();
+        let mut rx = self.subscribe_topology();
+
+        loop {
+            match self.acquire(role).await {
+                Ok(conn) => return Ok(conn),
+                Err(err) => {
+                    if start.elapsed() >= config.failover_timeout {
+                        return Err(PoolError::FailoverTimeout(format!(
+                            "Timed out after {:?} waiting for {:?}: {}",
+                            start.elapsed(),
+                            role,
+                            err
+                        )));
+                    }
+
+                    warn!(
+                        ?role,
+                        elapsed = ?start.elapsed(),
+                        timeout = ?config.failover_timeout,
+                        "Backend temporarily unavailable during failover; buffering client request"
+                    );
+
+                    // Wait for either a topology change notification or retry interval tick
+                    tokio::select! {
+                        _ = tokio::time::sleep(config.retry_interval) => {}
+                        res = rx.changed() => {
+                            if res.is_err() {
+                                tokio::time::sleep(config.retry_interval).await;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -166,5 +239,21 @@ mod tests {
         let inner = pool.inner.lock().await;
         assert_eq!(inner.leader_addr, Some("127.0.0.1:5434".into()));
         assert!(inner.idle_leaders.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_failover_retry_timeout() {
+        let pool = ConnectionPool::new(5);
+        let config = FailoverConfig {
+            failover_timeout: Duration::from_millis(150),
+            retry_interval: Duration::from_millis(30),
+        };
+
+        let result = pool.acquire_with_retry(BackendRole::Leader, &config).await;
+        assert!(result.is_err());
+        match result {
+            Err(PoolError::FailoverTimeout(_)) => {}
+            other => panic!("Expected FailoverTimeout, got {:?}", other),
+        }
     }
 }

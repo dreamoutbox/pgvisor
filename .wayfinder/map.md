@@ -31,6 +31,9 @@ A comprehensive, vetted architecture and specification document (`ARCHITECTURE.m
 - [Custom OpenRaft Storage Engine](tickets/001-custom-openraft-storage-engine-design.md): Implemented pure-Rust append-only WAL with CRC32 integrity, in-memory index, atomic state machine snapshots, and OpenRaft storage traits.
 - [Postgres Wire Protocol & Pooling](tickets/002-postgres-wire-protocol-framing-and-pooling.md): Implemented wire protocol 3.0 framing, transaction status tracking ('I'/'T'/'E'), read/write splitting, and transaction-level connection pooling with failover draining.
 - [Sidecar Process Supervision](tickets/003-sidecar-process-supervision-and-signals.md): Implemented container PID 1 signal trapping, config templating, stdout/stderr pipe logging, standby promotion, and quorum fencing via pg_ctl stop -m immediate.
+- [Raft Failover Orchestration](tickets/004-raft-state-machine-and-failover-orchestration.md): Implemented QuorumLease (1200ms) with proactive leader fencing before standby election timeout, and FailoverOrchestrator for promotion and recovery.
+- [OpenDAL Backup & WAL Archiving](tickets/005-opendal-wal-archiving-and-basebackup-pipeline.md): Implemented BackupManager with OpenDAL for continuous WAL archiving, basebackup snapshots, and PITR retention pruning.
+- [Proxy Failover Buffering & Reconnection](tickets/006-proxy-failover-buffering-and-reconnect.md): Implemented topology watch notifications, client query buffering during Raft elections, transparent query retry before response dispatch, and safe ErrorResponse fallback.
 
 ## Not yet specified
 
