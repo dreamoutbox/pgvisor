@@ -28,6 +28,7 @@ A comprehensive, vetted architecture and specification document (`ARCHITECTURE.m
 - [Backup & PITR Strategy](tickets/000-backup-and-pitr-strategy.md): Continuous physical backup via periodic `pg_basebackup` snapshots + continuous WAL archiving to OpenDAL supporting PITR.
 - [Fencing & Split-Brain Prevention](tickets/000-fencing-and-split-brain-prevention.md): Active sidecar fencing with quorum lease: sidecar immediately halts Postgres (`pg_ctl stop -m immediate`) if quorum heartbeats are lost.
 - [Bootstrapping & Discovery](tickets/000-bootstrapping-and-discovery.md): Static configuration / environment peer seed list; node-1 bootstraps cluster on first boot.
+- [Custom OpenRaft Storage Engine](tickets/001-custom-openraft-storage-engine-design.md): Implemented pure-Rust append-only WAL with CRC32 integrity, in-memory index, atomic state machine snapshots, and OpenRaft storage traits.
 
 ## Not yet specified
 
