@@ -35,6 +35,7 @@ A comprehensive, vetted architecture and specification document (`ARCHITECTURE.m
 - [OpenDAL Backup & WAL Archiving](tickets/005-opendal-wal-archiving-and-basebackup-pipeline.md): Implemented BackupManager with OpenDAL for continuous WAL archiving, basebackup snapshots, and PITR retention pruning.
 - [Proxy Failover Buffering & Reconnection](tickets/006-proxy-failover-buffering-and-reconnect.md): Implemented topology watch notifications, client query buffering during Raft elections, transparent query retry before response dispatch, and safe ErrorResponse fallback.
 - [Dashboard API & SQL Console Security](tickets/007-dashboard-api-and-sql-console-security.md): Implemented Axum + Askama web UI and JSON status API, SQL console read-only AST filtering, statement timeouts, admin token auth, and MinIO dev default backup schedule (hourly incremental, full after midnight).
+- [Synthesize Architecture Spec](tickets/008-synthesize-architecture-spec.md): Synthesized and formalized the canonical [ARCHITECTURE.md](../ARCHITECTURE.md) covering crate architecture, consensus & pure-Rust WAL storage, L7 wire protocol pooling & failover buffering, container PID 1 supervisor model, and MinIO cloud backup pipeline.
 
 ## Not yet specified
 
