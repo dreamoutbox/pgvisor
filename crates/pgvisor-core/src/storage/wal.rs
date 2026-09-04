@@ -270,6 +270,11 @@ impl Wal {
         self.index.values().next().map(|e| e.log_id)
     }
 
+    /// Returns the filesystem path to the WAL file.
+    pub fn path(&self) -> &Path {
+        &self.file_path
+    }
+
     /// Returns the number of entries indexed.
     pub fn len(&self) -> usize {
         self.index.len()

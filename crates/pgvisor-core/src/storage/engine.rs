@@ -86,6 +86,12 @@ impl LogStore {
             inner: Arc::new(Mutex::new(inner)),
         })
     }
+
+    /// Returns the directory path for log storage.
+    pub async fn dir_path(&self) -> PathBuf {
+        let inner = self.inner.lock().await;
+        inner.dir_path.clone()
+    }
 }
 
 /// Reader for Raft log entries.

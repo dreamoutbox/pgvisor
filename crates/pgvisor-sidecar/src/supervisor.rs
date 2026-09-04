@@ -1,0 +1,257 @@
+use std::path::{Path, PathBuf};
+use std::process::{ExitStatus, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+
+use thiserror::Error;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio::sync::Mutex;
+use tracing::{error, info, warn};
+
+use crate::config::{ConfigError, ConfigGenerator, PostgresConfig};
+
+#[derive(Debug, Error)]
+pub enum SupervisorError {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Configuration error: {0}")]
+    Config(#[from] ConfigError),
+
+    #[error("Command execution failed: {0}")]
+    CommandFailed(String),
+
+    #[error("Postgres process not currently running")]
+    NotRunning,
+}
+
+/// Operational state of the supervised PostgreSQL child process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessStatus {
+    Stopped,
+    Running,
+    Fenced,
+}
+
+/// Container PID 1 supervisor managing Postgres lifecycle, signal routing, and fencing.
+pub struct PostgresSupervisor {
+    data_dir: PathBuf,
+    status: Arc<Mutex<ProcessStatus>>,
+    child_pid: Arc<AtomicU32>,
+    active_child: Arc<Mutex<Option<Child>>>,
+}
+
+impl PostgresSupervisor {
+    pub fn new(data_dir: impl AsRef<Path>) -> Self {
+        Self {
+            data_dir: data_dir.as_ref().to_path_buf(),
+            status: Arc::new(Mutex::new(ProcessStatus::Stopped)),
+            child_pid: Arc::new(AtomicU32::new(0)),
+            active_child: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Initializes data directory if PG_VERSION is absent.
+    pub async fn ensure_initdb(&self, superuser: &str) -> Result<(), SupervisorError> {
+        let version_file = self.data_dir.join("PG_VERSION");
+        if version_file.exists() {
+            info!(dir = ?self.data_dir, "Existing PostgreSQL cluster detected, skipping initdb");
+            return Ok(());
+        }
+
+        info!(dir = ?self.data_dir, superuser, "Running initdb to initialize new cluster");
+        let status = Command::new("initdb")
+            .arg("-D")
+            .arg(&self.data_dir)
+            .arg("-U")
+            .arg(superuser)
+            .arg("-A")
+            .arg("trust")
+            .status()
+            .await?;
+
+        if !status.success() {
+            return Err(SupervisorError::CommandFailed(format!(
+                "initdb failed with status: {status}"
+            )));
+        }
+
+        info!("initdb completed successfully");
+        Ok(())
+    }
+
+    /// Generates configurations and starts the PostgreSQL child process.
+    pub async fn start(&self, config: &PostgresConfig) -> Result<(), SupervisorError> {
+        ConfigGenerator::write_configs(&self.data_dir, config)?;
+
+        info!(dir = ?self.data_dir, "Spawning postgres process");
+        let mut cmd = Command::new("postgres");
+        cmd.arg("-D")
+            .arg(&self.data_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut child = cmd.spawn()?;
+        let pid = child.id().unwrap_or(0);
+        self.child_pid.store(pid, Ordering::SeqCst);
+
+        // Pipe stdout and stderr to tracing logs
+        if let Some(stdout) = child.stdout.take() {
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stdout).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    info!(target: "postgres", "{}", line);
+                }
+            });
+        }
+
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    warn!(target: "postgres", "{}", line);
+                }
+            });
+        }
+
+        {
+            let mut active = self.active_child.lock().await;
+            *active = Some(child);
+            let mut st = self.status.lock().await;
+            *st = ProcessStatus::Running;
+        }
+
+        info!(pid, "PostgreSQL process running under sidecar supervision");
+        Ok(())
+    }
+
+    /// Promotes a standby replica to read-write primary via `pg_ctl promote`.
+    pub async fn promote(&self) -> Result<(), SupervisorError> {
+        info!(dir = ?self.data_dir, "Executing pg_ctl promote");
+        let status = Command::new("pg_ctl")
+            .arg("promote")
+            .arg("-D")
+            .arg(&self.data_dir)
+            .status()
+            .await?;
+
+        if !status.success() {
+            return Err(SupervisorError::CommandFailed(format!(
+                "pg_ctl promote failed with status: {status}"
+            )));
+        }
+
+        info!("PostgreSQL instance promoted to leader successfully");
+        Ok(())
+    }
+
+    /// Immediately halts Postgres using `pg_ctl stop -m immediate` to prevent split-brain writes.
+    pub async fn fence(&self) -> Result<(), SupervisorError> {
+        warn!(dir = ?self.data_dir, "FENCING: executing immediate stop on Postgres");
+        {
+            let mut st = self.status.lock().await;
+            *st = ProcessStatus::Fenced;
+        }
+
+        let status = Command::new("pg_ctl")
+            .arg("stop")
+            .arg("-D")
+            .arg(&self.data_dir)
+            .arg("-m")
+            .arg("immediate")
+            .status()
+            .await;
+
+        match status {
+            Ok(s) if s.success() => {
+                info!("Postgres stopped immediately via pg_ctl");
+            }
+            _ => {
+                // If pg_ctl fails, kill child process directly
+                let mut active = self.active_child.lock().await;
+                if let Some(mut child) = active.take() {
+                    let _ = child.kill().await;
+                    warn!("Forcefully killed Postgres child process");
+                }
+            }
+        }
+
+        self.child_pid.store(0, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Gracefully stops Postgres child process using `pg_ctl stop -m fast`.
+    pub async fn stop(&self) -> Result<(), SupervisorError> {
+        info!(dir = ?self.data_dir, "Executing fast shutdown on Postgres");
+        let status = Command::new("pg_ctl")
+            .arg("stop")
+            .arg("-D")
+            .arg(&self.data_dir)
+            .arg("-m")
+            .arg("fast")
+            .status()
+            .await;
+
+        match status {
+            Ok(s) if s.success() => info!("Postgres stopped cleanly"),
+            _ => {
+                let mut active = self.active_child.lock().await;
+                if let Some(mut child) = active.take() {
+                    let _ = child.kill().await;
+                }
+            }
+        }
+
+        let mut st = self.status.lock().await;
+        *st = ProcessStatus::Stopped;
+        self.child_pid.store(0, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Returns the current supervisor process status.
+    pub async fn status(&self) -> ProcessStatus {
+        let st = self.status.lock().await;
+        *st
+    }
+
+    /// Returns the monitored child PID, or 0 if not running.
+    pub fn child_pid(&self) -> u32 {
+        self.child_pid.load(Ordering::SeqCst)
+    }
+
+    /// Waits for child process to terminate.
+    pub async fn wait(&self) -> Option<ExitStatus> {
+        let mut active = self.active_child.lock().await;
+        if let Some(child) = active.as_mut() {
+            match child.wait().await {
+                Ok(status) => {
+                    info!(?status, "Postgres child process exited");
+                    let mut st = self.status.lock().await;
+                    *st = ProcessStatus::Stopped;
+                    Some(status)
+                }
+                Err(err) => {
+                    error!(%err, "Error waiting on Postgres child");
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_supervisor_initial_state() {
+        let dir = tempdir().unwrap();
+        let supervisor = PostgresSupervisor::new(dir.path());
+        assert_eq!(supervisor.status().await, ProcessStatus::Stopped);
+        assert_eq!(supervisor.child_pid(), 0);
+    }
+}

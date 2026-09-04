@@ -29,6 +29,8 @@ A comprehensive, vetted architecture and specification document (`ARCHITECTURE.m
 - [Fencing & Split-Brain Prevention](tickets/000-fencing-and-split-brain-prevention.md): Active sidecar fencing with quorum lease: sidecar immediately halts Postgres (`pg_ctl stop -m immediate`) if quorum heartbeats are lost.
 - [Bootstrapping & Discovery](tickets/000-bootstrapping-and-discovery.md): Static configuration / environment peer seed list; node-1 bootstraps cluster on first boot.
 - [Custom OpenRaft Storage Engine](tickets/001-custom-openraft-storage-engine-design.md): Implemented pure-Rust append-only WAL with CRC32 integrity, in-memory index, atomic state machine snapshots, and OpenRaft storage traits.
+- [Postgres Wire Protocol & Pooling](tickets/002-postgres-wire-protocol-framing-and-pooling.md): Implemented wire protocol 3.0 framing, transaction status tracking ('I'/'T'/'E'), read/write splitting, and transaction-level connection pooling with failover draining.
+- [Sidecar Process Supervision](tickets/003-sidecar-process-supervision-and-signals.md): Implemented container PID 1 signal trapping, config templating, stdout/stderr pipe logging, standby promotion, and quorum fencing via pg_ctl stop -m immediate.
 
 ## Not yet specified
 
