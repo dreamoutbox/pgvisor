@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install compiled PgVisor binaries
+# Copy compiled PgVisor binaries
 COPY --from=builder /app/target/release/pgvisor-sidecar /usr/local/bin/
 COPY --from=builder /app/target/release/pgvisor-proxy /usr/local/bin/
 COPY --from=builder /app/target/release/pgvisor-dashboard /usr/local/bin/

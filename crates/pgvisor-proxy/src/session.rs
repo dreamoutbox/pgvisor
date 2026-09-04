@@ -150,9 +150,12 @@ impl ClientSession {
             BackendRole::Standby
         };
 
+        let user = self.startup_params.as_ref().and_then(|s| s.user());
+        let database = self.startup_params.as_ref().and_then(|s| s.database());
+
         // If no backend is held, acquire one from pool with failover buffering
         if self.active_backend.is_none() {
-            match self.pool.acquire_with_retry(role, &self.failover_config).await {
+            match self.pool.acquire_with_retry(role, &self.failover_config, user, database).await {
                 Ok(backend) => {
                     self.active_backend = Some(backend);
                 }
@@ -186,7 +189,7 @@ impl ClientSession {
         if let Err(e) = backend.stream.write_all(&forward_buf).await {
             warn!(?e, "Failed to write query to backend; attempting transparent failover re-acquire");
             // Discard broken backend and attempt transparent failover retry
-            match self.pool.acquire_with_retry(role, &self.failover_config).await {
+            match self.pool.acquire_with_retry(role, &self.failover_config, user, database).await {
                 Ok(mut new_backend) => {
                     new_backend.stream.write_all(&forward_buf).await?;
                     backend = new_backend;
@@ -226,7 +229,7 @@ impl ClientSession {
                 // If 0 bytes were sent to client, we can transparently retry query on new leader!
                 if client_bytes_written == 0 {
                     info!("Backend terminated before sending response; retrying query on newly promoted leader");
-                    match self.pool.acquire_with_retry(role, &self.failover_config).await {
+                    match self.pool.acquire_with_retry(role, &self.failover_config, user, database).await {
                         Ok(mut new_backend) => {
                             new_backend.stream.write_all(&forward_buf).await?;
                             backend = new_backend;

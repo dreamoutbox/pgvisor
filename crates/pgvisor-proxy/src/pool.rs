@@ -1,8 +1,11 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bytes::BytesMut;
+use pgvisor_core::protocol::message::{BackendMessage, InitialClientMessage, StartupMessage};
 use thiserror::Error;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{watch, Mutex};
 use tracing::{debug, info, warn};
@@ -60,15 +63,68 @@ impl std::fmt::Debug for PooledConnection {
 }
 
 impl PooledConnection {
-    pub async fn connect(addr: &str, role: BackendRole) -> Result<Self, PoolError> {
+    /// Connects to a PostgreSQL instance and performs the wire protocol startup handshake.
+    pub async fn connect(
+        addr: &str,
+        role: BackendRole,
+        user: Option<&str>,
+        database: Option<&str>,
+    ) -> Result<Self, PoolError> {
         debug!(addr, ?role, "Opening new backend connection");
-        let stream = TcpStream::connect(addr).await?;
-        Ok(Self {
-            stream,
-            role,
-            addr: addr.to_string(),
-            created_at: Instant::now(),
-        })
+        let mut stream = TcpStream::connect(addr).await?;
+
+        // 1. Send StartupMessage to backend
+        let mut startup_buf = BytesMut::new();
+        let mut params = HashMap::new();
+        params.insert("user".to_string(), user.unwrap_or("postgres").to_string());
+        params.insert(
+            "database".to_string(),
+            database.unwrap_or("postgres").to_string(),
+        );
+        params.insert("client_encoding".to_string(), "UTF8".to_string());
+
+        let startup = StartupMessage {
+            protocol_version: 196608,
+            parameters: params,
+        };
+        InitialClientMessage::encode_startup(&startup, &mut startup_buf);
+        stream.write_all(&startup_buf).await?;
+
+        // 2. Consume backend authentication and status packets until ReadyForQuery ('Z')
+        let mut read_buf = BytesMut::with_capacity(4096);
+        loop {
+            let n = stream.read_buf(&mut read_buf).await?;
+            if n == 0 {
+                return Err(PoolError::BackendUnavailable(format!(
+                    "Backend at {} unexpectedly closed connection during startup handshake",
+                    addr
+                )));
+            }
+
+            while let Some(msg) = BackendMessage::decode(&mut read_buf)? {
+                match msg {
+                    BackendMessage::ReadyForQuery { .. } => {
+                        debug!(
+                            addr,
+                            "Backend startup handshake completed, ready for query execution"
+                        );
+                        return Ok(Self {
+                            stream,
+                            role,
+                            addr: addr.to_string(),
+                            created_at: Instant::now(),
+                        });
+                    }
+                    BackendMessage::ErrorResponse { message } => {
+                        return Err(PoolError::BackendUnavailable(format!(
+                            "Backend at {} rejected startup handshake: {}",
+                            addr, message
+                        )));
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }
 
@@ -125,16 +181,20 @@ impl ConnectionPool {
         self.topology_notifier.subscribe()
     }
 
-    /// Acquires an idle connection or establishes a new one for the specified role.
-    pub async fn acquire(&self, role: BackendRole) -> Result<PooledConnection, PoolError> {
+    /// Acquires a connection for a specific role and user/database credentials.
+    pub async fn acquire_for(
+        &self,
+        role: BackendRole,
+        user: Option<&str>,
+        database: Option<&str>,
+    ) -> Result<PooledConnection, PoolError> {
         let (idle_opt, target_addr) = {
             let mut inner = self.inner.lock().await;
             match role {
                 BackendRole::Leader => {
-                    let addr = inner
-                        .leader_addr
-                        .clone()
-                        .ok_or_else(|| PoolError::BackendUnavailable("No active Raft leader registered".into()))?;
+                    let addr = inner.leader_addr.clone().ok_or_else(|| {
+                        PoolError::BackendUnavailable("No active Raft leader registered".into())
+                    })?;
                     let conn = inner.idle_leaders.pop_front();
                     (conn, addr)
                 }
@@ -148,7 +208,9 @@ impl ConnectionPool {
                         // Fallback to leader if no standby is currently registered
                         (inner.idle_leaders.pop_front(), addr)
                     } else {
-                        return Err(PoolError::BackendUnavailable("No database instances available".into()));
+                        return Err(PoolError::BackendUnavailable(
+                            "No database instances available".into(),
+                        ));
                     }
                 }
             }
@@ -158,8 +220,13 @@ impl ConnectionPool {
             debug!(addr = %conn.addr, ?role, "Reusing idle pooled connection");
             Ok(conn)
         } else {
-            PooledConnection::connect(&target_addr, role).await
+            PooledConnection::connect(&target_addr, role, user, database).await
         }
+    }
+
+    /// Acquires an idle connection or establishes a new one for the specified role.
+    pub async fn acquire(&self, role: BackendRole) -> Result<PooledConnection, PoolError> {
+        self.acquire_for(role, None, None).await
     }
 
     /// Acquires a connection, pausing and retrying if the cluster is undergoing failover.
@@ -167,12 +234,14 @@ impl ConnectionPool {
         &self,
         role: BackendRole,
         config: &FailoverConfig,
+        user: Option<&str>,
+        database: Option<&str>,
     ) -> Result<PooledConnection, PoolError> {
         let start = Instant::now();
         let mut rx = self.subscribe_topology();
 
         loop {
-            match self.acquire(role).await {
+            match self.acquire_for(role, user, database).await {
                 Ok(conn) => return Ok(conn),
                 Err(err) => {
                     if start.elapsed() >= config.failover_timeout {
@@ -238,14 +307,16 @@ mod tests {
     #[tokio::test]
     async fn test_pool_topology_and_failover_drain() {
         let pool = ConnectionPool::new(5);
-        pool.update_topology(Some("127.0.0.1:5432".into()), vec!["127.0.0.1:5433".into()]).await;
+        pool.update_topology(Some("127.0.0.1:5432".into()), vec!["127.0.0.1:5433".into()])
+            .await;
 
         let (leaders, standbys) = pool.idle_count().await;
         assert_eq!(leaders, 0);
         assert_eq!(standbys, 0);
 
         // Failover: new leader promoted to 127.0.0.1:5434
-        pool.update_topology(Some("127.0.0.1:5434".into()), vec![]).await;
+        pool.update_topology(Some("127.0.0.1:5434".into()), vec![])
+            .await;
         let inner = pool.inner.lock().await;
         assert_eq!(inner.leader_addr, Some("127.0.0.1:5434".into()));
         assert!(inner.idle_leaders.is_empty());
@@ -259,7 +330,9 @@ mod tests {
             retry_interval: Duration::from_millis(30),
         };
 
-        let result = pool.acquire_with_retry(BackendRole::Leader, &config).await;
+        let result = pool
+            .acquire_with_retry(BackendRole::Leader, &config, None, None)
+            .await;
         assert!(result.is_err());
         match result {
             Err(PoolError::FailoverTimeout(_)) => {}
