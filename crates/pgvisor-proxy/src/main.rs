@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod executor;
 pub mod pool;
 pub mod session;
@@ -7,13 +8,16 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Result;
+use backup::ProxyBackupService;
 use executor::ProxySqlExecutor;
+use pgvisor_core::backup::{BackupManager, BackupScheduleConfig};
 use pgvisor_dashboard::create_router;
 use pgvisor_dashboard::handlers::DashboardState;
 use pgvisor_dashboard::models::{NodeHealthState, NodeRole, NodeSummary};
 use pool::ConnectionPool;
 use session::ClientSession;
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 use tracing::{error, info};
 
 #[tokio::main]
@@ -50,6 +54,53 @@ async fn main() -> Result<()> {
         let admin_token = env::var("PGVISOR_ADMIN_TOKEN").ok();
         let mut dash_state_inner = DashboardState::new(&cluster_id, admin_token);
         dash_state_inner.sql_executor = Arc::new(ProxySqlExecutor::new(pool.clone()));
+
+        // Initialize OpenDAL backup manager for MinIO/S3
+        let s3_endpoint =
+            env::var("S3_ENDPOINT").unwrap_or_else(|_| "http://minio:9000".to_string());
+        let s3_bucket = env::var("S3_BUCKET").unwrap_or_else(|_| "pgvisor-backups".to_string());
+        let s3_access_key = env::var("S3_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".to_string());
+        let s3_secret_key = env::var("S3_SECRET_KEY").unwrap_or_else(|_| "minioadmin".to_string());
+
+        let backup_config = BackupScheduleConfig {
+            minio_endpoint: s3_endpoint.clone(),
+            minio_bucket: s3_bucket.clone(),
+            access_key: s3_access_key,
+            secret_key: s3_secret_key,
+            ..Default::default()
+        };
+
+        let backup_service: Arc<dyn pgvisor_dashboard::handlers::BackupService> =
+            match backup_config.build_operator() {
+                Ok(operator) => {
+                    let bm = Arc::new(BackupManager::new(&cluster_id, operator));
+                    let leader_ref = Arc::new(RwLock::new(leader_addr.clone()));
+                    let standby_ref = Arc::new(RwLock::new(standby_addrs.clone()));
+                    let control_port = env::var("PGVISOR_CONTROL_PORT")
+                        .ok()
+                        .and_then(|p| p.parse().ok())
+                        .unwrap_or(8080);
+                    Arc::new(ProxyBackupService::new(
+                        bm,
+                        leader_ref,
+                        standby_ref,
+                        Some(pool.clone()),
+                        s3_endpoint,
+                        s3_bucket,
+                        backup_config.retention_days,
+                        control_port,
+                    ))
+                }
+                Err(e) => {
+                    error!(
+                        ?e,
+                        "Failed to initialize OpenDAL S3 operator, using fallback"
+                    );
+                    Arc::new(pgvisor_dashboard::handlers::StandaloneBackupService::new())
+                }
+            };
+        dash_state_inner.backup_service = backup_service;
+
         let dash_state = Arc::new(dash_state_inner);
 
         // Populate dashboard node topology from configured addresses

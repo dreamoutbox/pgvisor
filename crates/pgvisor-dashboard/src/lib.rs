@@ -4,12 +4,13 @@ pub mod security;
 pub mod templates;
 
 use std::sync::Arc;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 
 use crate::handlers::{
-    api_execute_sql, api_list_tables, api_status, api_table_data, api_table_schema, get_nodes,
-    get_overview, get_sql_console, get_tables_page, DashboardState,
+    api_create_backup, api_delete_backup, api_download_backup, api_execute_sql, api_list_backups,
+    api_list_tables, api_restore_backup, api_status, api_table_data, api_table_schema,
+    get_backups_page, get_nodes, get_overview, get_sql_console, get_tables_page, DashboardState,
 };
 
 /// Creates the Axum router for the PgVisor dashboard.
@@ -19,11 +20,16 @@ pub fn create_router(state: Arc<DashboardState>) -> Router {
         .route("/nodes", get(get_nodes))
         .route("/tables", get(get_tables_page))
         .route("/sql", get(get_sql_console))
+        .route("/backups", get(get_backups_page))
         .route("/api/status", get(api_status))
         .route("/api/sql", post(api_execute_sql))
         .route("/api/tables", get(api_list_tables))
         .route("/api/tables/:table/schema", get(api_table_schema))
         .route("/api/tables/:table/data", get(api_table_data))
+        .route("/api/backups", get(api_list_backups).post(api_create_backup))
+        .route("/api/backups/:snapshot_id/download", get(api_download_backup))
+        .route("/api/backups/:snapshot_id/restore", post(api_restore_backup))
+        .route("/api/backups/:snapshot_id", delete(api_delete_backup))
         .with_state(state)
 }
 
@@ -129,6 +135,51 @@ mod tests {
             .oneshot(Request::builder().uri("/api/tables/pgvisor_demo/data").body(Body::empty()).unwrap())
             .await
             .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 10. Test GET /backups page
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri("/backups").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 11. Test GET /api/backups
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri("/api/backups").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 12. Test POST /api/backups
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/backups")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"backup_type": "full", "label": "test-snap"}"#))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 13. Test POST /api/backups/snap-20260904-200000/restore
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/backups/snap-20260904-200000/restore")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{}"#))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 14. Test DELETE /api/backups/snap-20260904-200000
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/backups/snap-20260904-200000")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
     }
 }

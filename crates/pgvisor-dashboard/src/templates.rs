@@ -1,5 +1,6 @@
 use crate::models::{
-    ClusterOverview, ColumnInfo, NodeHealthState, NodeRole, NodeSummary, TableSummary,
+    BackupItemView, BackupOverviewSummary, ClusterOverview, ColumnInfo, NodeHealthState, NodeRole,
+    NodeSummary, TableSummary,
 };
 use askama::Template;
 
@@ -39,4 +40,11 @@ impl<'a> TablesTemplate<'a> {
     pub fn is_active_table(&self, name: &str) -> bool {
         self.active_table == Some(name)
     }
+}
+
+#[derive(Template)]
+#[template(path = "backups.html")]
+pub struct BackupsTemplate<'a> {
+    pub backups: &'a [BackupItemView],
+    pub summary: &'a BackupOverviewSummary,
 }

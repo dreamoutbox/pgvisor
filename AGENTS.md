@@ -40,6 +40,7 @@ pgvisor/
 - **Avoid `ref` / `ref mut` in patterns**: Rely on Rust 2018+ match ergonomics. Use `.as_ref()` or `.as_mut()` instead of `ref` / `ref mut`.
 - **Strict Enum Typing**: Always use `enum` for any closed set of variants (e.g. node states, replication roles, Raft message kinds). Never use magic strings.
 - **Intent-Focused Comments**: Comment purpose/intent of functions and blocks. Avoid line-by-line noise comments.
+- **Plain-Text Test Scripts (No ANSI Colors)**: All test, benchmark, and verification scripts must output clean plain text. Do not use ANSI color escape sequences (`\033[...]`, `tput`, color variables).
 
 ### 2. Error Handling Constraints
 - **Library Crates (`pgvisor-core`, internal libs)**: Use `thiserror` to define explicit domain error types. Never use `anyhow` in public library APIs.
@@ -57,3 +58,8 @@ pgvisor/
 - **Package Manager**: If any web assets or frontend tools are used, use `pnpm` exclusively (never `npm` or `yarn`).
 - **PID 1 Responsibilities in Sidecar**: The sidecar acts as container PID 1. It must properly reap child zombie processes (`waitpid`) and propagate signals (`SIGTERM`, `SIGINT`, `SIGQUIT`) to Postgres.
 - **Fencing over Promotion**: During network splits, the old leader must be fenced (killed via `pg_ctl stop -m immediate`) before or concurrently with standby promotion to prevent split-brain data corruption.
+- **Cluster Restore & Standby Timeline Realignment**: Restoring a database snapshot rewinds the leader's timeline and LSN. Standby replicas cannot resume replication without re-cloning from the restored leader. Cluster restores must be coordinated through the sidecar control API:
+  1. Restore leader node via `POST /control/restore`.
+  2. Re-sync all standby replicas via `POST /control/resync` (`pg_basebackup`).
+  3. Drain proxy connection pool (`pool.drain_all()`) so client connections refresh to the restored timeline.
+- **Sidecar Supervision Boundaries (No Out-of-Band `pg_ctl`)**: When `pgvisor-sidecar` runs as container PID 1, never execute out-of-band `pg_ctl stop`/`pg_ctl start` commands via shell scripts or `docker exec`. External stops corrupt process accounting and supervisor state. Always issue lifecycle and restore commands through the sidecar's internal HTTP control API.

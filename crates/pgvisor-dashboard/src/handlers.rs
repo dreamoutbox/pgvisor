@@ -4,18 +4,21 @@ use std::time::Instant;
 use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::response::Html;
+use axum::response::{Html, IntoResponse};
 use axum::Json;
+use chrono::Utc;
+use pgvisor_core::backup::{BackupType, BasebackupMeta};
 use serde::Deserialize;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use crate::models::{
-    ClusterOverview, ColumnInfo, NodeHealthState, NodeRole, NodeSummary, SqlQueryError,
-    SqlQueryRequest, SqlQueryResult, TableDataResponse, TableSummary,
+    format_bytes, BackupItemView, BackupOverviewSummary, ClusterOverview, ColumnInfo,
+    CreateBackupRequest, NodeHealthState, NodeRole, NodeSummary, RestoreBackupRequest,
+    SqlQueryError, SqlQueryRequest, SqlQueryResult, TableDataResponse, TableSummary,
 };
 use crate::security::{SecurityError, SqlSecurityGuard};
-use crate::templates::{NodesTemplate, OverviewTemplate, TablesTemplate};
+use crate::templates::{BackupsTemplate, NodesTemplate, OverviewTemplate, TablesTemplate};
 
 /// Abstraction for executing SQL queries on PostgreSQL backends.
 #[async_trait::async_trait]
@@ -171,12 +174,159 @@ impl SqlExecutor for StandaloneSqlExecutor {
     }
 }
 
+/// Abstraction for backup and restore operations across physical storage and Postgres nodes.
+#[async_trait::async_trait]
+pub trait BackupService: Send + Sync {
+    async fn list_backups(&self) -> Result<Vec<BasebackupMeta>, String>;
+    async fn create_backup(
+        &self,
+        backup_type: BackupType,
+        label: Option<String>,
+    ) -> Result<BasebackupMeta, String>;
+    async fn restore_backup(
+        &self,
+        snapshot_id: &str,
+        target_time: Option<String>,
+    ) -> Result<String, String>;
+    async fn delete_backup(&self, snapshot_id: &str) -> Result<(), String>;
+    async fn get_backup_archive(
+        &self,
+        snapshot_id: &str,
+    ) -> Result<(BasebackupMeta, Vec<u8>), String>;
+    fn storage_info(&self) -> (String, String, u32) {
+        ("http://127.0.0.1:9000".into(), "pgvisor-backups".into(), 7)
+    }
+}
+
+/// In-memory / mock backup service for standalone dashboard operation and testing.
+pub struct StandaloneBackupService {
+    backups: Arc<RwLock<Vec<BasebackupMeta>>>,
+    endpoint: String,
+    bucket: String,
+}
+
+impl StandaloneBackupService {
+    pub fn new() -> Self {
+        let initial = vec![
+            BasebackupMeta {
+                snapshot_id: "snap-20260904-200000".into(),
+                created_at: Utc::now() - chrono::Duration::hours(5),
+                backup_type: BackupType::Full,
+                start_wal: "000000010000000000000001".into(),
+                stop_wal: Some("000000010000000000000002".into()),
+                total_bytes: 14_850_000,
+            },
+            BasebackupMeta {
+                snapshot_id: "snap-20260904-210000".into(),
+                created_at: Utc::now() - chrono::Duration::hours(4),
+                backup_type: BackupType::Incremental,
+                start_wal: "000000010000000000000003".into(),
+                stop_wal: Some("000000010000000000000004".into()),
+                total_bytes: 2_450_000,
+            },
+        ];
+        Self {
+            backups: Arc::new(RwLock::new(initial)),
+            endpoint: "http://127.0.0.1:9000".into(),
+            bucket: "pgvisor-backups".into(),
+        }
+    }
+}
+
+impl Default for StandaloneBackupService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl BackupService for StandaloneBackupService {
+    async fn list_backups(&self) -> Result<Vec<BasebackupMeta>, String> {
+        let mut list = self.backups.read().await.clone();
+        list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(list)
+    }
+
+    async fn create_backup(
+        &self,
+        backup_type: BackupType,
+        _label: Option<String>,
+    ) -> Result<BasebackupMeta, String> {
+        let now = Utc::now();
+        let meta = BasebackupMeta {
+            snapshot_id: format!("snap-{}", now.format("%Y%m%d-%H%M%S")),
+            created_at: now,
+            backup_type,
+            start_wal: "000000010000000000000010".into(),
+            stop_wal: Some("000000010000000000000011".into()),
+            total_bytes: match backup_type {
+                BackupType::Full => 15_200_000,
+                BackupType::Incremental => 1_850_000,
+            },
+        };
+
+        let mut lock = self.backups.write().await;
+        lock.push(meta.clone());
+        Ok(meta)
+    }
+
+    async fn restore_backup(
+        &self,
+        snapshot_id: &str,
+        target_time: Option<String>,
+    ) -> Result<String, String> {
+        let lock = self.backups.read().await;
+        if lock.iter().any(|b| b.snapshot_id == snapshot_id) {
+            let detail = target_time
+                .map(|t| format!(" (PITR target: {})", t))
+                .unwrap_or_default();
+            Ok(format!(
+                "Snapshot {} successfully restored{}",
+                snapshot_id, detail
+            ))
+        } else {
+            Err(format!("Snapshot {} not found", snapshot_id))
+        }
+    }
+
+    async fn delete_backup(&self, snapshot_id: &str) -> Result<(), String> {
+        let mut lock = self.backups.write().await;
+        let before_len = lock.len();
+        lock.retain(|b| b.snapshot_id != snapshot_id);
+        if lock.len() == before_len {
+            Err(format!("Snapshot {} not found", snapshot_id))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn get_backup_archive(
+        &self,
+        snapshot_id: &str,
+    ) -> Result<(BasebackupMeta, Vec<u8>), String> {
+        let lock = self.backups.read().await;
+        let meta = lock
+            .iter()
+            .find(|b| b.snapshot_id == snapshot_id)
+            .cloned()
+            .ok_or_else(|| format!("Snapshot {} not found", snapshot_id))?;
+
+        let dummy_tar_gz = vec![0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff];
+        Ok((meta, dummy_tar_gz))
+    }
+
+    fn storage_info(&self) -> (String, String, u32) {
+        (self.endpoint.clone(), self.bucket.clone(), 7)
+    }
+}
+
 /// Shared application state for dashboard HTTP handlers.
 #[derive(Clone)]
 pub struct DashboardState {
     pub overview: Arc<RwLock<ClusterOverview>>,
     pub security_guard: Arc<SqlSecurityGuard>,
     pub sql_executor: Arc<dyn SqlExecutor>,
+    pub backup_service: Arc<dyn BackupService>,
     pub admin_token: Option<String>,
 }
 
@@ -230,6 +380,7 @@ impl DashboardState {
             overview: Arc::new(RwLock::new(initial_overview)),
             security_guard: Arc::new(SqlSecurityGuard::default()),
             sql_executor: Arc::new(StandaloneSqlExecutor),
+            backup_service: Arc::new(StandaloneBackupService::new()),
             admin_token,
         }
     }
@@ -239,6 +390,14 @@ impl DashboardState {
 pub async fn get_overview(
     State(state): State<Arc<DashboardState>>,
 ) -> Result<Html<String>, StatusCode> {
+    if let Ok(backups) = state.backup_service.list_backups().await {
+        let mut overview_write = state.overview.write().await;
+        overview_write.total_backups = backups.len();
+        if let Some(latest) = backups.first() {
+            overview_write.last_backup_at = Some(latest.created_at);
+        }
+    }
+
     let overview = state.overview.read().await;
     let template = OverviewTemplate {
         overview: &overview,
@@ -616,4 +775,160 @@ pub async fn api_execute_sql(
             ))
         }
     }
+}
+
+/// GET /backups -> Renders backup management page
+pub async fn get_backups_page(
+    State(state): State<Arc<DashboardState>>,
+) -> Result<Html<String>, StatusCode> {
+    let list = state
+        .backup_service
+        .list_backups()
+        .await
+        .unwrap_or_default();
+    let (storage_endpoint, storage_bucket, retention_days) = state.backup_service.storage_info();
+
+    let total_bytes: u64 = list.iter().map(|b| b.total_bytes).sum();
+    let latest_backup = list
+        .first()
+        .map(|b| b.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string());
+
+    let summary = BackupOverviewSummary {
+        total_backups: list.len(),
+        latest_backup,
+        total_size_pretty: format_bytes(total_bytes),
+        retention_days,
+        storage_endpoint,
+        storage_bucket,
+    };
+
+    let backup_items: Vec<BackupItemView> = list
+        .into_iter()
+        .map(|b| {
+            let backup_type = match b.backup_type {
+                BackupType::Full => "full".to_string(),
+                BackupType::Incremental => "incremental".to_string(),
+            };
+            BackupItemView {
+                snapshot_id: b.snapshot_id,
+                created_at: b.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                backup_type,
+                start_wal: b.start_wal,
+                stop_wal: b.stop_wal.unwrap_or_else(|| "-".to_string()),
+                size_pretty: format_bytes(b.total_bytes),
+                total_bytes: b.total_bytes,
+            }
+        })
+        .collect();
+
+    let template = BackupsTemplate {
+        backups: &backup_items,
+        summary: &summary,
+    };
+
+    template.render().map(Html).map_err(|e| {
+        error!(?e, "Failed to render backups template");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
+}
+
+/// GET /api/backups -> JSON list of physical basebackup snapshots
+pub async fn api_list_backups(
+    State(state): State<Arc<DashboardState>>,
+) -> Result<Json<Vec<BasebackupMeta>>, (StatusCode, String)> {
+    state
+        .backup_service
+        .list_backups()
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+}
+
+/// POST /api/backups -> Triggers creation of a physical basebackup
+pub async fn api_create_backup(
+    State(state): State<Arc<DashboardState>>,
+    Json(payload): Json<CreateBackupRequest>,
+) -> Result<Json<BasebackupMeta>, (StatusCode, String)> {
+    let b_type = payload.backup_type.unwrap_or(BackupType::Full);
+    let meta = state
+        .backup_service
+        .create_backup(b_type, payload.label)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    {
+        let mut overview = state.overview.write().await;
+        overview.total_backups += 1;
+        overview.last_backup_at = Some(meta.created_at);
+    }
+
+    Ok(Json(meta))
+}
+
+/// GET /api/backups/:id/download -> Streams compressed basebackup archive (.tar.gz)
+pub async fn api_download_backup(
+    State(state): State<Arc<DashboardState>>,
+    Path(snapshot_id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let (meta, tar_bytes) = state
+        .backup_service
+        .get_backup_archive(&snapshot_id)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+
+    let filename = format!("{}.tar.gz", meta.snapshot_id);
+    let disposition = format!("attachment; filename=\"{}\"", filename);
+
+    let headers = [
+        (
+            axum::http::header::CONTENT_TYPE,
+            "application/gzip".to_string(),
+        ),
+        (axum::http::header::CONTENT_DISPOSITION, disposition),
+    ];
+
+    Ok((headers, tar_bytes))
+}
+
+/// POST /api/backups/:id/restore -> Triggers restore of database from snapshot
+pub async fn api_restore_backup(
+    State(state): State<Arc<DashboardState>>,
+    Path(snapshot_id): Path<String>,
+    Json(payload): Json<RestoreBackupRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let msg = state
+        .backup_service
+        .restore_backup(&snapshot_id, payload.recovery_target_time)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    Ok(Json(serde_json::json!({
+        "status": "success",
+        "message": msg,
+        "snapshot_id": snapshot_id
+    })))
+}
+
+/// DELETE /api/backups/:id -> Deletes basebackup snapshot from storage
+pub async fn api_delete_backup(
+    State(state): State<Arc<DashboardState>>,
+    Path(snapshot_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    state
+        .backup_service
+        .delete_backup(&snapshot_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    {
+        let mut overview = state.overview.write().await;
+        if overview.total_backups > 0 {
+            overview.total_backups -= 1;
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": "deleted",
+        "snapshot_id": snapshot_id
+    })))
 }

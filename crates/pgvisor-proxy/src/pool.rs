@@ -176,6 +176,15 @@ impl ConnectionPool {
         let _ = self.topology_notifier.send(inner.version);
     }
 
+    /// Flushes all idle connections to both leader and standbys (e.g. after cluster restore).
+    pub async fn drain_all(&self) {
+        let mut inner = self.inner.lock().await;
+        inner.idle_leaders.clear();
+        inner.idle_standbys.clear();
+        inner.version = inner.version.wrapping_add(1);
+        let _ = self.topology_notifier.send(inner.version);
+    }
+
     /// Returns a receiver for topology updates.
     pub fn subscribe_topology(&self) -> watch::Receiver<u64> {
         self.topology_notifier.subscribe()

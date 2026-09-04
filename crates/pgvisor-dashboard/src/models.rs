@@ -101,3 +101,56 @@ pub struct TableDataResponse {
     pub limit: usize,
     pub offset: usize,
 }
+
+/// Request to trigger a physical backup snapshot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CreateBackupRequest {
+    pub backup_type: Option<pgvisor_core::backup::BackupType>,
+    pub label: Option<String>,
+}
+
+/// Request to restore cluster from a specific snapshot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RestoreBackupRequest {
+    pub recovery_target_time: Option<String>,
+}
+
+/// Enriched view item for backup display in the dashboard table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupItemView {
+    pub snapshot_id: String,
+    pub created_at: String,
+    pub backup_type: String,
+    pub start_wal: String,
+    pub stop_wal: String,
+    pub size_pretty: String,
+    pub total_bytes: u64,
+}
+
+/// Aggregated backup metrics for the dashboard summary cards.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupOverviewSummary {
+    pub total_backups: usize,
+    pub latest_backup: Option<String>,
+    pub total_size_pretty: String,
+    pub retention_days: u32,
+    pub storage_endpoint: String,
+    pub storage_bucket: String,
+}
+
+/// Formats raw byte count into human-readable representation.
+pub fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
