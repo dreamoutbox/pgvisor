@@ -15,6 +15,8 @@ byteorder = { workspace = true }
 crc32fast = { workspace = true }
 openraft = { workspace = true }
 tokio-util = { workspace = true }
+opendal = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.12"
