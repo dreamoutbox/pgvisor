@@ -52,33 +52,87 @@ impl PostgresSupervisor {
         }
     }
 
-    /// Initializes data directory if PG_VERSION is absent.
-    pub async fn ensure_initdb(&self, superuser: &str) -> Result<(), SupervisorError> {
+    /// Ensures data directory is initialized.
+    /// If primary_conninfo is set and data_dir is uninitialized, clones from primary via pg_basebackup.
+    /// Otherwise initializes a primary cluster via initdb.
+    pub async fn ensure_initialized(
+        &self,
+        superuser: &str,
+        primary_conninfo: Option<&str>,
+    ) -> Result<(), SupervisorError> {
         let version_file = self.data_dir.join("PG_VERSION");
         if version_file.exists() {
-            info!(dir = ?self.data_dir, "Existing PostgreSQL cluster detected, skipping initdb");
+            info!(dir = ?self.data_dir, "Existing PostgreSQL cluster detected, skipping initialization");
             return Ok(());
         }
 
-        info!(dir = ?self.data_dir, superuser, "Running initdb to initialize new cluster");
-        let status = Command::new("initdb")
-            .arg("-D")
-            .arg(&self.data_dir)
-            .arg("-U")
-            .arg(superuser)
-            .arg("-A")
-            .arg("trust")
-            .status()
-            .await?;
+        if let Some(conninfo) = primary_conninfo {
+            info!(dir = ?self.data_dir, conninfo, "Standby node: waiting for primary to be ready for pg_basebackup");
+            let mut retries = 30;
+            while retries > 0 {
+                let status = Command::new("pg_isready")
+                    .arg("-d")
+                    .arg(conninfo)
+                    .status()
+                    .await;
+                if let Ok(s) = status {
+                    if s.success() {
+                        info!("Primary is ready, initiating pg_basebackup clone");
+                        break;
+                    }
+                }
+                retries -= 1;
+                if retries == 0 {
+                    return Err(SupervisorError::CommandFailed(
+                        "Primary did not become ready in time for replication".into(),
+                    ));
+                }
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            }
 
-        if !status.success() {
-            return Err(SupervisorError::CommandFailed(format!(
-                "initdb failed with status: {status}"
-            )));
+            let status = Command::new("pg_basebackup")
+                .arg("-d")
+                .arg(conninfo)
+                .arg("-D")
+                .arg(&self.data_dir)
+                .arg("-Fp")
+                .arg("-Xs")
+                .arg("-R")
+                .status()
+                .await?;
+
+            if !status.success() {
+                return Err(SupervisorError::CommandFailed(format!(
+                    "pg_basebackup failed with status: {status}"
+                )));
+            }
+            info!("pg_basebackup clone completed successfully");
+        } else {
+            info!(dir = ?self.data_dir, superuser, "Running initdb to initialize new cluster");
+            let status = Command::new("initdb")
+                .arg("-D")
+                .arg(&self.data_dir)
+                .arg("-U")
+                .arg(superuser)
+                .arg("-A")
+                .arg("trust")
+                .status()
+                .await?;
+
+            if !status.success() {
+                return Err(SupervisorError::CommandFailed(format!(
+                    "initdb failed with status: {status}"
+                )));
+            }
+            info!("initdb completed successfully");
         }
 
-        info!("initdb completed successfully");
         Ok(())
+    }
+
+    /// Initializes data directory if PG_VERSION is absent (convenience wrapper for primaries).
+    pub async fn ensure_initdb(&self, superuser: &str) -> Result<(), SupervisorError> {
+        self.ensure_initialized(superuser, None).await
     }
 
     /// Generates configurations and starts the PostgreSQL child process.

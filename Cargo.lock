@@ -1333,8 +1333,10 @@ name = "pgvisor-proxy"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "bytes",
  "pgvisor-core",
+ "pgvisor-dashboard",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",

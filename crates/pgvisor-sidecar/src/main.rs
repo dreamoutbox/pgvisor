@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
     info!(?data_dir, port, %superuser, "pgvisor-sidecar supervisor starting up");
 
     let supervisor = PostgresSupervisor::new(&data_dir);
-    supervisor.ensure_initdb(&superuser).await?;
+    supervisor.ensure_initialized(&superuser, primary_conninfo.as_deref()).await?;
 
     let config = PostgresConfig {
         port,

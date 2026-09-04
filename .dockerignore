@@ -1,0 +1,14 @@
+target/
+.git/
+.gitignore
+.wayfinder/
+.agent/
+.agents/
+.gemini/
+*.log
+*.md
+docker-compose*.yml
+reset-docker-compose.sh
+test-cluster-crud.sh
+scripts/
+.system_generated/
