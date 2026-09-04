@@ -45,6 +45,49 @@ async fn main() -> Result<()> {
     pool.update_topology(leader_addr.clone(), standby_addrs.clone())
         .await;
 
+    let leader_ref = Arc::new(RwLock::new(leader_addr.clone()));
+    let standby_ref = Arc::new(RwLock::new(standby_addrs.clone()));
+
+    let control_port = env::var("PGVISOR_CONTROL_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8080);
+
+    // Build cluster targets for dynamic topology monitoring
+    struct NodeTarget {
+        pg_addr: String,
+        control_url: String,
+    }
+
+    let mut all_pg_addrs = Vec::new();
+    if let Some(l) = leader_addr.as_ref() {
+        all_pg_addrs.push(l.clone());
+    }
+    for s in &standby_addrs {
+        all_pg_addrs.push(s.clone());
+    }
+
+    let targets: Vec<NodeTarget> = all_pg_addrs
+        .into_iter()
+        .map(|pg_addr| {
+            let host = pg_addr.split(':').next().unwrap_or(&pg_addr);
+            let control_url = format!("http://{}:{}", host, control_port);
+            NodeTarget {
+                pg_addr,
+                control_url,
+            }
+        })
+        .collect();
+
+    #[derive(serde::Deserialize, Debug)]
+    struct ControlStatus {
+        node_id: u64,
+        role: String,
+        status: String,
+    }
+
+    let mut dash_state_opt: Option<Arc<DashboardState>> = None;
+
     // Spawn embedded dashboard on PGVISOR_DASHBOARD_LISTEN (default 0.0.0.0:8080)
     let dashboard_listen =
         env::var("PGVISOR_DASHBOARD_LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
@@ -74,16 +117,10 @@ async fn main() -> Result<()> {
             match backup_config.build_operator() {
                 Ok(operator) => {
                     let bm = Arc::new(BackupManager::new(&cluster_id, operator));
-                    let leader_ref = Arc::new(RwLock::new(leader_addr.clone()));
-                    let standby_ref = Arc::new(RwLock::new(standby_addrs.clone()));
-                    let control_port = env::var("PGVISOR_CONTROL_PORT")
-                        .ok()
-                        .and_then(|p| p.parse().ok())
-                        .unwrap_or(8080);
                     Arc::new(ProxyBackupService::new(
                         bm,
-                        leader_ref,
-                        standby_ref,
+                        leader_ref.clone(),
+                        standby_ref.clone(),
                         Some(pool.clone()),
                         s3_endpoint,
                         s3_bucket,
@@ -102,14 +139,15 @@ async fn main() -> Result<()> {
         dash_state_inner.backup_service = backup_service;
 
         let dash_state = Arc::new(dash_state_inner);
+        dash_state_opt = Some(dash_state.clone());
 
-        // Populate dashboard node topology from configured addresses
+        // Populate initial dashboard node topology from configured addresses
         {
             let mut overview = dash_state.overview.write().await;
             let mut nodes = Vec::new();
             let mut node_id = 1u64;
 
-            if let Some(ref l_addr) = leader_addr {
+            if let Some(l_addr) = leader_addr.as_ref() {
                 nodes.push(NodeSummary {
                     node_id,
                     address: l_addr.clone(),
@@ -151,6 +189,132 @@ async fn main() -> Result<()> {
             }
         });
     }
+
+    // Background dynamic topology discovery loop
+    let pool_for_monitor = pool.clone();
+    let leader_ref_monitor = leader_ref.clone();
+    let standby_ref_monitor = standby_ref.clone();
+    let dash_state_for_monitor = dash_state_opt.clone();
+
+    tokio::spawn(async move {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(400))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+
+        loop {
+            interval.tick().await;
+
+            let mut discovered_leader: Option<String> = None;
+            let mut discovered_standbys: Vec<String> = Vec::new();
+            let mut node_summaries = Vec::new();
+            let mut healthy_count = 0;
+
+            for target in &targets {
+                let url = format!("{}/control/status", target.control_url.trim_end_matches('/'));
+                match client.get(&url).send().await {
+                    Ok(resp) => {
+                        if let Ok(st) = resp.json::<ControlStatus>().await {
+                            let is_healthy = st.status == "running";
+                            let state = match st.status.as_str() {
+                                "running" => {
+                                    healthy_count += 1;
+                                    NodeHealthState::Healthy
+                                }
+                                "fenced" => NodeHealthState::Fenced,
+                                _ => NodeHealthState::Offline,
+                            };
+
+                            let role = if st.role == "leader" {
+                                if is_healthy {
+                                    discovered_leader = Some(target.pg_addr.clone());
+                                }
+                                NodeRole::Leader
+                            } else {
+                                if is_healthy {
+                                    discovered_standbys.push(target.pg_addr.clone());
+                                }
+                                NodeRole::Standby
+                            };
+
+                            node_summaries.push(NodeSummary {
+                                node_id: st.node_id,
+                                address: target.pg_addr.clone(),
+                                role,
+                                state,
+                                pg_version: "16.3".into(),
+                                replication_lag_bytes: 0,
+                                uptime_secs: 100,
+                                is_local: false,
+                            });
+                        } else {
+                            node_summaries.push(NodeSummary {
+                                node_id: 0,
+                                address: target.pg_addr.clone(),
+                                role: NodeRole::Standby,
+                                state: NodeHealthState::Offline,
+                                pg_version: "16.3".into(),
+                                replication_lag_bytes: 0,
+                                uptime_secs: 0,
+                                is_local: false,
+                            });
+                        }
+                    }
+                    Err(_) => {
+                        node_summaries.push(NodeSummary {
+                            node_id: 0,
+                            address: target.pg_addr.clone(),
+                            role: NodeRole::Standby,
+                            state: NodeHealthState::Offline,
+                            pg_version: "16.3".into(),
+                            replication_lag_bytes: 0,
+                            uptime_secs: 0,
+                            is_local: false,
+                        });
+                    }
+                }
+            }
+
+            // Check if leader changed
+            let current_leader = {
+                let r = leader_ref_monitor.read().await;
+                r.clone()
+            };
+
+            if discovered_leader.is_some() && (discovered_leader != current_leader) {
+                info!(
+                    old_leader = ?current_leader,
+                    new_leader = ?discovered_leader,
+                    standbys = ?discovered_standbys,
+                    "Active leader change detected! Updating connection pool topology"
+                );
+
+                {
+                    let mut l = leader_ref_monitor.write().await;
+                    *l = discovered_leader.clone();
+                }
+                {
+                    let mut s = standby_ref_monitor.write().await;
+                    *s = discovered_standbys.clone();
+                }
+
+                pool_for_monitor
+                    .update_topology(discovered_leader.clone(), discovered_standbys.clone())
+                    .await;
+            }
+
+            // Update dashboard overview
+            if let Some(dash) = dash_state_for_monitor.as_ref() {
+                let mut overview = dash.overview.write().await;
+                overview.total_nodes = targets.len();
+                overview.healthy_nodes = healthy_count;
+                overview.leader_address = discovered_leader;
+                overview.nodes = node_summaries;
+            }
+        }
+    });
 
     let listener = TcpListener::bind(&listen_addr).await?;
     info!(%listen_addr, "Listening for PostgreSQL client connections");

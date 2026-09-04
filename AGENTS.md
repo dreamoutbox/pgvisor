@@ -63,3 +63,4 @@ pgvisor/
   2. Re-sync all standby replicas via `POST /control/resync` (`pg_basebackup`).
   3. Drain proxy connection pool (`pool.drain_all()`) so client connections refresh to the restored timeline.
 - **Sidecar Supervision Boundaries (No Out-of-Band `pg_ctl`)**: When `pgvisor-sidecar` runs as container PID 1, never execute out-of-band `pg_ctl stop`/`pg_ctl start` commands via shell scripts or `docker exec`. External stops corrupt process accounting and supervisor state. Always issue lifecycle and restore commands through the sidecar's internal HTTP control API.
+- **Cluster Reset & Docker Compose Helper (`reset-docker-compose.sh`)**: Running `./reset-docker-compose.sh` wipes volumes and restarts containers with fresh data without rebuilding images. Pass `--build` (`./reset-docker-compose.sh --build`) only when binary or configuration code changes require rebuilding images.

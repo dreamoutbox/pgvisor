@@ -15,4 +15,6 @@ INSERT INTO pgvisor_demo (name, status, counter) VALUES
     ('gamma', 'pending', 30),
     ('delta', 'archived', 40);
 
+DROP TABLE pgvisor_demo;
+
 SELECT id, name, status, counter, created_at FROM pgvisor_demo ORDER BY id;

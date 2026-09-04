@@ -26,18 +26,26 @@
       - restore from T2 backup at T4.
       - check table has 'alpha' and 'beta' in T4.
 
-- [ ] write script to test failover. remove node1 (leader). then expected the cluster to promote node2 or node3 to be leader.
+- [x] write script to test failover (`tests/test-failover.sh`).
+      - verify node1 is primary, node2/node3 are standbys, write baseline data at T0.
+      - stop node1 (leader).
+      - assert cluster promotes node2 or node3 to read-write primary.
+      - assert proxy transparently routes new writes at T1 to the promoted leader.
+      - assert surviving standby replicates from the new leader.
+      - restart node1 and verify split-brain prevention (rejoins as standby).
 
-- [ ] add audit logs view in web dashboard for node up/down. backup/restore perform.
+- [ ] chore: show "Optional Label / Note" in table at "Basebackups & Snapshots" page.
+
+- [ ] add web dashboard auth.
+
+- [ ] add audit logs view in web dashboard for node up/down. backup/restore perform. dangerous SQL (DROP TABLE/TRUNCATE/DELETE) logging when it happens so we can use the time to restore with PITR.
 
 - [ ] add page for manage databaser users and permissions.
 
 ---
 
-- [ ] - **Dynamic Cluster Scaling**: Protocol for adding and removing sidecar nodes dynamically via OpenRaft joint consensus at runtime without node restarts.
-
----
-
 # Backlog:
+
+- [ ] - **Dynamic Cluster Scaling**: Protocol for adding and removing sidecar nodes dynamically via OpenRaft joint consensus at runtime without node restarts.
 
 - [ ] make sidecar worker not access the backup storage directly. (remove `S3_ENDPOINT` `S3_BUCKET` `S3_ACCESS_KEY` `S3_SECRET_KEY`). make proxy generate presigned url for backup/restore.

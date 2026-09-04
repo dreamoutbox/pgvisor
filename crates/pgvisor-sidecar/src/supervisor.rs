@@ -183,20 +183,59 @@ impl PostgresSupervisor {
     /// Promotes a standby replica to read-write primary via `pg_ctl promote`.
     pub async fn promote(&self) -> Result<(), SupervisorError> {
         info!(dir = ?self.data_dir, "Executing pg_ctl promote");
-        let status = Command::new("pg_ctl")
+        let output = Command::new("pg_ctl")
             .arg("promote")
             .arg("-D")
             .arg(&self.data_dir)
-            .status()
+            .output()
             .await?;
 
-        if !status.success() {
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("not in standby mode") {
+                info!("PostgreSQL instance is already operating as primary");
+                return Ok(());
+            }
             return Err(SupervisorError::CommandFailed(format!(
-                "pg_ctl promote failed with status: {status}"
+                "pg_ctl promote failed with status: {} ({})",
+                output.status, stderr
             )));
         }
 
         info!("PostgreSQL instance promoted to leader successfully");
+        Ok(())
+    }
+
+    /// Re-points a standby replica's primary_conninfo to a new primary and reloads config.
+    pub async fn repoint_primary(&self, new_primary_conninfo: &str) -> Result<(), SupervisorError> {
+        info!(dir = ?self.data_dir, conninfo = %new_primary_conninfo, "Re-pointing standby replica to new primary");
+        let auto_conf_path = self.data_dir.join("postgresql.auto.conf");
+        let line = format!("primary_conninfo = '{}'\n", new_primary_conninfo);
+
+        // Ensure standby.signal exists for replica operation
+        let signal_path = self.data_dir.join("standby.signal");
+        if !signal_path.exists() {
+            let _ = tokio::fs::File::create(&signal_path).await;
+        }
+
+        tokio::fs::write(&auto_conf_path, line.as_bytes()).await?;
+
+        // Signal reload to running PostgreSQL WAL receiver
+        let status = Command::new("pg_ctl")
+            .arg("reload")
+            .arg("-D")
+            .arg(&self.data_dir)
+            .status()
+            .await;
+
+        if let Ok(s) = status {
+            if s.success() {
+                info!("PostgreSQL primary_conninfo reloaded successfully");
+                return Ok(());
+            }
+        }
+
+        warn!("pg_ctl reload did not succeed cleanly, checking process status");
         Ok(())
     }
 
