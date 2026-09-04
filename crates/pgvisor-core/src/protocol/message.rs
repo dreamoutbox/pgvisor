@@ -115,6 +115,8 @@ pub enum BackendMessage {
     CommandComplete { tag: String },
     ErrorResponse { message: String },
     NoticeResponse { message: String },
+    RowDescription { columns: Vec<String> },
+    DataRow { values: Vec<Option<String>> },
     Raw { tag: u8, payload: Bytes },
 }
 
@@ -359,6 +361,47 @@ impl BackendMessage {
                     .to_string();
                 Self::NoticeResponse { message: msg_str }
             }
+            b'T' => {
+                let mut buf = payload.clone();
+                let mut columns = Vec::new();
+                if buf.remaining() >= 2 {
+                    let field_count = buf.get_i16() as usize;
+                    for _ in 0..field_count {
+                        if let Some(col_name) = read_null_terminated_bytes(&mut buf) {
+                            columns.push(col_name);
+                            if buf.remaining() >= 18 {
+                                buf.advance(18); // table_oid(4) + attr_num(2) + type_oid(4) + type_size(2) + type_mod(4) + format(2)
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                Self::RowDescription { columns }
+            }
+            b'D' => {
+                let mut buf = payload.clone();
+                let mut values = Vec::new();
+                if buf.remaining() >= 2 {
+                    let col_count = buf.get_i16() as usize;
+                    for _ in 0..col_count {
+                        if buf.remaining() >= 4 {
+                            let len = buf.get_i32();
+                            if len == -1 {
+                                values.push(None);
+                            } else if len >= 0 && buf.remaining() >= len as usize {
+                                let val_bytes = buf.copy_to_bytes(len as usize);
+                                values.push(Some(String::from_utf8_lossy(&val_bytes).to_string()));
+                            } else {
+                                values.push(None);
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                Self::DataRow { values }
+            }
             _ => Self::Raw { tag, payload },
         };
 
@@ -416,6 +459,44 @@ impl BackendMessage {
                 dst.put_i32(12);
                 dst.put_u32(*process_id);
                 dst.put_u32(*secret_key);
+            }
+            Self::RowDescription { columns } => {
+                dst.put_u8(b'T');
+                let mut body = BytesMut::new();
+                body.put_i16(columns.len() as i16);
+                for col in columns {
+                    body.put_slice(col.as_bytes());
+                    body.put_u8(0);
+                    // 18 bytes of column metadata
+                    body.put_i32(0); // table OID
+                    body.put_i16(0); // column attr num
+                    body.put_i32(25); // type OID (text)
+                    body.put_i16(-1); // type size
+                    body.put_i32(-1); // type mod
+                    body.put_i16(0); // format code
+                }
+                let len = (4 + body.len()) as i32;
+                dst.put_i32(len);
+                dst.put_slice(&body);
+            }
+            Self::DataRow { values } => {
+                dst.put_u8(b'D');
+                let mut body = BytesMut::new();
+                body.put_i16(values.len() as i16);
+                for val in values {
+                    match val {
+                        Some(s) => {
+                            body.put_i32(s.len() as i32);
+                            body.put_slice(s.as_bytes());
+                        }
+                        None => {
+                            body.put_i32(-1);
+                        }
+                    }
+                }
+                let len = (4 + body.len()) as i32;
+                dst.put_i32(len);
+                dst.put_slice(&body);
             }
             Self::Raw { tag, payload } => {
                 dst.put_u8(*tag);
@@ -545,5 +626,25 @@ mod tests {
         } else {
             panic!("expected NoticeResponse message");
         }
+    }
+
+    #[test]
+    fn test_row_description_and_data_row_encode_decode() {
+        let desc = BackendMessage::RowDescription {
+            columns: vec!["id".into(), "name".into()],
+        };
+        let mut buf = BytesMut::new();
+        desc.encode(&mut buf);
+
+        let decoded_desc = BackendMessage::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(decoded_desc, desc);
+
+        let row = BackendMessage::DataRow {
+            values: vec![Some("1".into()), Some("alpha".into())],
+        };
+        row.encode(&mut buf);
+
+        let decoded_row = BackendMessage::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(decoded_row, row);
     }
 }

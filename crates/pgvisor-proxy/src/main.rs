@@ -1,3 +1,4 @@
+pub mod executor;
 pub mod pool;
 pub mod session;
 
@@ -6,6 +7,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Result;
+use executor::ProxySqlExecutor;
 use pgvisor_dashboard::create_router;
 use pgvisor_dashboard::handlers::DashboardState;
 use pgvisor_dashboard::models::{NodeHealthState, NodeRole, NodeSummary};
@@ -46,7 +48,9 @@ async fn main() -> Result<()> {
         let cluster_id =
             env::var("PGVISOR_CLUSTER_ID").unwrap_or_else(|_| "pgvisor-cluster".to_string());
         let admin_token = env::var("PGVISOR_ADMIN_TOKEN").ok();
-        let dash_state = Arc::new(DashboardState::new(&cluster_id, admin_token));
+        let mut dash_state_inner = DashboardState::new(&cluster_id, admin_token);
+        dash_state_inner.sql_executor = Arc::new(ProxySqlExecutor::new(pool.clone()));
+        let dash_state = Arc::new(dash_state_inner);
 
         // Populate dashboard node topology from configured addresses
         {

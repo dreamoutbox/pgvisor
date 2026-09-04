@@ -39,7 +39,6 @@ A comprehensive, vetted architecture and specification document (`ARCHITECTURE.m
 
 ## Not yet specified
 
-- **Dynamic Cluster Scaling**: Protocol for adding and removing sidecar nodes dynamically via OpenRaft joint consensus at runtime without node restarts.
 - **Cross-Region Replication**: Topology and lag-handling for read-only standbys across distinct geographic regions.
 - **Cluster Observability & Metrics**: Prometheus exporter schema for OpenRaft consensus latency and PostgreSQL replication lag.
 - **Backup Encryption & Compression**: Client-side Zstd compression and ChaCha20-Poly1305 encryption before writing WAL and basebackup chunks to OpenDAL.

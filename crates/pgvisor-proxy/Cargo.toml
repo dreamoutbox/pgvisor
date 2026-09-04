@@ -18,3 +18,4 @@ bytes = { workspace = true }
 tokio-util = { workspace = true }
 pgvisor-dashboard = { path = "../pgvisor-dashboard" }
 axum = { workspace = true }
+async-trait = { workspace = true }

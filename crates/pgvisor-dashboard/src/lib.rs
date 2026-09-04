@@ -8,7 +8,8 @@ use axum::routing::{get, post};
 use axum::Router;
 
 use crate::handlers::{
-    api_execute_sql, api_status, get_nodes, get_overview, get_sql_console, DashboardState,
+    api_execute_sql, api_list_tables, api_status, api_table_data, api_table_schema, get_nodes,
+    get_overview, get_sql_console, get_tables_page, DashboardState,
 };
 
 /// Creates the Axum router for the PgVisor dashboard.
@@ -16,9 +17,13 @@ pub fn create_router(state: Arc<DashboardState>) -> Router {
     Router::new()
         .route("/", get(get_overview))
         .route("/nodes", get(get_nodes))
+        .route("/tables", get(get_tables_page))
         .route("/sql", get(get_sql_console))
         .route("/api/status", get(api_status))
         .route("/api/sql", post(api_execute_sql))
+        .route("/api/tables", get(api_list_tables))
+        .route("/api/tables/:table/schema", get(api_table_schema))
+        .route("/api/tables/:table/data", get(api_table_data))
         .with_state(state)
 }
 
@@ -68,7 +73,7 @@ mod tests {
         let response = app.clone().oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        // 5. Test POST /api/sql with forbidden DROP TABLE
+        // 5. Test POST /api/sql with DROP TABLE when mutations are allowed
         let req = Request::builder()
             .method("POST")
             .uri("/api/sql")
@@ -76,6 +81,54 @@ mod tests {
             .body(Body::from(r#"{"query": "DROP TABLE users;"}"#))
             .unwrap();
         let response = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 5b. Test POST /api/sql with read-only guard rejecting DROP TABLE
+        let mut ro_state_inner = DashboardState::new("test-cluster", None);
+        ro_state_inner.security_guard = Arc::new(crate::security::SqlSecurityGuard::new_read_only(
+            std::time::Duration::from_secs(5),
+            100,
+        ));
+        let ro_app = create_router(Arc::new(ro_state_inner));
+        let req_ro = Request::builder()
+            .method("POST")
+            .uri("/api/sql")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"query": "DROP TABLE users;"}"#))
+            .unwrap();
+        let response_ro = ro_app.oneshot(req_ro).await.unwrap();
+        assert_eq!(response_ro.status(), StatusCode::FORBIDDEN);
+
+        // 6. Test GET /tables
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri("/tables").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 7. Test GET /api/tables
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri("/api/tables").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 8. Test GET /api/tables/pgvisor_demo/schema
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri("/api/tables/pgvisor_demo/schema").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 9. Test GET /api/tables/pgvisor_demo/data
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri("/api/tables/pgvisor_demo/data").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

@@ -71,3 +71,33 @@ pub struct SqlQueryError {
     pub code: String,
     pub message: String,
 }
+
+/// Summary information for a database table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableSummary {
+    pub name: String,
+    pub schema: String,
+    pub estimated_rows: u64,
+    pub size_pretty: String,
+}
+
+/// Metadata description of a table column.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColumnInfo {
+    pub name: String,
+    pub data_type: String,
+    pub is_nullable: bool,
+    pub default_value: Option<String>,
+    pub is_primary_key: bool,
+}
+
+/// Paginated table data response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableDataResponse {
+    pub table_name: String,
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<Option<String>>>,
+    pub total_rows: u64,
+    pub limit: usize,
+    pub offset: usize,
+}

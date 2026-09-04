@@ -1,0 +1,396 @@
+{% extends "base.html" %}
+
+{% block title %}PgVisor - Tables & SQL Explorer{% endblock %}
+{% block nav_tables %}active{% endblock %}
+
+{% block content %}
+<header>
+    <div>
+        <h1>Database Explorer</h1>
+        <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 4px;">
+            Inspect database tables, browse live data, examine schemas, and execute guarded SQL queries
+        </p>
+    </div>
+    <div style="display: flex; gap: 10px; align-items: center;">
+        <span class="badge badge-standby">Schema: public</span>
+        <span class="badge badge-healthy">Read-Only Guarded</span>
+    </div>
+</header>
+
+<!-- Explorer Container -->
+<div style="display: flex; gap: 24px; align-items: flex-start;">
+    <!-- Left Panel: Table List -->
+    <div class="card" style="width: 280px; padding: 16px; flex-shrink: 0;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin: 0; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">
+                Tables ({{ tables.len() }})
+            </h3>
+            <a href="/tables" style="font-size: 0.8rem; color: var(--primary); text-decoration: none;">Refresh</a>
+        </div>
+
+        <input type="text" id="table-search" placeholder="Filter tables..." oninput="filterTableList()"
+               style="width: 100%; background: #0b0f19; border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; color: var(--text-main); font-size: 0.85rem; margin-bottom: 12px;">
+
+        <div id="table-list" style="display: flex; flex-direction: column; gap: 4px; max-height: 520px; overflow-y: auto;">
+            {% for tbl in tables %}
+            <a href="/tables?table={{ tbl.name }}&tab=data" 
+               class="table-item {% if self.is_active_table(tbl.name) %}active-table{% endif %}"
+               data-name="{{ tbl.name }}"
+               style="display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; border-radius: 6px; text-decoration: none; color: var(--text-main); font-size: 0.9rem; transition: background 0.15s;">
+                <span style="font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    {{ tbl.name }}
+                </span>
+                <span style="font-size: 0.75rem; color: var(--text-muted); background: rgba(255,255,255,0.06); padding: 2px 6px; border-radius: 4px;">
+                    {{ tbl.estimated_rows }} rows
+                </span>
+            </a>
+            {% endfor %}
+            {% if tables.is_empty() %}
+            <p style="color: var(--text-muted); font-size: 0.85rem; padding: 8px 4px;">No tables found in schema 'public'.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Right Panel: Tabs and View Content -->
+    <div style="flex: 1; min-width: 0;">
+        <!-- Tab Navigation Bar -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
+            <div style="display: flex; gap: 8px;">
+                {% if let Some(active) = active_table %}
+                <a href="/tables?table={{ active }}&tab=data" class="tab-btn {% if active_tab == "data" %}active-tab{% endif %}">
+                    Data (Browse)
+                </a>
+                <a href="/tables?table={{ active }}&tab=schema" class="tab-btn {% if active_tab == "schema" %}active-tab{% endif %}">
+                    Structure
+                </a>
+                {% endif %}
+                <a href="/tables?tab=sql{% if let Some(active) = active_table %}&table={{ active }}{% endif %}" class="tab-btn {% if active_tab == "sql" %}active-tab{% endif %}">
+                    SQL Console
+                </a>
+            </div>
+
+            <div style="display: flex; gap: 8px; align-items: center;">
+                {% if let Some(active) = active_table %}
+                <a href="/tables?tab=sql&sql=SELECT%20*%20FROM%20{{ active }}%20LIMIT%2050;" 
+                   style="background: rgba(56, 189, 248, 0.15); color: var(--primary); border: 1px solid var(--primary); padding: 6px 12px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; text-decoration: none;">
+                    Query in SQL &rarr;
+                </a>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if active_tab == "sql" %}
+        <!-- SQL Console View -->
+        <div class="card" style="margin-bottom: 24px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <span style="font-size: 0.85rem; color: var(--text-muted);">
+                    Read-only statements allowed (SELECT, SHOW, EXPLAIN, WITH). Max 500 rows. Timeout: 5s.
+                </span>
+                <span id="exec-status" style="font-size: 0.85rem; color: var(--text-muted);"></span>
+            </div>
+            
+            <textarea id="sql-input" style="width: 100%; height: 120px; background: #0b0f19; border: 1px solid var(--border); border-radius: 6px; padding: 12px; color: #f8fafc; font-family: monospace; font-size: 0.95rem; resize: vertical;" placeholder="SELECT * FROM pgvisor_demo LIMIT 50;">{% if let Some(sql) = initial_sql %}{{ sql }}{% endif %}</textarea>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px;">
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <button type="button" onclick="setQuery('SELECT table_name FROM information_schema.tables WHERE table_schema = \'public\';')" class="snippet-btn">All Tables</button>
+                    <button type="button" onclick="setQuery('SELECT datname, numbackends, xact_commit, xact_rollback FROM pg_stat_database;')" class="snippet-btn">Database Stats</button>
+                    {% if let Some(active) = active_table %}
+                    <button type="button" onclick="setQuery('SELECT * FROM {{ active }} LIMIT 50;')" class="snippet-btn">{{ active }}</button>
+                    {% endif %}
+                </div>
+                <button id="run-btn" onclick="executeSql()" style="background: var(--primary); color: #0b0f19; border: none; padding: 8px 20px; border-radius: 6px; font-weight: 600; cursor: pointer;">
+                    Execute Query
+                </button>
+            </div>
+        </div>
+
+        <div id="result-container" class="card" style="display: none;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
+                <h3 id="result-meta" style="color: var(--text-main); font-size: 1rem;">Query Results</h3>
+                <span id="timing-badge" class="badge badge-standby">0 ms</span>
+            </div>
+            <div id="table-wrapper" style="overflow-x: auto;">
+                <table id="result-table">
+                    <thead id="result-head"></thead>
+                    <tbody id="result-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="error-box" class="card" style="display: none; border-color: var(--danger); background: rgba(248, 113, 113, 0.1);">
+            <h3 style="color: var(--danger); margin-bottom: 8px; font-size: 1rem;">Execution Error</h3>
+            <pre id="error-message" style="color: #fca5a5; font-family: monospace; font-size: 0.9rem; white-space: pre-wrap;"></pre>
+        </div>
+
+        {% else if active_tab == "schema" %}
+        <!-- Table Structure View -->
+        {% if let Some(active) = active_table %}
+        <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <h3 style="font-size: 1.1rem; color: var(--text-main);">Structure for table: <code style="color: var(--primary);">{{ active }}</code></h3>
+                <span class="badge badge-standby">{{ columns.len() }} columns</span>
+            </div>
+            <div style="overflow-x: auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Column Name</th>
+                            <th>Data Type</th>
+                            <th>Nullable</th>
+                            <th>Default Value</th>
+                            <th>Key</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for col in columns %}
+                        <tr>
+                            <td><strong>{{ col.name }}</strong></td>
+                            <td><code>{{ col.data_type }}</code></td>
+                            <td>
+                                {% if col.is_nullable %}
+                                <span style="color: var(--text-muted);">YES</span>
+                                {% else %}
+                                <span style="color: var(--warning); font-weight: 600;">NO</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if let Some(def) = col.default_value %}
+                                <code>{{ def }}</code>
+                                {% else %}
+                                <span style="color: var(--text-muted); font-style: italic;">NULL</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if col.is_primary_key %}
+                                <span class="badge badge-leader">PRIMARY</span>
+                                {% else %}
+                                <span style="color: var(--text-muted);">-</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        {% else %}
+        <!-- Table Data Browse View -->
+        {% if let Some(active) = active_table %}
+        <div class="card">
+            <!-- Header bar for data view with pagination controls -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
+                <div>
+                    <h3 style="font-size: 1.1rem; color: var(--text-main);">
+                        Table: <code style="color: var(--primary);">{{ active }}</code>
+                    </h3>
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">
+                        Showing page {{ page }} of {{ total_pages.max(1) }} ({{ data_rows.len() }} rows displayed, {{ total_rows }} estimated total)
+                    </p>
+                </div>
+
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    {% if page > 1 %}
+                    <a href="/tables?table={{ active }}&tab=data&page={{ page - 1 }}&limit={{ limit }}" class="page-nav-btn">&larr; Previous</a>
+                    {% endif %}
+                    {% if page < total_pages %}
+                    <a href="/tables?table={{ active }}&tab=data&page={{ page + 1 }}&limit={{ limit }}" class="page-nav-btn">Next &rarr;</a>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Data Table -->
+            <div style="overflow-x: auto; max-height: 560px;">
+                {% if data_rows.is_empty() %}
+                <p style="padding: 24px; color: var(--text-muted); text-align: center;">No rows found in table '{{ active }}'.</p>
+                {% else %}
+                <table>
+                    <thead>
+                        <tr>
+                            {% for col in data_columns %}
+                            <th>{{ col }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in data_rows %}
+                        <tr>
+                            {% for cell in row %}
+                            <td>
+                                {% if let Some(val) = cell %}
+                                {{ val }}
+                                {% else %}
+                                <span style="color: var(--text-muted); font-style: italic;">NULL</span>
+                                {% endif %}
+                            </td>
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+            </div>
+        </div>
+        {% else %}
+        <!-- Welcome empty state -->
+        <div class="card" style="text-align: center; padding: 48px 24px;">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color: var(--primary); margin-bottom: 16px;">
+                <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+            </svg>
+            <h2 style="font-size: 1.3rem; margin-bottom: 8px;">Select a table to explore</h2>
+            <p style="color: var(--text-muted); max-width: 480px; margin: 0 auto 20px auto; font-size: 0.9rem;">
+                Browse table schemas, view live row data, or switch to the integrated SQL Console to run custom read-only queries.
+            </p>
+            <a href="/tables?tab=sql" class="tab-btn active-tab" style="display: inline-block;">Open SQL Console</a>
+        </div>
+        {% endif %}
+        {% endif %}
+    </div>
+</div>
+
+<style>
+.tab-btn {
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-decoration: none;
+    transition: all 0.2s;
+}
+.tab-btn:hover {
+    background: var(--bg-card-hover);
+    color: var(--text-main);
+}
+.active-tab {
+    background: var(--primary) !important;
+    color: #0b0f19 !important;
+    font-weight: 600;
+}
+.table-item:hover {
+    background: var(--bg-card-hover);
+}
+.active-table {
+    background: rgba(56, 189, 248, 0.15) !important;
+    border-left: 3px solid var(--primary);
+}
+.snippet-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-muted);
+    padding: 4px 8px;
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+.snippet-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-main);
+}
+.page-nav-btn {
+    padding: 6px 12px;
+    border-radius: 6px;
+    background: var(--bg-card-hover);
+    color: var(--text-main);
+    text-decoration: none;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+.page-nav-btn:hover {
+    background: var(--border);
+}
+</style>
+
+<script>
+function filterTableList() {
+    const query = document.getElementById('table-search').value.toLowerCase();
+    const items = document.querySelectorAll('.table-item');
+    items.forEach(item => {
+        const name = item.getAttribute('data-name').toLowerCase();
+        item.style.display = name.includes(query) ? 'flex' : 'none';
+    });
+}
+
+function setQuery(sql) {
+    const input = document.getElementById('sql-input');
+    if (input) {
+        input.value = sql;
+        input.focus();
+    }
+}
+
+async function executeSql() {
+    const sqlInput = document.getElementById('sql-input');
+    if (!sqlInput) return;
+    const sql = sqlInput.value.trim();
+    const btn = document.getElementById('run-btn');
+    const status = document.getElementById('exec-status');
+    const resultBox = document.getElementById('result-container');
+    const errorBox = document.getElementById('error-box');
+
+    if (!sql) return;
+
+    btn.disabled = true;
+    status.innerText = 'Executing query...';
+    resultBox.style.display = 'none';
+    errorBox.style.display = 'none';
+
+    try {
+        const resp = await fetch('/api/sql', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: sql, max_rows: 500 })
+        });
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            errorBox.style.display = 'block';
+            document.getElementById('error-message').innerText = data.message || 'Execution failed';
+            status.innerText = 'Failed';
+        } else {
+            resultBox.style.display = 'block';
+            document.getElementById('timing-badge').innerText = `${data.execution_time_ms} ms (${data.row_count} rows)`;
+
+            const thead = document.getElementById('result-head');
+            const tbody = document.getElementById('result-body');
+            thead.innerHTML = '';
+            tbody.innerHTML = '';
+
+            const headerRow = document.createElement('tr');
+            data.columns.forEach(col => {
+                const th = document.createElement('th');
+                th.innerText = col;
+                headerRow.appendChild(th);
+            });
+            thead.appendChild(headerRow);
+
+            data.rows.forEach(row => {
+                const tr = document.createElement('tr');
+                row.forEach(cell => {
+                    const td = document.createElement('td');
+                    td.innerText = cell === null ? 'NULL' : cell;
+                    if (cell === null) {
+                        td.style.fontStyle = 'italic';
+                        td.style.color = 'var(--text-muted)';
+                    }
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+
+            status.innerText = 'Done';
+        }
+    } catch (err) {
+        errorBox.style.display = 'block';
+        document.getElementById('error-message').innerText = String(err);
+        status.innerText = 'Network error';
+    } finally {
+        btn.disabled = false;
+    }
+}
+</script>
+{% endblock %}

@@ -19,17 +19,19 @@ pub enum SecurityError {
     Unauthorized,
 }
 
-/// Validates SQL queries before execution to enforce read-only safety.
+/// Validates SQL queries before execution.
 pub struct SqlSecurityGuard {
     pub max_execution_timeout: Duration,
     pub max_result_rows: usize,
+    pub allow_mutations: bool,
 }
 
 impl Default for SqlSecurityGuard {
     fn default() -> Self {
         Self {
-            max_execution_timeout: Duration::from_secs(5),
+            max_execution_timeout: Duration::from_secs(10),
             max_result_rows: 500,
+            allow_mutations: true,
         }
     }
 }
@@ -39,7 +41,32 @@ impl SqlSecurityGuard {
         Self {
             max_execution_timeout: timeout,
             max_result_rows: max_rows,
+            allow_mutations: true,
         }
+    }
+
+    pub fn new_read_only(timeout: Duration, max_rows: usize) -> Self {
+        Self {
+            max_execution_timeout: timeout,
+            max_result_rows: max_rows,
+            allow_mutations: false,
+        }
+    }
+
+    /// Validates SQL query according to security settings.
+    pub fn validate_sql(&self, raw_sql: &str) -> Result<String, SecurityError> {
+        let cleaned = Self::strip_comments(raw_sql);
+        let trimmed = cleaned.trim();
+
+        if trimmed.is_empty() {
+            return Err(SecurityError::EmptyQuery);
+        }
+
+        if !self.allow_mutations {
+            return self.validate_read_only(raw_sql);
+        }
+
+        Ok(trimmed.to_string())
     }
 
     /// Strips comments (`--` single line and `/* ... */` block comments) from SQL.
@@ -98,10 +125,7 @@ impl SqlSecurityGuard {
         }
 
         let upper = without_trailing_semicolon.to_uppercase();
-        let first_word = upper
-            .split_whitespace()
-            .next()
-            .unwrap_or_default();
+        let first_word = upper.split_whitespace().next().unwrap_or_default();
 
         // Strictly allow only read-only statements
         let allowed_prefixes = ["SELECT", "SHOW", "EXPLAIN", "WITH"];
@@ -114,8 +138,20 @@ impl SqlSecurityGuard {
 
         // Extra guard: check forbidden mutation keywords across statement
         let forbidden_keywords = [
-            "INSERT ", "UPDATE ", "DELETE ", "DROP ", "ALTER ", "CREATE ", "TRUNCATE ",
-            "GRANT ", "REVOKE ", "VACUUM ", "CALL ", "DO ", "COPY ", "INTO ",
+            "INSERT ",
+            "UPDATE ",
+            "DELETE ",
+            "DROP ",
+            "ALTER ",
+            "CREATE ",
+            "TRUNCATE ",
+            "GRANT ",
+            "REVOKE ",
+            "VACUUM ",
+            "CALL ",
+            "DO ",
+            "COPY ",
+            "INTO ",
         ];
 
         for kw in &forbidden_keywords {
@@ -138,7 +174,10 @@ impl SqlSecurityGuard {
     }
 
     /// Verifies admin authentication token.
-    pub fn verify_admin_token(auth_header: Option<&str>, expected_token: &str) -> Result<(), SecurityError> {
+    pub fn verify_admin_token(
+        auth_header: Option<&str>,
+        expected_token: &str,
+    ) -> Result<(), SecurityError> {
         match auth_header {
             Some(header) => {
                 let token = if header.starts_with("Bearer ") {
@@ -167,10 +206,18 @@ mod tests {
 
         assert!(guard.validate_read_only("SELECT 1;").is_ok());
         assert!(guard.validate_read_only("SHOW max_connections;").is_ok());
-        assert!(guard.validate_read_only("EXPLAIN ANALYZE SELECT * FROM pg_stat_activity").is_ok());
-        assert!(guard.validate_read_only("-- comment\nSELECT id, name FROM users").is_ok());
-        assert!(guard.validate_read_only("/* block comment */ SELECT version()").is_ok());
-        assert!(guard.validate_read_only("WITH cte AS (SELECT 1 AS val) SELECT * FROM cte").is_ok());
+        assert!(guard
+            .validate_read_only("EXPLAIN ANALYZE SELECT * FROM pg_stat_activity")
+            .is_ok());
+        assert!(guard
+            .validate_read_only("-- comment\nSELECT id, name FROM users")
+            .is_ok());
+        assert!(guard
+            .validate_read_only("/* block comment */ SELECT version()")
+            .is_ok());
+        assert!(guard
+            .validate_read_only("WITH cte AS (SELECT 1 AS val) SELECT * FROM cte")
+            .is_ok());
     }
 
     #[test]
@@ -214,10 +261,51 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_sql_with_mutations_and_multi_statements() {
+        let guard = SqlSecurityGuard::default();
+        assert!(guard.allow_mutations);
+
+        // Single CREATE / DROP allowed
+        assert!(guard.validate_sql("CREATE TABLE foo (id int);").is_ok());
+        assert!(guard.validate_sql("DROP TABLE IF EXISTS foo;").is_ok());
+
+        // Multi-statement allowed
+        assert!(guard
+            .validate_sql("DROP TABLE IF EXISTS foo; CREATE TABLE foo (id int);")
+            .is_ok());
+
+        // Empty query rejected
+        assert_eq!(guard.validate_sql("   "), Err(SecurityError::EmptyQuery));
+
+        // Read-only guard rejects mutating and multi-statements
+        let ro_guard = SqlSecurityGuard::new_read_only(Duration::from_secs(5), 100);
+        assert!(!ro_guard.allow_mutations);
+        assert!(matches!(
+            ro_guard.validate_sql("CREATE TABLE foo (id int);"),
+            Err(SecurityError::MutationForbidden(_))
+        ));
+        assert!(matches!(
+            ro_guard.validate_sql("DROP TABLE foo;"),
+            Err(SecurityError::MutationForbidden(_))
+        ));
+        assert!(matches!(
+            ro_guard.validate_sql("SELECT 1; SELECT 2;"),
+            Err(SecurityError::MultiStatementForbidden(_))
+        ));
+        assert!(ro_guard.validate_sql("SELECT 1;").is_ok());
+    }
+
+    #[test]
     fn test_auth_token_verification() {
         let expected = "secret-pgvisor-token";
-        assert!(SqlSecurityGuard::verify_admin_token(Some("Bearer secret-pgvisor-token"), expected).is_ok());
-        assert!(SqlSecurityGuard::verify_admin_token(Some("secret-pgvisor-token"), expected).is_ok());
+        assert!(SqlSecurityGuard::verify_admin_token(
+            Some("Bearer secret-pgvisor-token"),
+            expected
+        )
+        .is_ok());
+        assert!(
+            SqlSecurityGuard::verify_admin_token(Some("secret-pgvisor-token"), expected).is_ok()
+        );
         assert!(SqlSecurityGuard::verify_admin_token(Some("wrong-token"), expected).is_err());
         assert!(SqlSecurityGuard::verify_admin_token(None, expected).is_err());
     }

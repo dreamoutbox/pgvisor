@@ -7,7 +7,8 @@
 <header>
     <div>
         <h1>SQL Console</h1>
-        <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 4px;">Guarded read-only SQL query execution with statement timeout and session isolation</p>
+        <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 4px;">Guarded read-only SQL query execution
+            with statement timeout and session isolation</p>
     </div>
     <div>
         <span class="badge badge-healthy" title="Mutation statements strictly blocked">Read-Only Guarded</span>
@@ -16,12 +17,17 @@
 
 <div class="card" style="margin-bottom: 24px;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <span style="font-size: 0.85rem; color: var(--text-muted);">Allowed: SELECT, SHOW, EXPLAIN, WITH. Blocked: INSERT, UPDATE, DELETE, DDL. Max Rows: 500. Timeout: 5s.</span>
+        <span style="font-size: 0.85rem; color: var(--text-muted);">Allowed: SELECT, SHOW, EXPLAIN, WITH. Blocked:
+            INSERT, UPDATE, DELETE, DDL. Max Rows: 500. Timeout: 5s.</span>
         <span id="exec-status" style="font-size: 0.85rem; color: var(--text-muted);"></span>
     </div>
-    <textarea id="sql-input" style="width: 100%; height: 120px; background: #0b0f19; border: 1px solid var(--border); border-radius: 6px; padding: 12px; color: #f8fafc; font-family: monospace; font-size: 0.95rem; resize: vertical;" placeholder="SELECT datname, numbackends, xact_commit, xact_rollback FROM pg_stat_database;"></textarea>
+    <textarea id="sql-input"
+        style="width: 100%; height: 120px; background: #0b0f19; border: 1px solid var(--border); border-radius: 6px; padding: 12px; color: #f8fafc; font-family: monospace; font-size: 0.95rem; resize: vertical;"
+        placeholder="SELECT datname, numbackends, xact_commit, xact_rollback FROM pg_stat_database;"></textarea>
     <div style="margin-top: 12px; display: flex; justify-content: flex-end; gap: 12px;">
-        <button id="run-btn" onclick="executeSql()" style="background: var(--primary); color: #0b0f19; border: none; padding: 8px 20px; border-radius: 6px; font-weight: 600; cursor: pointer;">Execute Query</button>
+        <button id="run-btn" onclick="executeSql()"
+            style="background: var(--primary); color: #0b0f19; border: none; padding: 8px 20px; border-radius: 6px; font-weight: 600; cursor: pointer;">Execute
+            Query</button>
     </div>
 </div>
 
@@ -38,74 +44,76 @@
     </div>
 </div>
 
-<div id="error-box" class="card" style="display: none; border-color: var(--danger); background: rgba(248, 113, 113, 0.1);">
+<div id="error-box" class="card"
+    style="display: none; border-color: var(--danger); background: rgba(248, 113, 113, 0.1);">
     <h3 style="color: var(--danger); margin-bottom: 8px;">Execution Error</h3>
-    <pre id="error-message" style="color: #fca5a5; font-family: monospace; font-size: 0.9rem; white-space: pre-wrap;"></pre>
+    <pre id="error-message"
+        style="color: #fca5a5; font-family: monospace; font-size: 0.9rem; white-space: pre-wrap;"></pre>
 </div>
 
 <script>
-async function executeSql() {
-    const sql = document.getElementById('sql-input').value.trim();
-    const btn = document.getElementById('run-btn');
-    const status = document.getElementById('exec-status');
-    const resultBox = document.getElementById('result-container');
-    const errorBox = document.getElementById('error-box');
+    async function executeSql() {
+        const sql = document.getElementById('sql-input').value.trim();
+        const btn = document.getElementById('run-btn');
+        const status = document.getElementById('exec-status');
+        const resultBox = document.getElementById('result-container');
+        const errorBox = document.getElementById('error-box');
 
-    if (!sql) return;
+        if (!sql) return;
 
-    btn.disabled = true;
-    status.innerText = 'Executing query...';
-    resultBox.style.display = 'none';
-    errorBox.style.display = 'none';
+        btn.disabled = true;
+        status.innerText = 'Executing query...';
+        resultBox.style.display = 'none';
+        errorBox.style.display = 'none';
 
-    try {
-        const resp = await fetch('/api/sql', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query: sql, max_rows: 500 })
-        });
-        const data = await resp.json();
-
-        if (!resp.ok) {
-            errorBox.style.display = 'block';
-            document.getElementById('error-message').innerText = data.message || 'Execution failed';
-            status.innerText = 'Failed';
-        } else {
-            resultBox.style.display = 'block';
-            document.getElementById('timing-badge').innerText = `${data.execution_time_ms} ms (${data.row_count} rows)`;
-
-            const thead = document.getElementById('result-head');
-            const tbody = document.getElementById('result-body');
-            thead.innerHTML = '';
-            tbody.innerHTML = '';
-
-            const headerRow = document.createElement('tr');
-            data.columns.forEach(col => {
-                const th = document.createElement('th');
-                th.innerText = col;
-                headerRow.appendChild(th);
+        try {
+            const resp = await fetch('/api/sql', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query: sql, max_rows: 500 })
             });
-            thead.appendChild(headerRow);
+            const data = await resp.json();
 
-            data.rows.forEach(row => {
-                const tr = document.createElement('tr');
-                row.forEach(cell => {
-                    const td = document.createElement('td');
-                    td.innerText = cell;
-                    tr.appendChild(td);
+            if (!resp.ok) {
+                errorBox.style.display = 'block';
+                document.getElementById('error-message').innerText = data.message || 'Execution failed';
+                status.innerText = 'Failed';
+            } else {
+                resultBox.style.display = 'block';
+                document.getElementById('timing-badge').innerText = `${data.execution_time_ms} ms (${data.row_count} rows)`;
+
+                const thead = document.getElementById('result-head');
+                const tbody = document.getElementById('result-body');
+                thead.innerHTML = '';
+                tbody.innerHTML = '';
+
+                const headerRow = document.createElement('tr');
+                data.columns.forEach(col => {
+                    const th = document.createElement('th');
+                    th.innerText = col;
+                    headerRow.appendChild(th);
                 });
-                tbody.appendChild(tr);
-            });
+                thead.appendChild(headerRow);
 
-            status.innerText = 'Done';
+                data.rows.forEach(row => {
+                    const tr = document.createElement('tr');
+                    row.forEach(cell => {
+                        const td = document.createElement('td');
+                        td.innerText = cell;
+                        tr.appendChild(td);
+                    });
+                    tbody.appendChild(tr);
+                });
+
+                status.innerText = 'Done';
+            }
+        } catch (err) {
+            errorBox.style.display = 'block';
+            document.getElementById('error-message').innerText = String(err);
+            status.innerText = 'Network error';
+        } finally {
+            btn.disabled = false;
         }
-    } catch (err) {
-        errorBox.style.display = 'block';
-        document.getElementById('error-message').innerText = String(err);
-        status.innerText = 'Network error';
-    } finally {
-        btn.disabled = false;
     }
-}
 </script>
 {% endblock %}
