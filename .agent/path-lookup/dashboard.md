@@ -9,3 +9,5 @@
 - `crates/pgvisor-dashboard/src/main.rs` = Standalone HTTP server binary
 - `crates/pgvisor-proxy/src/executor.rs` = `ProxySqlExecutor` running dashboard queries against live Postgres cluster connections
 - `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService` orchestrating OpenDAL backups and restores for the proxy dashboard
+- `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService` orchestrating manual leader switchover and standby repointing for the proxy dashboard
+

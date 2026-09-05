@@ -13,9 +13,9 @@ use std::sync::Arc;
 
 use crate::handlers::{
     api_create_backup, api_delete_backup, api_download_backup, api_execute_sql, api_list_backups,
-    api_list_tables, api_nodes, api_restore_backup, api_status, api_table_data, api_table_schema,
-    get_backups_page, get_login_page, get_logout, get_nodes, get_overview, get_sql_console,
-    get_tables_page, post_login, DashboardState,
+    api_list_tables, api_nodes, api_restore_backup, api_status, api_switchover, api_table_data,
+    api_table_schema, get_backups_page, get_login_page, get_logout, get_nodes, get_overview,
+    get_sql_console, get_tables_page, post_login, DashboardState,
 };
 use crate::security::SqlSecurityGuard;
 
@@ -87,6 +87,7 @@ pub fn create_router(state: Arc<DashboardState>) -> Router {
             post(api_restore_backup),
         )
         .route("/api/backups/:snapshot_id", delete(api_delete_backup))
+        .route("/api/cluster/switchover", post(api_switchover))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -458,4 +459,41 @@ mod tests {
             .unwrap();
         assert!(set_cookie.contains("Max-Age=0"));
     }
+
+    #[tokio::test]
+    async fn test_dashboard_switchover_route() {
+        let state = Arc::new(DashboardState::new("test-cluster", None));
+        let app = create_router(state);
+
+        // 1. Switchover to healthy standby (Node #2)
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/cluster/switchover")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"target_node_id": 2}"#))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 2. Switchover to current leader (Node #2 is now leader) -> 400 Bad Request
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/cluster/switchover")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"target_node_id": 2}"#))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // 3. Switchover to non-existent node -> 404 Not Found
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/cluster/switchover")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"target_node_id": 99}"#))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 }
+

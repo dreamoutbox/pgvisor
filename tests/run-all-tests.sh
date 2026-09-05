@@ -61,6 +61,7 @@ TEST_SCRIPTS=(
     "test-auto-rejoin.sh"
     "test-rejoin-fenced.sh"
     "test-add-node.sh"
+    "test-switchover.sh"
 )
 
 TOTAL_TESTS="${#TEST_SCRIPTS[@]}"

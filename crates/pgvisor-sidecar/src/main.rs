@@ -126,6 +126,32 @@ async fn handle_fence(
     })))
 }
 
+async fn handle_demote(
+    State(state): State<SidecarState>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    info!(node_id = state.node_id, "Handling demotion request");
+    state.supervisor.stop().await.map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Demotion failed: {}", e)
+            })),
+        )
+    })?;
+
+    {
+        let mut r = state.role.write().await;
+        *r = "fenced".to_string();
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "message": format!("Node {} successfully demoted and stopped cleanly", state.node_id),
+        "node_id": state.node_id,
+        "role": "fenced"
+    })))
+}
+
 async fn handle_repoint(
     State(state): State<SidecarState>,
     Json(payload): Json<RepointPayload>,
@@ -394,6 +420,7 @@ async fn main() -> Result<()> {
         .route("/control/resync", post(handle_resync))
         .route("/control/promote", post(handle_promote))
         .route("/control/fence", post(handle_fence))
+        .route("/control/demote", post(handle_demote))
         .route("/control/repoint", post(handle_repoint))
         .with_state(control_state.clone());
 

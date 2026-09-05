@@ -4,10 +4,131 @@
 {% block nav_nodes %}active{% endblock %}
 
 {% block content %}
+<style>
+    .btn {
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+        border: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        text-decoration: none;
+    }
+
+    .btn-sm {
+        padding: 4px 10px;
+        font-size: 0.8rem;
+    }
+
+    .btn-primary {
+        background: var(--primary);
+        color: #0f172a;
+    }
+
+    .btn-primary:hover {
+        background: #7dd3fc;
+    }
+
+    .btn-secondary {
+        background: var(--bg-card-hover);
+        color: var(--text-main);
+        border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+        background: #475569;
+    }
+
+    .modal-backdrop {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.7);
+        display: none;
+        justify-content: center;
+        align-items: center;
+        z-index: 1000;
+    }
+
+    .modal {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        width: 100%;
+        max-width: 520px;
+        padding: 24px;
+        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+
+    .modal h2 {
+        font-size: 1.25rem;
+        margin-bottom: 12px;
+    }
+
+    .modal p {
+        color: var(--text-muted);
+        font-size: 0.9rem;
+        margin-bottom: 16px;
+        line-height: 1.5;
+    }
+
+    .modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-top: 24px;
+    }
+
+    .toast {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 12px 20px;
+        border-radius: 8px;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        color: var(--text-main);
+        font-size: 0.9rem;
+        display: none;
+        align-items: center;
+        gap: 10px;
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+        z-index: 2000;
+    }
+
+    .toast-success {
+        border-color: var(--success);
+        color: var(--success);
+    }
+
+    .toast-error {
+        border-color: var(--danger);
+        color: var(--danger);
+    }
+
+    .step-list {
+        background: var(--bg-main);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 12px 16px;
+        font-size: 0.85rem;
+        color: var(--text-muted);
+        margin-bottom: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+</style>
+
 <header>
     <div>
         <h1>Cluster Nodes</h1>
-        <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 4px;">Detailed health, replication lag, and process supervision status</p>
+        <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 4px;">Detailed health, replication lag, process supervision status, and manual failover / switchover controls</p>
     </div>
 </header>
 
@@ -21,6 +142,7 @@
             <th>Supervision Status</th>
             <th>Replication Lag</th>
             <th>Uptime</th>
+            <th>Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -53,8 +175,109 @@
             </td>
             <td>{{ node.replication_lag_bytes }} B</td>
             <td>{{ node.uptime_secs }}s</td>
+            <td>
+                {% match node.role %}
+                    {% when NodeRole::Leader %}
+                        <span class="badge badge-leader" style="font-size: 0.75rem;">Active Primary</span>
+                    {% when NodeRole::Standby %}
+                        {% match node.state %}
+                            {% when NodeHealthState::Healthy %}
+                                <button class="btn btn-sm btn-primary" onclick="openSwitchoverModal('{{ node.node_id }}', '{{ node.address }}')">
+                                    Promote to Leader
+                                </button>
+                            {% else %}
+                                <span style="color: var(--text-muted); font-size: 0.8rem;">Unavailable</span>
+                        {% endmatch %}
+                    {% when NodeRole::Learner %}
+                        <span style="color: var(--text-muted); font-size: 0.8rem;">Learner</span>
+                {% endmatch %}
+            </td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
+
+<!-- Switchover Modal -->
+<div id="switchoverModal" class="modal-backdrop">
+    <div class="modal">
+        <h2>Confirm Manual Leader Switchover</h2>
+        <p>Transfer read-write primary leadership to <strong id="targetNodeLabel" style="color: var(--primary);">Node</strong> (<code id="targetNodeAddr"></code>).</p>
+        
+        <div class="step-list">
+            <div>1. Gracefully demotes current leader (stops new writes, flushes WAL).</div>
+            <div>2. Promotes target standby to read-write primary.</div>
+            <div>3. Re-points remaining standbys to the new leader.</div>
+            <div>4. Drains proxy connection pool and reroutes client connections.</div>
+            <div>5. Demoted node auto-rejoins as a standby replica.</div>
+        </div>
+
+        <div class="modal-actions">
+            <button class="btn btn-secondary" onclick="closeSwitchoverModal()">Cancel</button>
+            <button id="btnSubmitSwitchover" class="btn btn-primary" onclick="submitSwitchover()">Confirm Switchover</button>
+        </div>
+    </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast">
+    <span id="toastMsg"></span>
+</div>
+
+<script>
+    let selectedTargetNodeId = null;
+
+    function showToast(msg, isError = false) {
+        const toast = document.getElementById('toast');
+        const toastMsg = document.getElementById('toastMsg');
+        toastMsg.textContent = msg;
+        toast.className = 'toast ' + (isError ? 'toast-error' : 'toast-success');
+        toast.style.display = 'flex';
+        setTimeout(() => { toast.style.display = 'none'; }, 4000);
+    }
+
+    function openSwitchoverModal(nodeId, nodeAddr) {
+        selectedTargetNodeId = parseInt(nodeId, 10);
+        document.getElementById('targetNodeLabel').textContent = 'Node #' + nodeId;
+        document.getElementById('targetNodeAddr').textContent = nodeAddr;
+        document.getElementById('switchoverModal').style.display = 'flex';
+    }
+
+    function closeSwitchoverModal() {
+        document.getElementById('switchoverModal').style.display = 'none';
+        selectedTargetNodeId = null;
+    }
+
+    async function submitSwitchover() {
+        if (!selectedTargetNodeId) return;
+
+        const btn = document.getElementById('btnSubmitSwitchover');
+        btn.disabled = true;
+        btn.textContent = 'Executing Switchover...';
+
+        try {
+            const resp = await fetch('/api/cluster/switchover', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ target_node_id: selectedTargetNodeId })
+            });
+
+            const data = await resp.json();
+            if (resp.ok) {
+                closeSwitchoverModal();
+                showToast(data.message || 'Switchover successful! Reloading...');
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1500);
+            } else {
+                showToast(data.error || 'Switchover failed', true);
+                btn.disabled = false;
+                btn.textContent = 'Confirm Switchover';
+            }
+        } catch (err) {
+            showToast('Network error during switchover: ' + err.message, true);
+            btn.disabled = false;
+            btn.textContent = 'Confirm Switchover';
+        }
+    }
+</script>
 {% endblock %}

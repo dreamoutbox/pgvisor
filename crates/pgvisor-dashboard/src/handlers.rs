@@ -15,7 +15,8 @@ use tracing::{error, info, warn};
 use crate::models::{
     format_bytes, BackupItemView, BackupOverviewSummary, ClusterOverview, ColumnInfo,
     CreateBackupRequest, NodeHealthState, NodeRole, NodeSummary, RestoreBackupRequest,
-    SqlQueryError, SqlQueryRequest, SqlQueryResult, TableDataResponse, TableSummary,
+    SqlQueryError, SqlQueryRequest, SqlQueryResult, SwitchoverRequest, SwitchoverResponse,
+    TableDataResponse, TableSummary,
 };
 use crate::security::{SecurityError, SqlSecurityGuard};
 use crate::templates::{
@@ -325,6 +326,45 @@ impl BackupService for StandaloneBackupService {
     }
 }
 
+/// Abstraction for managing cluster lifecycle and leader switchover.
+#[async_trait::async_trait]
+pub trait ClusterService: Send + Sync {
+    async fn switchover(&self, target_node_id: u64) -> Result<SwitchoverResponse, String>;
+}
+
+/// In-memory cluster service for standalone testing or dashboard demo.
+pub struct StandaloneClusterService {
+    overview: Arc<RwLock<ClusterOverview>>,
+}
+
+impl StandaloneClusterService {
+    pub fn new(overview: Arc<RwLock<ClusterOverview>>) -> Self {
+        Self { overview }
+    }
+}
+
+#[async_trait::async_trait]
+impl ClusterService for StandaloneClusterService {
+    async fn switchover(&self, target_node_id: u64) -> Result<SwitchoverResponse, String> {
+        let mut ov = self.overview.write().await;
+        let prev = ov.leader_id;
+        for node in &mut ov.nodes {
+            if node.node_id == target_node_id {
+                node.role = NodeRole::Leader;
+            } else if node.role == NodeRole::Leader {
+                node.role = NodeRole::Standby;
+            }
+        }
+        ov.leader_id = Some(target_node_id);
+        Ok(SwitchoverResponse {
+            status: "ok".into(),
+            message: format!("Switched over leader to Node #{}", target_node_id),
+            previous_leader_id: prev,
+            new_leader_id: target_node_id,
+        })
+    }
+}
+
 /// Shared application state for dashboard HTTP handlers.
 #[derive(Clone)]
 pub struct DashboardState {
@@ -332,6 +372,7 @@ pub struct DashboardState {
     pub security_guard: Arc<SqlSecurityGuard>,
     pub sql_executor: Arc<dyn SqlExecutor>,
     pub backup_service: Arc<dyn BackupService>,
+    pub cluster_service: Arc<dyn ClusterService>,
     pub admin_token: Option<String>,
 }
 
@@ -381,11 +422,13 @@ impl DashboardState {
             ],
         };
 
+        let overview_arc = Arc::new(RwLock::new(initial_overview));
         Self {
-            overview: Arc::new(RwLock::new(initial_overview)),
+            overview: overview_arc.clone(),
             security_guard: Arc::new(SqlSecurityGuard::default()),
             sql_executor: Arc::new(StandaloneSqlExecutor),
             backup_service: Arc::new(StandaloneBackupService::new()),
+            cluster_service: Arc::new(StandaloneClusterService::new(overview_arc)),
             admin_token,
         }
     }
@@ -1078,4 +1121,78 @@ pub async fn get_logout() -> Response {
             .insert(axum::http::header::SET_COOKIE, val);
     }
     res
+}
+
+/// POST /api/cluster/switchover -> Initiates manual leader switchover to target node
+pub async fn api_switchover(
+    State(state): State<Arc<DashboardState>>,
+    Json(payload): Json<SwitchoverRequest>,
+) -> Result<Json<SwitchoverResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let target_node_id = payload.target_node_id;
+
+    // Validate target node exists and is a healthy standby
+    {
+        let overview = state.overview.read().await;
+        let target_node = overview.nodes.iter().find(|n| n.node_id == target_node_id);
+
+        match target_node {
+            None => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({
+                        "error": format!("Target node #{} does not exist in cluster", target_node_id)
+                    })),
+                ));
+            }
+            Some(node) => {
+                if node.role == NodeRole::Leader {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": format!("Node #{} is already the active leader", target_node_id)
+                        })),
+                    ));
+                }
+                if node.state != NodeHealthState::Healthy {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": format!("Target node #{} is not healthy (current state: {:?})", target_node_id, node.state)
+                        })),
+                    ));
+                }
+            }
+        }
+    }
+
+    info!(target_node_id, "Initiating cluster leader switchover");
+
+    let resp = state
+        .cluster_service
+        .switchover(target_node_id)
+        .await
+        .map_err(|e| {
+            error!(target_node_id, ?e, "Switchover failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Switchover failed: {}", e)
+                })),
+            )
+        })?;
+
+    // Update in-memory overview
+    {
+        let mut overview = state.overview.write().await;
+        overview.leader_id = Some(resp.new_leader_id);
+        for node in &mut overview.nodes {
+            if node.node_id == resp.new_leader_id {
+                node.role = NodeRole::Leader;
+            } else if Some(node.node_id) == resp.previous_leader_id {
+                node.role = NodeRole::Standby;
+            }
+        }
+    }
+
+    Ok(Json(resp))
 }

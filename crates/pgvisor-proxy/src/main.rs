@@ -1,4 +1,5 @@
 pub mod backup;
+pub mod cluster;
 pub mod executor;
 pub mod pool;
 pub mod session;
@@ -9,6 +10,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use backup::ProxyBackupService;
+use cluster::{NodeTarget, ProxyClusterService};
 use executor::ProxySqlExecutor;
 use pgvisor_core::backup::{BackupManager, BackupScheduleConfig};
 use pgvisor_dashboard::create_router;
@@ -54,14 +56,6 @@ async fn main() -> Result<()> {
         .unwrap_or(8080);
 
     // Build cluster targets for dynamic topology monitoring
-    #[derive(Clone, Debug)]
-    struct NodeTarget {
-        pg_addr: String,
-        control_url: String,
-        is_dynamic: bool,
-        consecutive_failures: usize,
-    }
-
     let mut all_pg_addrs = Vec::new();
     if let Some(l) = leader_addr.as_ref() {
         all_pg_addrs.push(l.clone());
@@ -145,6 +139,14 @@ async fn main() -> Result<()> {
                 }
             };
         dash_state_inner.backup_service = backup_service;
+
+        let cluster_service = Arc::new(ProxyClusterService::new(
+            targets.clone(),
+            leader_ref.clone(),
+            standby_ref.clone(),
+            pool.clone(),
+        ));
+        dash_state_inner.cluster_service = cluster_service;
 
         let dash_state = Arc::new(dash_state_inner);
         dash_state_opt = Some(dash_state.clone());

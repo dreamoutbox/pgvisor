@@ -28,6 +28,7 @@ PROFILES = [
     ("auto-rejoin", "auto-rejoin", 5932, 8580, 9500, 9501),
     ("rejoin-fenced", "rejoin-fenced", 6032, 8680, 9600, 9601),
     ("add-node", "add-node", 6132, 8780, 9700, 9701),
+    ("switchover", "switchover", 6232, 8880, 9800, 9801),
 ]
 
 

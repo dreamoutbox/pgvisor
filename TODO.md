@@ -62,7 +62,15 @@
 
 - [x] make test run concurrent. use custom pre-define ports for each tests.
 
-- [ ] manually switchover new leader. dev can perform switchover in web dashboard.
+- [x] manually switchover new leader. dev can perform switchover in web dashboard.
+
+- [ ] add page for manage databaser users and permissions.
+
+- [ ] add audit logs view in web dashboard for node up/down. 
+      - backup/restore perform. 
+      - dangerous SQL (DROP TABLE/TRUNCATE/DELETE) logging. so when it happens, we can use the time to restore with PITR. 
+      - log worker election vote. and election result.
+      - log worker join, leave event.
 
 - [ ] very bad disaster testing: 3 nodes setup. 2 nodes down.
       - start as 3 nodes 
@@ -76,15 +84,9 @@
       - assert node2 rejoin as standby.
       - assert database cluster is working, data is ok and have leader.
 
-- [ ] add audit logs view in web dashboard for node up/down. 
-      - backup/restore perform. 
-      - dangerous SQL (DROP TABLE/TRUNCATE/DELETE) logging. so when it happens, we can use the time to restore with PITR. 
-      - log worker election vote. and election result.
-      - log worker join, leave event.
-
-- [ ] add page for manage databaser users and permissions.
-
 - [ ] add README.md
+
+- [ ] add github workflow to run tests. build docker image and publish to docker hub. 
 
 - [ ] testing two proxy. 3 nodes. then stop proxy1 and assert still access DB with proxy2.
 
