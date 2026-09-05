@@ -45,6 +45,5 @@ A comprehensive, vetted architecture and specification document (`ARCHITECTURE.m
 
 ## Out of scope
 
-- **Kubernetes Operator**: Custom CRDs and k8s-native controllers; focus is Docker and bare-metal deployments first.
 - **Distributed SQL / Sharding**: Citus-like distributed partitioning; PgVisor targets single-leader active-standby HA.
 - **Active-Active Multi-Master**: Multi-master write conflict resolution; PgVisor strictly enforces a single active read-write leader.

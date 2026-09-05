@@ -17,6 +17,11 @@ set -euo pipefail
 PROXY_HOST="${PGVISOR_HOST:-localhost}"
 PROXY_PORT="${PGVISOR_PORT:-5432}"
 DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://localhost:8080}"
+ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
+AUTH_HEADER=()
+if [ -n "${ADMIN_TOKEN}" ]; then
+    AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
+fi
 NODE_CONTAINER="${PGVISOR_NODE_CONTAINER:-pgvisor-node1}"
 PGDATA_DIR="/var/lib/postgresql/data/pgdata"
 
@@ -65,6 +70,7 @@ restore_cluster_node() {
     echo "  Calling Dashboard restore API for snapshot ${snapshot_id}..."
     local resp
     resp=$(curl -s -f -X POST "${DASHBOARD_URL}/api/backups/${snapshot_id}/restore" \
+        "${AUTH_HEADER[@]}" \
         -H "Content-Type: application/json" \
         -d '{}')
     echo "  Restore API response: ${resp}"
@@ -101,6 +107,7 @@ echo "✓ Table 't_pitr' seeded with row: id=1, val='alpha'"
 echo ""
 echo "[3/8] Taking backup snapshot at T0..."
 RESP_T0=$(curl -s -f -X POST "${DASHBOARD_URL}/api/backups" \
+    "${AUTH_HEADER[@]}" \
     -H "Content-Type: application/json" \
     -d '{"backup_type": "full", "label": "pitr-snap-t0"}')
 
@@ -112,7 +119,7 @@ fi
 echo "✓ Snapshot T0 created: ${SNAP_T0}"
 
 TMP_ARCHIVE_T0="/tmp/${SNAP_T0}.tar.gz"
-curl -s -f "${DASHBOARD_URL}/api/backups/${SNAP_T0}/download" -o "${TMP_ARCHIVE_T0}"
+curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/backups/${SNAP_T0}/download" -o "${TMP_ARCHIVE_T0}"
 SIZE_T0=$(wc -c < "${TMP_ARCHIVE_T0}")
 echo "✓ Downloaded archive T0 (${SIZE_T0} bytes)."
 
@@ -139,6 +146,7 @@ echo ""
 echo "[5/8] Taking backup snapshot at T2..."
 sleep 1
 RESP_T2=$(curl -s -f -X POST "${DASHBOARD_URL}/api/backups" \
+    "${AUTH_HEADER[@]}" \
     -H "Content-Type: application/json" \
     -d '{"backup_type": "incremental", "label": "pitr-snap-t2"}')
 
@@ -150,7 +158,7 @@ fi
 echo "✓ Snapshot T2 created: ${SNAP_T2}"
 
 TMP_ARCHIVE_T2="/tmp/${SNAP_T2}.tar.gz"
-curl -s -f "${DASHBOARD_URL}/api/backups/${SNAP_T2}/download" -o "${TMP_ARCHIVE_T2}"
+curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/backups/${SNAP_T2}/download" -o "${TMP_ARCHIVE_T2}"
 SIZE_T2=$(wc -c < "${TMP_ARCHIVE_T2}")
 echo "✓ Downloaded archive T2 (${SIZE_T2} bytes)."
 
@@ -230,8 +238,8 @@ echo ""
 echo "[8/8] Cleaning up test artifacts..."
 run_sql "DROP TABLE IF EXISTS t_pitr;" > /dev/null 2>&1 || true
 rm -f "${TMP_ARCHIVE_T0}" "${TMP_ARCHIVE_T2}"
-curl -s -X DELETE "${DASHBOARD_URL}/api/backups/${SNAP_T0}" > /dev/null 2>&1 || true
-curl -s -X DELETE "${DASHBOARD_URL}/api/backups/${SNAP_T2}" > /dev/null 2>&1 || true
+curl -s "${AUTH_HEADER[@]}" -X DELETE "${DASHBOARD_URL}/api/backups/${SNAP_T0}" > /dev/null 2>&1 || true
+curl -s "${AUTH_HEADER[@]}" -X DELETE "${DASHBOARD_URL}/api/backups/${SNAP_T2}" > /dev/null 2>&1 || true
 echo "✓ Cleanup complete."
 
 echo ""

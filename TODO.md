@@ -47,6 +47,9 @@
 - [x] add web dashboard auth.
 
 - [ ] test adding new node
+      - start as 3 nodes
+      - add new node4
+      - assert node4 should be follower
 
 - [ ] manually switchover new leader
 
@@ -88,6 +91,6 @@
 
 - [ ] - **Dynamic Cluster Scaling**: Protocol for adding and removing sidecar nodes dynamically via OpenRaft joint consensus at runtime without node restarts.
 
-- [ ] make sidecar worker not access the backup storage directly. (remove `S3_ENDPOINT` `S3_BUCKET` `S3_ACCESS_KEY` `S3_SECRET_KEY`). make proxy generate presigned url for backup/restore.
+- [ ] add Kubernetes Operator & CRDs. - **Kubernetes Operator**: Custom CRDs and k8s-native controllers.
 
-- [ ] add Kubernetes Operator & CRDs
+- [ ] make sidecar worker not access the backup storage directly. (remove `S3_ENDPOINT` `S3_BUCKET` `S3_ACCESS_KEY` `S3_SECRET_KEY`). make proxy generate presigned url for backup/restore.

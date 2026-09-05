@@ -17,6 +17,11 @@ set -euo pipefail
 PROXY_HOST="${PGVISOR_HOST:-localhost}"
 PROXY_PORT="${PGVISOR_PORT:-5432}"
 DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://localhost:8080}"
+ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
+AUTH_HEADER=()
+if [ -n "${ADMIN_TOKEN}" ]; then
+    AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
+fi
 NODE_CONTAINER="${PGVISOR_NODE_CONTAINER:-pgvisor-node1}"
 PGDATA_DIR="/var/lib/postgresql/data/pgdata"
 
@@ -87,6 +92,7 @@ echo "✓ Table 't1' created and seeded with: id=1, val='alpha'"
 echo ""
 echo "[3/7] Triggering full physical basebackup via API (POST ${DASHBOARD_URL}/api/backups)..."
 BACKUP_RESP=$(curl -s -f -X POST "${DASHBOARD_URL}/api/backups" \
+    "${AUTH_HEADER[@]}" \
     -H "Content-Type: application/json" \
     -d '{"backup_type": "full", "label": "test-backup-restore-suite"}')
 
@@ -102,14 +108,14 @@ echo "✓ Basebackup created successfully. Snapshot ID: ${SNAPSHOT_ID}"
 # ------------------------------------------------------------------------------
 echo ""
 echo "[4/7] Verifying snapshot in backup list and downloading archive..."
-BACKUP_LIST=$(curl -s -f "${DASHBOARD_URL}/api/backups")
+BACKUP_LIST=$(curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/backups")
 if ! echo "${BACKUP_LIST}" | grep -q "${SNAPSHOT_ID}"; then
     echo "Snapshot ID ${SNAPSHOT_ID} not found in /api/backups list!"
     exit 1
 fi
 
 TMP_ARCHIVE="/tmp/${SNAPSHOT_ID}.tar.gz"
-curl -s -f "${DASHBOARD_URL}/api/backups/${SNAPSHOT_ID}/download" -o "${TMP_ARCHIVE}"
+curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/backups/${SNAPSHOT_ID}/download" -o "${TMP_ARCHIVE}"
 if [ ! -s "${TMP_ARCHIVE}" ]; then
     echo "Downloaded archive is empty!"
     exit 1
@@ -138,6 +144,7 @@ echo "[6/7] Restoring snapshot ${SNAPSHOT_ID} into cluster node '${NODE_CONTAINE
 
 # Test the dashboard restore API endpoint
 RESTORE_RESP=$(curl -s -f -X POST "${DASHBOARD_URL}/api/backups/${SNAPSHOT_ID}/restore" \
+    "${AUTH_HEADER[@]}" \
     -H "Content-Type: application/json" \
     -d '{}')
 echo "  Dashboard Restore API response: ${RESTORE_RESP}"
@@ -172,7 +179,7 @@ echo ""
 echo "Cleaning up test artifacts..."
 run_sql "DROP TABLE IF EXISTS t1;" > /dev/null 2>&1 || true
 rm -f "${TMP_ARCHIVE}"
-curl -s -X DELETE "${DASHBOARD_URL}/api/backups/${SNAPSHOT_ID}" > /dev/null 2>&1 || true
+curl -s "${AUTH_HEADER[@]}" -X DELETE "${DASHBOARD_URL}/api/backups/${SNAPSHOT_ID}" > /dev/null 2>&1 || true
 echo "✓ Cleanup complete."
 
 echo ""

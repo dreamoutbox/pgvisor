@@ -24,6 +24,11 @@ set -euo pipefail
 PROXY_HOST="${PGVISOR_HOST:-localhost}"
 PROXY_PORT="${PGVISOR_PORT:-5432}"
 TABLE_NAME="t_rejoin_test"
+ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
+AUTH_HEADER=()
+if [ -n "${ADMIN_TOKEN}" ]; then
+    AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
+fi
 
 echo "========================================================="
 echo "  PgVisor Rejoin Node Fenced & Replication Test         "
@@ -201,7 +206,7 @@ fi
 
 echo ""
 echo "[10/10] Checking Web Dashboard display for node1..."
-DASHBOARD_NODE_STATUS=$(docker compose exec -T pgvisor-proxy curl -s http://localhost:8080/nodes 2>/dev/null || true)
+DASHBOARD_NODE_STATUS=$(docker compose exec -T pgvisor-proxy curl -s ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} http://localhost:8080/nodes 2>/dev/null || true)
 if echo "${DASHBOARD_NODE_STATUS}" | grep -q "Fenced (Quorum Lost)"; then
     echo "+ CONFIRMED: Dashboard renders node1 as 'Fenced (Quorum Lost)'."
 fi

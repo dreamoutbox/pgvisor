@@ -146,6 +146,7 @@ services:
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
       RUST_LOG: info
+      PGVISOR_ADMIN_TOKEN: postgres
     volumes:
       - ./scripts:/scripts:ro
     depends_on:
