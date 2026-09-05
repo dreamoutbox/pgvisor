@@ -1,39 +1,47 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use serde::{Deserialize, Serialize};
+use pgwire::messages::data::{
+    DataRow as PgWireDataRow, FieldDescription, RowDescription as PgWireRowDescription,
+};
+use pgwire::messages::extendedquery::{Flush as PgWireFlush, Sync as PgWireSync};
+use pgwire::messages::response::{
+    CommandComplete as PgWireCommandComplete, ErrorResponse as PgWireErrorResponse,
+    NoticeResponse as PgWireNoticeResponse, ReadyForQuery as PgWireReadyForQuery,
+};
+use pgwire::messages::simplequery::Query as PgWireQuery;
+use pgwire::messages::startup::{
+    Authentication as PgWireAuthentication, BackendKeyData as PgWireBackendKeyData,
+    ParameterStatus as PgWireParameterStatus, SecretKey,
+};
+use pgwire::messages::terminate::Terminate as PgWireTerminate;
+use pgwire::messages::{
+    DecodeContext, Message, PgWireBackendMessage, PgWireFrontendMessage, SslNegotiationMetaMessage,
+};
 use std::collections::HashMap;
 
+pub use pgwire::messages::response::TransactionStatus;
+pub const PROTOCOL_VERSION_3_0: i32 = pgwire::messages::startup::Startup::PROTOCOL_VERSION_3_0;
 pub const SSL_REQUEST_CODE: i32 = 80877103;
 pub const CANCEL_REQUEST_CODE: i32 = 80877102;
-pub const PROTOCOL_VERSION_3_0: i32 = 196608;
 
-/// PostgreSQL transaction status indicator reported in ReadyForQuery ('Z').
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TransactionStatus {
-    /// Not in a transaction block ('I').
-    Idle,
-    /// Inside an active transaction block ('T').
-    Transaction,
-    /// Inside a failed transaction block ('E').
-    Error,
+/// Helper extension trait for `TransactionStatus` to provide `from_u8` and `to_u8`.
+pub trait TransactionStatusExt {
+    fn from_u8(b: u8) -> Option<TransactionStatus>;
+    fn to_u8(self) -> u8;
 }
 
-impl TransactionStatus {
-    pub fn from_u8(b: u8) -> Option<Self> {
-        match b {
-            b'I' => Some(Self::Idle),
-            b'T' => Some(Self::Transaction),
-            b'E' => Some(Self::Error),
-            _ => None,
-        }
+impl TransactionStatusExt for TransactionStatus {
+    fn from_u8(b: u8) -> Option<TransactionStatus> {
+        TransactionStatus::try_from(b).ok()
     }
 
-    pub fn to_u8(self) -> u8 {
-        match self {
-            Self::Idle => b'I',
-            Self::Transaction => b'T',
-            Self::Error => b'E',
-        }
+    fn to_u8(self) -> u8 {
+        self as u8
     }
+}
+
+/// Helper function to parse a transaction status byte.
+pub fn parse_transaction_status(b: u8) -> Option<TransactionStatus> {
+    TransactionStatus::try_from(b).ok()
 }
 
 /// Initial message sent by a PostgreSQL client.
@@ -52,6 +60,32 @@ pub struct StartupMessage {
 }
 
 impl StartupMessage {
+    pub fn from_pgwire(startup: &pgwire::messages::startup::Startup) -> Self {
+        let version =
+            ((startup.protocol_number_major as i32) << 16) | (startup.protocol_number_minor as i32);
+        let parameters = startup
+            .parameters
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        Self {
+            protocol_version: version,
+            parameters,
+        }
+    }
+
+    pub fn to_pgwire(&self) -> pgwire::messages::startup::Startup {
+        let mut s = pgwire::messages::startup::Startup::new();
+        s.protocol_number_major = (self.protocol_version >> 16) as u16;
+        s.protocol_number_minor = (self.protocol_version & 0xFFFF) as u16;
+        s.parameters = self
+            .parameters
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        s
+    }
+
     pub fn user(&self) -> Option<&str> {
         self.parameters.get("user").map(|s| s.as_str())
     }
@@ -62,6 +96,60 @@ impl StartupMessage {
 
     pub fn application_name(&self) -> Option<&str> {
         self.parameters.get("application_name").map(|s| s.as_str())
+    }
+}
+
+impl InitialClientMessage {
+    /// Decodes the initial packet sent on a new client TCP connection using pgwire.
+    pub fn decode(src: &mut BytesMut) -> Result<Option<Self>, std::io::Error> {
+        if src.len() < 4 {
+            return Ok(None);
+        }
+        let len = i32::from_be_bytes([src[0], src[1], src[2], src[3]]) as usize;
+        if src.len() < len {
+            return Ok(None);
+        }
+
+        let mut ctx = DecodeContext::default();
+        ctx.awaiting_frontend_ssl = true;
+
+        match PgWireFrontendMessage::decode(src, &ctx) {
+            Ok(Some(PgWireFrontendMessage::SslNegotiation(
+                SslNegotiationMetaMessage::PostgresSsl(_),
+            ))) => Ok(Some(Self::SslRequest)),
+            Ok(Some(PgWireFrontendMessage::SslNegotiation(SslNegotiationMetaMessage::None))) => {
+                ctx.awaiting_frontend_ssl = false;
+                ctx.awaiting_frontend_startup = true;
+                match PgWireFrontendMessage::decode(src, &ctx) {
+                    Ok(Some(PgWireFrontendMessage::Startup(startup))) => {
+                        Ok(Some(Self::Startup(StartupMessage::from_pgwire(&startup))))
+                    }
+                    Ok(Some(PgWireFrontendMessage::CancelRequest(cancel))) => {
+                        let secret = cancel.secret_key.as_i32().unwrap_or(0) as u32;
+                        Ok(Some(Self::CancelRequest {
+                            process_id: cancel.pid as u32,
+                            secret_key: secret,
+                        }))
+                    }
+                    Ok(_) => Ok(None),
+                    Err(e) => Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        e.to_string(),
+                    )),
+                }
+            }
+            Ok(_) => Ok(None),
+            Err(e) => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e.to_string(),
+            )),
+        }
+    }
+
+    /// Encodes a StartupMessage into bytes via pgwire.
+    pub fn encode_startup(msg: &StartupMessage, dst: &mut BytesMut) {
+        let pgwire_startup = msg.to_pgwire();
+        let _ = pgwire_startup.encode(dst);
     }
 }
 
@@ -79,7 +167,7 @@ pub enum FrontendMessage {
         statement: String,
     },
     Describe {
-        target_type: u8, // 'S' for prepared statement, 'P' for portal
+        target_type: u8,
         name: String,
     },
     Execute {
@@ -98,6 +186,104 @@ pub enum FrontendMessage {
         tag: u8,
         payload: Bytes,
     },
+}
+
+impl FrontendMessage {
+    /// Decodes a regular framed frontend message using pgwire.
+    pub fn decode(src: &mut BytesMut) -> Result<Option<Self>, std::io::Error> {
+        if src.len() < 5 {
+            return Ok(None);
+        }
+        let tag = src[0];
+        let len = i32::from_be_bytes([src[1], src[2], src[3], src[4]]) as usize;
+        if src.len() < 1 + len {
+            return Ok(None);
+        }
+
+        match tag {
+            b'Q' => {
+                let ctx = DecodeContext::default();
+                match PgWireFrontendMessage::decode(src, &ctx) {
+                    Ok(Some(PgWireFrontendMessage::Query(q))) => Ok(Some(Self::Query(q.query))),
+                    Ok(_) => Ok(None),
+                    Err(e) => Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        e.to_string(),
+                    )),
+                }
+            }
+            b'X' => {
+                let ctx = DecodeContext::default();
+                match PgWireFrontendMessage::decode(src, &ctx) {
+                    Ok(Some(PgWireFrontendMessage::Terminate(_))) => Ok(Some(Self::Terminate)),
+                    Ok(_) => Ok(None),
+                    Err(e) => Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        e.to_string(),
+                    )),
+                }
+            }
+            b'S' => {
+                let ctx = DecodeContext::default();
+                match PgWireFrontendMessage::decode(src, &ctx) {
+                    Ok(Some(PgWireFrontendMessage::Sync(_))) => Ok(Some(Self::Sync)),
+                    Ok(_) => Ok(None),
+                    Err(e) => Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        e.to_string(),
+                    )),
+                }
+            }
+            b'H' => {
+                let ctx = DecodeContext::default();
+                match PgWireFrontendMessage::decode(src, &ctx) {
+                    Ok(Some(PgWireFrontendMessage::Flush(_))) => Ok(Some(Self::Flush)),
+                    Ok(_) => Ok(None),
+                    Err(e) => Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        e.to_string(),
+                    )),
+                }
+            }
+            _ => {
+                // Extended query packets or unknown tags: split frame and preserve raw payload
+                let mut frame = src.split_to(1 + len);
+                frame.advance(5); // Advance tag + length
+                Ok(Some(Self::Raw {
+                    tag,
+                    payload: frame.freeze(),
+                }))
+            }
+        }
+    }
+
+    /// Encodes a frontend message into framed bytes using pgwire.
+    pub fn encode(&self, dst: &mut BytesMut) {
+        match self {
+            Self::Query(sql) => {
+                let q = PgWireQuery::new(sql.clone());
+                let _ = q.encode(dst);
+            }
+            Self::Sync => {
+                let sync = PgWireSync::new();
+                let _ = sync.encode(dst);
+            }
+            Self::Flush => {
+                let flush = PgWireFlush::new();
+                let _ = flush.encode(dst);
+            }
+            Self::Terminate => {
+                let term = PgWireTerminate::new();
+                let _ = term.encode(dst);
+            }
+            Self::Raw { tag, payload } => {
+                dst.put_u8(*tag);
+                dst.put_i32((payload.len() + 4) as i32);
+                dst.put_slice(payload);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Decoded server-to-client (backend) messages.
@@ -120,447 +306,240 @@ pub enum BackendMessage {
     Raw { tag: u8, payload: Bytes },
 }
 
-impl InitialClientMessage {
-    /// Decodes the initial packet sent on a new client TCP connection.
-    pub fn decode(src: &mut BytesMut) -> Result<Option<Self>, std::io::Error> {
-        if src.len() < 4 {
-            return Ok(None);
-        }
-
-        let len = i32::from_be_bytes([src[0], src[1], src[2], src[3]]) as usize;
-        if src.len() < len {
-            return Ok(None);
-        }
-
-        let mut packet = src.split_to(len);
-        packet.advance(4); // Advance past length
-
-        let code = packet.get_i32();
-        if code == SSL_REQUEST_CODE {
-            return Ok(Some(Self::SslRequest));
-        }
-
-        if code == CANCEL_REQUEST_CODE {
-            if packet.remaining() < 8 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Invalid CancelRequest length",
-                ));
-            }
-            let process_id = packet.get_u32();
-            let secret_key = packet.get_u32();
-            return Ok(Some(Self::CancelRequest {
-                process_id,
-                secret_key,
-            }));
-        }
-
-        // Standard StartupMessage: null-terminated strings key\0value\0... until \0
-        let mut parameters = HashMap::new();
-        while packet.has_remaining() {
-            if packet[0] == 0 {
-                packet.advance(1);
-                break;
-            }
-
-            let key = read_null_terminated_string(&mut packet)?;
-            if key.is_empty() {
-                break;
-            }
-            let value = read_null_terminated_string(&mut packet)?;
-            parameters.insert(key, value);
-        }
-
-        Ok(Some(Self::Startup(StartupMessage {
-            protocol_version: code,
-            parameters,
-        })))
-    }
-
-    /// Encodes a StartupMessage into bytes.
-    pub fn encode_startup(msg: &StartupMessage, dst: &mut BytesMut) {
-        let mut body = BytesMut::new();
-        body.put_i32(msg.protocol_version);
-        for (k, v) in &msg.parameters {
-            body.put_slice(k.as_bytes());
-            body.put_u8(0);
-            body.put_slice(v.as_bytes());
-            body.put_u8(0);
-        }
-        body.put_u8(0); // Final terminating null
-
-        let len = (body.len() + 4) as i32;
-        dst.put_i32(len);
-        dst.put_slice(&body);
-    }
-}
-
-impl FrontendMessage {
-    /// Decodes a regular framed frontend message (1 byte tag + 4 bytes length + payload).
-    pub fn decode(src: &mut BytesMut) -> Result<Option<Self>, std::io::Error> {
-        if src.len() < 5 {
-            return Ok(None);
-        }
-
-        let tag = src[0];
-        let len = i32::from_be_bytes([src[1], src[2], src[3], src[4]]) as usize;
-        if src.len() < 1 + len {
-            return Ok(None);
-        }
-
-        let mut frame = src.split_to(1 + len);
-        frame.advance(5); // Advance tag + length
-        let payload = frame.freeze();
-
-        let msg = match tag {
-            b'Q' => {
-                let sql = std::str::from_utf8(&payload)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
-                    .trim_end_matches('\0')
-                    .to_string();
-                Self::Query(sql)
-            }
-            b'S' => Self::Sync,
-            b'H' => Self::Flush,
-            b'X' => Self::Terminate,
-            b'p' => {
-                let pwd = std::str::from_utf8(&payload)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
-                    .trim_end_matches('\0')
-                    .to_string();
-                Self::Password(pwd)
-            }
-            _ => Self::Raw { tag, payload },
-        };
-
-        Ok(Some(msg))
-    }
-
-    /// Encodes a frontend message into framed bytes.
-    pub fn encode(&self, dst: &mut BytesMut) {
-        match self {
-            Self::Query(sql) => {
-                dst.put_u8(b'Q');
-                let len = (4 + sql.len() + 1) as i32;
-                dst.put_i32(len);
-                dst.put_slice(sql.as_bytes());
-                dst.put_u8(0);
-            }
-            Self::Sync => {
-                dst.put_u8(b'S');
-                dst.put_i32(4);
-            }
-            Self::Flush => {
-                dst.put_u8(b'H');
-                dst.put_i32(4);
-            }
-            Self::Terminate => {
-                dst.put_u8(b'X');
-                dst.put_i32(4);
-            }
-            Self::Password(pwd) => {
-                dst.put_u8(b'p');
-                let len = (4 + pwd.len() + 1) as i32;
-                dst.put_i32(len);
-                dst.put_slice(pwd.as_bytes());
-                dst.put_u8(0);
-            }
-            Self::Raw { tag, payload } => {
-                dst.put_u8(*tag);
-                let len = (4 + payload.len()) as i32;
-                dst.put_i32(len);
-                dst.put_slice(payload);
-            }
-            _ => {
-                // Extended query variants can be serialized as Raw when transparently proxied
-            }
-        }
-    }
-}
-
 impl BackendMessage {
-    /// Decodes a regular framed backend message (1 byte tag + 4 bytes length + payload).
+    /// Decodes a regular framed backend message using pgwire.
     pub fn decode(src: &mut BytesMut) -> Result<Option<Self>, std::io::Error> {
         if src.len() < 5 {
             return Ok(None);
         }
-
         let tag = src[0];
         let len = i32::from_be_bytes([src[1], src[2], src[3], src[4]]) as usize;
         if src.len() < 1 + len {
             return Ok(None);
         }
 
-        let mut frame = src.split_to(1 + len);
-        frame.advance(5);
-        let mut payload = frame.freeze();
-
-        let msg = match tag {
-            b'R' => {
-                let auth_type = payload.get_i32();
-                match auth_type {
-                    0 => Self::AuthenticationOk,
-                    3 => Self::AuthenticationCleartextPassword,
-                    5 => {
-                        let mut salt = [0u8; 4];
-                        if payload.remaining() >= 4 {
-                            payload.copy_to_slice(&mut salt);
-                        }
-                        Self::AuthenticationMD5Password { salt }
+        let ctx = DecodeContext::default();
+        match PgWireBackendMessage::decode(src, &ctx) {
+            Ok(Some(msg)) => match msg {
+                PgWireBackendMessage::Authentication(auth) => match auth {
+                    PgWireAuthentication::Ok => Ok(Some(Self::AuthenticationOk)),
+                    PgWireAuthentication::CleartextPassword => {
+                        Ok(Some(Self::AuthenticationCleartextPassword))
                     }
-                    _ => Self::Raw {
+                    PgWireAuthentication::MD5Password(salt) => {
+                        let mut s = [0u8; 4];
+                        if salt.len() >= 4 {
+                            s.copy_from_slice(&salt[..4]);
+                        }
+                        Ok(Some(Self::AuthenticationMD5Password { salt: s }))
+                    }
+                    PgWireAuthentication::SASL(mechs) => {
+                        Ok(Some(Self::AuthenticationSASL { mechanisms: mechs }))
+                    }
+                    PgWireAuthentication::SASLContinue(data) => {
+                        Ok(Some(Self::AuthenticationSASLContinue {
+                            data: data.to_vec(),
+                        }))
+                    }
+                    PgWireAuthentication::SASLFinal(data) => {
+                        Ok(Some(Self::AuthenticationSASLFinal {
+                            data: data.to_vec(),
+                        }))
+                    }
+                    _ => Ok(Some(Self::Raw {
                         tag,
-                        payload: payload.clone(),
-                    },
+                        payload: Bytes::new(),
+                    })),
+                },
+                PgWireBackendMessage::ParameterStatus(ps) => Ok(Some(Self::ParameterStatus {
+                    name: ps.name,
+                    value: ps.value,
+                })),
+                PgWireBackendMessage::BackendKeyData(bk) => {
+                    let secret = bk.secret_key.as_i32().unwrap_or(0) as u32;
+                    Ok(Some(Self::BackendKeyData {
+                        process_id: bk.pid as u32,
+                        secret_key: secret,
+                    }))
                 }
-            }
-            b'K' => {
-                if payload.remaining() >= 8 {
-                    let process_id = payload.get_u32();
-                    let secret_key = payload.get_u32();
-                    Self::BackendKeyData {
-                        process_id,
-                        secret_key,
-                    }
-                } else {
-                    Self::Raw { tag, payload }
+                PgWireBackendMessage::ReadyForQuery(rfq) => {
+                    Ok(Some(Self::ReadyForQuery { status: rfq.status }))
                 }
-            }
-            b'S' => {
-                let mut buf = payload.clone();
-                let name = read_null_terminated_bytes(&mut buf).unwrap_or_default();
-                let value = read_null_terminated_bytes(&mut buf).unwrap_or_default();
-                Self::ParameterStatus { name, value }
-            }
-            b'Z' => {
-                let status_byte = if payload.has_remaining() {
-                    payload.get_u8()
-                } else {
-                    b'I'
-                };
-                let status =
-                    TransactionStatus::from_u8(status_byte).unwrap_or(TransactionStatus::Idle);
-                Self::ReadyForQuery { status }
-            }
-            b'C' => {
-                let tag_str = std::str::from_utf8(&payload)
-                    .unwrap_or_default()
-                    .trim_end_matches('\0')
-                    .to_string();
-                Self::CommandComplete { tag: tag_str }
-            }
-            b'E' => {
-                let err_str = std::str::from_utf8(&payload)
-                    .unwrap_or_default()
-                    .to_string();
-                Self::ErrorResponse { message: err_str }
-            }
-            b'N' => {
-                let msg_str = std::str::from_utf8(&payload)
-                    .unwrap_or_default()
-                    .to_string();
-                Self::NoticeResponse { message: msg_str }
-            }
-            b'T' => {
-                let mut buf = payload.clone();
-                let mut columns = Vec::new();
-                if buf.remaining() >= 2 {
-                    let field_count = buf.get_i16() as usize;
-                    for _ in 0..field_count {
-                        if let Some(col_name) = read_null_terminated_bytes(&mut buf) {
-                            columns.push(col_name);
-                            if buf.remaining() >= 18 {
-                                buf.advance(18); // table_oid(4) + attr_num(2) + type_oid(4) + type_size(2) + type_mod(4) + format(2)
-                            }
-                        } else {
-                            break;
-                        }
-                    }
+                PgWireBackendMessage::CommandComplete(cc) => {
+                    Ok(Some(Self::CommandComplete { tag: cc.tag }))
                 }
-                Self::RowDescription { columns }
-            }
-            b'D' => {
-                let mut buf = payload.clone();
-                let mut values = Vec::new();
-                if buf.remaining() >= 2 {
-                    let col_count = buf.get_i16() as usize;
-                    for _ in 0..col_count {
-                        if buf.remaining() >= 4 {
-                            let len = buf.get_i32();
-                            if len == -1 {
-                                values.push(None);
-                            } else if len >= 0 && buf.remaining() >= len as usize {
-                                let val_bytes = buf.copy_to_bytes(len as usize);
-                                values.push(Some(String::from_utf8_lossy(&val_bytes).to_string()));
-                            } else {
-                                values.push(None);
-                            }
-                        } else {
-                            break;
-                        }
-                    }
+                PgWireBackendMessage::ErrorResponse(er) => {
+                    let message = er
+                        .fields
+                        .iter()
+                        .find(|(k, _)| *k == b'M')
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_else(|| "Unknown database error".to_string());
+                    Ok(Some(Self::ErrorResponse { message }))
                 }
-                Self::DataRow { values }
+                PgWireBackendMessage::NoticeResponse(nr) => {
+                    let message = nr
+                        .fields
+                        .iter()
+                        .find(|(k, _)| *k == b'M')
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_default();
+                    Ok(Some(Self::NoticeResponse { message }))
+                }
+                PgWireBackendMessage::RowDescription(rd) => {
+                    let columns = rd.fields.into_iter().map(|f| f.name).collect();
+                    Ok(Some(Self::RowDescription { columns }))
+                }
+                PgWireBackendMessage::DataRow(dr) => {
+                    let values = decode_data_row_values(&dr.data, dr.field_count);
+                    Ok(Some(Self::DataRow { values }))
+                }
+                _ => Ok(Some(Self::Raw {
+                    tag,
+                    payload: Bytes::new(),
+                })),
+            },
+            Ok(None) => Ok(None),
+            Err(_) => {
+                // If unrecognized by pgwire, fallback to Raw frame split
+                let mut frame = src.split_to(1 + len);
+                frame.advance(5);
+                Ok(Some(Self::Raw {
+                    tag,
+                    payload: frame.freeze(),
+                }))
             }
-            _ => Self::Raw { tag, payload },
-        };
-
-        Ok(Some(msg))
+        }
     }
 
-    /// Encodes a backend message into framed bytes.
+    /// Encodes a BackendMessage into bytes using pgwire.
     pub fn encode(&self, dst: &mut BytesMut) {
         match self {
             Self::AuthenticationOk => {
-                dst.put_u8(b'R');
-                dst.put_i32(8);
-                dst.put_i32(0);
+                let msg = PgWireAuthentication::Ok;
+                let _ = msg.encode(dst);
             }
-            Self::ReadyForQuery { status } => {
-                dst.put_u8(b'Z');
-                dst.put_i32(5);
-                dst.put_u8(status.to_u8());
+            Self::AuthenticationCleartextPassword => {
+                let msg = PgWireAuthentication::CleartextPassword;
+                let _ = msg.encode(dst);
             }
-            Self::CommandComplete { tag } => {
-                dst.put_u8(b'C');
-                let len = (4 + tag.len() + 1) as i32;
-                dst.put_i32(len);
-                dst.put_slice(tag.as_bytes());
-                dst.put_u8(0);
+            Self::AuthenticationMD5Password { salt } => {
+                let msg = PgWireAuthentication::MD5Password(salt.to_vec());
+                let _ = msg.encode(dst);
             }
-            Self::ParameterStatus { name, value } => {
-                dst.put_u8(b'S');
-                let len = (4 + name.len() + 1 + value.len() + 1) as i32;
-                dst.put_i32(len);
-                dst.put_slice(name.as_bytes());
-                dst.put_u8(0);
-                dst.put_slice(value.as_bytes());
-                dst.put_u8(0);
+            Self::AuthenticationSASL { mechanisms } => {
+                let msg = PgWireAuthentication::SASL(mechanisms.clone());
+                let _ = msg.encode(dst);
             }
-            Self::ErrorResponse { message } => {
-                dst.put_u8(b'E');
-                let body = format!("SERROR\0C57P01\0M{}\0\0", message);
-                let len = (4 + body.len()) as i32;
-                dst.put_i32(len);
-                dst.put_slice(body.as_bytes());
+            Self::AuthenticationSASLContinue { data } => {
+                let msg = PgWireAuthentication::SASLContinue(Bytes::copy_from_slice(data));
+                let _ = msg.encode(dst);
             }
-            Self::NoticeResponse { message } => {
-                dst.put_u8(b'N');
-                let body = format!("SNOTICE\0M{}\0\0", message);
-                let len = (4 + body.len()) as i32;
-                dst.put_i32(len);
-                dst.put_slice(body.as_bytes());
+            Self::AuthenticationSASLFinal { data } => {
+                let msg = PgWireAuthentication::SASLFinal(Bytes::copy_from_slice(data));
+                let _ = msg.encode(dst);
             }
             Self::BackendKeyData {
                 process_id,
                 secret_key,
             } => {
-                dst.put_u8(b'K');
-                dst.put_i32(12);
-                dst.put_u32(*process_id);
-                dst.put_u32(*secret_key);
+                let msg = PgWireBackendKeyData::new(
+                    *process_id as i32,
+                    SecretKey::I32(*secret_key as i32),
+                );
+                let _ = msg.encode(dst);
+            }
+            Self::ParameterStatus { name, value } => {
+                let msg = PgWireParameterStatus::new(name.clone(), value.clone());
+                let _ = msg.encode(dst);
+            }
+            Self::ReadyForQuery { status } => {
+                let msg = PgWireReadyForQuery::new(*status);
+                let _ = msg.encode(dst);
+            }
+            Self::CommandComplete { tag } => {
+                let msg = PgWireCommandComplete::new(tag.clone());
+                let _ = msg.encode(dst);
+            }
+            Self::ErrorResponse { message } => {
+                let msg = PgWireErrorResponse::new(vec![
+                    (b'S', "ERROR".to_string()),
+                    (b'C', "XX000".to_string()),
+                    (b'M', message.clone()),
+                ]);
+                let _ = msg.encode(dst);
+            }
+            Self::NoticeResponse { message } => {
+                let msg = PgWireNoticeResponse::new(vec![
+                    (b'S', "NOTICE".to_string()),
+                    (b'M', message.clone()),
+                ]);
+                let _ = msg.encode(dst);
             }
             Self::RowDescription { columns } => {
-                dst.put_u8(b'T');
-                let mut body = BytesMut::new();
-                body.put_i16(columns.len() as i16);
-                for col in columns {
-                    body.put_slice(col.as_bytes());
-                    body.put_u8(0);
-                    // 18 bytes of column metadata
-                    body.put_i32(0); // table OID
-                    body.put_i16(0); // column attr num
-                    body.put_i32(25); // type OID (text)
-                    body.put_i16(-1); // type size
-                    body.put_i32(-1); // type mod
-                    body.put_i16(0); // format code
-                }
-                let len = (4 + body.len()) as i32;
-                dst.put_i32(len);
-                dst.put_slice(&body);
+                let fields = columns
+                    .iter()
+                    .map(|col| {
+                        let mut fd = FieldDescription::default();
+                        fd.name = col.clone();
+                        fd
+                    })
+                    .collect();
+                let rd = PgWireRowDescription::new(fields);
+                let _ = rd.encode(dst);
             }
             Self::DataRow { values } => {
-                dst.put_u8(b'D');
-                let mut body = BytesMut::new();
-                body.put_i16(values.len() as i16);
+                let mut data = BytesMut::new();
                 for val in values {
                     match val {
+                        None => data.put_i32(-1),
                         Some(s) => {
-                            body.put_i32(s.len() as i32);
-                            body.put_slice(s.as_bytes());
-                        }
-                        None => {
-                            body.put_i32(-1);
+                            let b = s.as_bytes();
+                            data.put_i32(b.len() as i32);
+                            data.put_slice(b);
                         }
                     }
                 }
-                let len = (4 + body.len()) as i32;
-                dst.put_i32(len);
-                dst.put_slice(&body);
+                let dr = PgWireDataRow::new(data, values.len() as i16);
+                let _ = dr.encode(dst);
             }
             Self::Raw { tag, payload } => {
                 dst.put_u8(*tag);
-                let len = (4 + payload.len()) as i32;
-                dst.put_i32(len);
+                dst.put_i32((payload.len() + 4) as i32);
                 dst.put_slice(payload);
             }
-            _ => {}
         }
     }
 }
 
-fn read_null_terminated_string(buf: &mut BytesMut) -> Result<String, std::io::Error> {
-    if let Some(pos) = buf.iter().position(|&b| b == 0) {
-        let s = std::str::from_utf8(&buf[..pos])
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
-            .to_string();
-        buf.advance(pos + 1);
-        Ok(s)
-    } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::UnexpectedEof,
-            "Missing null terminator in string",
-        ))
+/// Helper to decode DataRow column values from pgwire's DataRow payload.
+pub fn decode_data_row_values(data: &[u8], field_count: i16) -> Vec<Option<String>> {
+    let mut buf = data;
+    let mut values = Vec::with_capacity(field_count as usize);
+    for _ in 0..field_count {
+        if buf.len() < 4 {
+            break;
+        }
+        let len = i32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
+        buf = &buf[4..];
+        if len == -1 {
+            values.push(None);
+        } else if len >= 0 {
+            let len = len as usize;
+            if buf.len() < len {
+                break;
+            }
+            let val = String::from_utf8_lossy(&buf[..len]).into_owned();
+            buf = &buf[len..];
+            values.push(Some(val));
+        }
     }
-}
-
-fn read_null_terminated_bytes(buf: &mut Bytes) -> Option<String> {
-    if let Some(pos) = buf.iter().position(|&b| b == 0) {
-        let s = std::str::from_utf8(&buf[..pos]).ok()?.to_string();
-        buf.advance(pos + 1);
-        Some(s)
-    } else {
-        None
-    }
+    values
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_startup_message_encode_decode() {
-        let mut startup = StartupMessage {
-            protocol_version: PROTOCOL_VERSION_3_0,
-            parameters: HashMap::new(),
-        };
-        startup.parameters.insert("user".into(), "postgres".into());
-        startup
-            .parameters
-            .insert("database".into(), "testdb".into());
-
-        let mut buf = BytesMut::new();
-        InitialClientMessage::encode_startup(&startup, &mut buf);
-
-        let decoded = InitialClientMessage::decode(&mut buf).unwrap().unwrap();
-        if let InitialClientMessage::Startup(msg) = decoded {
-            assert_eq!(msg.protocol_version, PROTOCOL_VERSION_3_0);
-            assert_eq!(msg.user(), Some("postgres"));
-            assert_eq!(msg.database(), Some("testdb"));
-        } else {
-            panic!("expected Startup message");
-        }
-    }
 
     #[test]
     fn test_ssl_request_decode() {
@@ -570,6 +549,24 @@ mod tests {
 
         let decoded = InitialClientMessage::decode(&mut buf).unwrap().unwrap();
         assert_eq!(decoded, InitialClientMessage::SslRequest);
+    }
+
+    #[test]
+    fn test_startup_message_encode_decode() {
+        let mut params = HashMap::new();
+        params.insert("user".to_string(), "postgres".to_string());
+        params.insert("database".to_string(), "testdb".to_string());
+
+        let startup = StartupMessage {
+            protocol_version: PROTOCOL_VERSION_3_0,
+            parameters: params,
+        };
+
+        let mut buf = BytesMut::new();
+        InitialClientMessage::encode_startup(&startup, &mut buf);
+
+        let decoded = InitialClientMessage::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(decoded, InitialClientMessage::Startup(startup));
     }
 
     #[test]

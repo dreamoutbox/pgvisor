@@ -328,7 +328,7 @@ impl ClientSession {
                     ready_for_query_received = true;
                     let status_byte = if frame.len() >= 6 { frame[5] } else { b'I' };
                     let status =
-                        TransactionStatus::from_u8(status_byte).unwrap_or(TransactionStatus::Idle);
+                        TransactionStatus::try_from(status_byte).unwrap_or(TransactionStatus::Idle);
                     self.tracker.on_ready_for_query(status);
 
                     if status == TransactionStatus::Idle {

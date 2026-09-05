@@ -65,7 +65,7 @@ impl BackupService for ProxyBackupService {
     async fn create_backup(
         &self,
         backup_type: BackupType,
-        _label: Option<String>,
+        label: Option<String>,
     ) -> Result<BasebackupMeta, String> {
         let leader = self.leader_addr.read().await.clone();
         let (host, port) = if let Some(ref addr) = leader {
@@ -82,7 +82,7 @@ impl BackupService for ProxyBackupService {
 
         let now = Utc::now();
         let snapshot_id = format!("snap-{}", now.format("%Y%m%d-%H%M%S"));
-        info!(snapshot_id = %snapshot_id, %host, port, ?backup_type, "Initiating physical basebackup");
+        info!(snapshot_id = %snapshot_id, %host, port, ?backup_type, ?label, "Initiating physical basebackup");
 
         // Attempt physical execution via pg_basebackup
         let tmp_dir = tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
@@ -147,6 +147,7 @@ impl BackupService for ProxyBackupService {
             snapshot_id: snapshot_id.clone(),
             created_at: now,
             backup_type,
+            label,
             start_wal,
             stop_wal,
             total_bytes,

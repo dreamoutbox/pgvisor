@@ -34,11 +34,17 @@
       - assert surviving standby replicates from the new leader.
       - restart node1 and verify split-brain prevention (rejoins as standby).
 
-- [ ] investigate rejoin node (from docker container remove/stop) Supervision Status is "Fenced (Quorum Lost)" and role is "Standby (Replica)". the rejoin (old node1 leader) should join the cluster as a standby replica.
+- [x] investigate rejoin node (from docker container remove/stop) Supervision Status is "Fenced (Quorum Lost)" and role is "Standby (Replica)". the rejoin (old node1 leader) should join the cluster as a standby replica.
 
-- [ ] chore: show "Optional Label / Note" in table at "Basebackups & Snapshots" page.
+- [x] change postgres version to 17/18
+
+- [x] use external rust crate for postgres protocol if exists. no need to manually implement this. use https://crates.io/crates/pgwire
+
+- [x] chore: show "Optional Label / Note" in table at "Basebackups & Snapshots" page.
 
 - [ ] add web dashboard auth.
+
+- [ ] manually switchover new leader
 
 - [ ] very bad disaster testing: 3 nodes setup. 2 nodes down.
       - start as 3 nodes 
@@ -52,18 +58,30 @@
       - assert node2 rejoin as standby.
       - assert database cluster is working, data is ok and have leader.
 
+- [ ] test adding new node
+
 - [ ] add audit logs view in web dashboard for node up/down. backup/restore perform. dangerous SQL (DROP TABLE/TRUNCATE/DELETE) logging. so when it happens, we can use the time to restore with PITR.
 
 - [ ] add page for manage databaser users and permissions.
 
+
+
+- [ ] add README.md
+
 - [ ] testing two proxy. 3 nodes. then stop proxy1 and assert still access DB with proxy2.
 
-- [ ] run `cargo test`
+- [ ] run `cargo test` use cargo-nextest to run tests. one by one. fail fast.
 
 ---
 
 # Backlog:
 
+- [ ] web dashboard change to use bootstrap5. less custom css/js.
+
+- [ ] web dashboard chart & graph
+
 - [ ] - **Dynamic Cluster Scaling**: Protocol for adding and removing sidecar nodes dynamically via OpenRaft joint consensus at runtime without node restarts.
 
 - [ ] make sidecar worker not access the backup storage directly. (remove `S3_ENDPOINT` `S3_BUCKET` `S3_ACCESS_KEY` `S3_SECRET_KEY`). make proxy generate presigned url for backup/restore.
+
+- [ ] add Kubernetes Operator & CRDs

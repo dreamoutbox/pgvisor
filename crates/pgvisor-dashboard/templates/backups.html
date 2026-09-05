@@ -3,6 +3,7 @@
 {% block title %}Backups &amp; Snapshots - PgVisor{% endblock %}
 {% block nav_backups %}active{% endblock %}
 
+
 {% block content %}
 <style>
     .action-header {
@@ -11,15 +12,18 @@
         align-items: center;
         margin-bottom: 28px;
     }
+
     .action-header h1 {
         font-size: 1.6rem;
         font-weight: 700;
         margin-bottom: 4px;
     }
+
     .action-header p {
         color: var(--text-muted);
         font-size: 0.9rem;
     }
+
     .btn {
         padding: 8px 16px;
         border-radius: 6px;
@@ -33,53 +37,67 @@
         text-decoration: none;
         transition: all 0.2s;
     }
+
     .btn-primary {
         background: var(--primary);
         color: #0f172a;
     }
+
     .btn-primary:hover {
         opacity: 0.9;
         box-shadow: 0 0 12px rgba(56, 189, 248, 0.4);
     }
+
     .btn-secondary {
         background: var(--bg-card-hover);
         color: var(--text-main);
         border: 1px solid var(--border);
     }
+
     .btn-secondary:hover {
         background: #475569;
     }
+
     .btn-danger {
         background: rgba(248, 113, 113, 0.15);
         color: var(--danger);
         border: 1px solid rgba(248, 113, 113, 0.3);
     }
+
     .btn-danger:hover {
         background: var(--danger);
         color: #fff;
     }
+
     .btn-sm {
         padding: 5px 10px;
         font-size: 0.8rem;
     }
+
     .btn-success {
         background: rgba(74, 222, 128, 0.2);
         color: var(--success);
         border: 1px solid rgba(74, 222, 128, 0.4);
     }
+
     .btn-success:hover {
         background: var(--success);
         color: #0f172a;
     }
+
     .modal-backdrop {
         position: fixed;
-        top: 0; left: 0; right: 0; bottom: 0;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
         background: rgba(0, 0, 0, 0.7);
         display: none;
         justify-content: center;
         align-items: center;
         z-index: 1000;
     }
+
     .modal {
         background: var(--bg-card);
         border: 1px solid var(--border);
@@ -89,25 +107,30 @@
         padding: 24px;
         box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
     }
+
     .modal h2 {
         font-size: 1.25rem;
         margin-bottom: 12px;
     }
+
     .modal p {
         color: var(--text-muted);
         font-size: 0.9rem;
         margin-bottom: 20px;
         line-height: 1.5;
     }
+
     .form-group {
         margin-bottom: 16px;
     }
+
     .form-group label {
         display: block;
         font-size: 0.85rem;
         color: var(--text-muted);
         margin-bottom: 6px;
     }
+
     .form-control {
         width: 100%;
         padding: 10px 12px;
@@ -117,21 +140,25 @@
         color: var(--text-main);
         font-size: 0.9rem;
     }
+
     .form-control:focus {
         outline: none;
         border-color: var(--primary);
     }
+
     .modal-actions {
         display: flex;
         justify-content: flex-end;
         gap: 10px;
         margin-top: 24px;
     }
+
     .wal-range {
         font-family: monospace;
         font-size: 0.8rem;
         color: var(--text-muted);
     }
+
     .toast {
         position: fixed;
         bottom: 24px;
@@ -148,8 +175,15 @@
         box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
         z-index: 2000;
     }
-    .toast-success { border-color: var(--success); }
-    .toast-error { border-color: var(--danger); }
+
+    .toast-success {
+        border-color: var(--success);
+    }
+
+    .toast-error {
+        border-color: var(--danger);
+    }
+
     .empty-state {
         text-align: center;
         padding: 48px 24px;
@@ -165,16 +199,16 @@
     <div style="display: flex; gap: 12px;">
         <button class="btn btn-secondary" onclick="refreshBackups()">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M23 4v6h-6M1 20v-6h6"/>
-                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                <path d="M23 4v6h-6M1 20v-6h6" />
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
             </svg>
             Refresh
         </button>
         <button class="btn btn-primary" onclick="openBackupModal()">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                <polyline points="17 8 12 3 7 8"/>
-                <line x1="12" y1="3" x2="12" y2="15"/>
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
             </svg>
             Trigger Backup Now
         </button>
@@ -196,9 +230,9 @@
         <h3>Latest Snapshot</h3>
         <div class="value" style="font-size: 1.15rem; margin-top: 4px; line-height: 1.4;">
             {% if let Some(latest) = summary.latest_backup %}
-                {{ latest }}
+            {{ latest }}
             {% else %}
-                None recorded
+            None recorded
             {% endif %}
         </div>
         <small style="color: var(--text-muted)">Physical basebackup</small>
@@ -217,6 +251,7 @@
         <tr>
             <th>Snapshot ID</th>
             <th>Type</th>
+            <th>Optional Label / Note</th>
             <th>Created At</th>
             <th>Archive Size</th>
             <th>WAL Segment Range</th>
@@ -226,68 +261,84 @@
     <tbody>
         {% if backups.is_empty() %}
         <tr>
-            <td colspan="6">
+            <td colspan="7">
                 <div class="empty-state">
-                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-bottom: 12px; color: var(--text-muted);">
-                        <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/>
-                        <path d="M12 12v9"/>
-                        <path d="m8 17 4-4 4 4"/>
+                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                        style="margin-bottom: 12px; color: var(--text-muted);">
+                        <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" />
+                        <path d="M12 12v9" />
+                        <path d="m8 17 4-4 4 4" />
                     </svg>
-                    <p style="font-weight: 500; font-size: 1rem; color: var(--text-main); margin-bottom: 6px;">No Basebackups Found</p>
-                    <p style="font-size: 0.85rem; margin-bottom: 16px;">Trigger your first physical cluster snapshot to enable point-in-time recovery.</p>
+                    <p style="font-weight: 500; font-size: 1rem; color: var(--text-main); margin-bottom: 6px;">No
+                        Basebackups Found</p>
+                    <p style="font-size: 0.85rem; margin-bottom: 16px;">Trigger your first physical cluster snapshot to
+                        enable point-in-time recovery.</p>
                     <button class="btn btn-primary btn-sm" onclick="openBackupModal()">Create Backup Now</button>
                 </div>
             </td>
         </tr>
         {% else %}
-            {% for b in backups %}
-            <tr>
-                <td style="font-family: monospace; font-weight: 600; color: var(--primary);">
-                    {{ b.snapshot_id }}
-                </td>
-                <td>
-                    {% if b.backup_type == "full" %}
-                        <span class="badge badge-leader">Full</span>
-                    {% else %}
-                        <span class="badge badge-standby">Incremental</span>
-                    {% endif %}
-                </td>
-                <td style="color: var(--text-muted); font-size: 0.9rem;">
-                    {{ b.created_at }}
-                </td>
-                <td style="font-weight: 600;">
-                    {{ b.size_pretty }}
-                </td>
-                <td class="wal-range">
-                    {{ b.start_wal }} &rarr; {{ b.stop_wal }}
-                </td>
-                <td style="text-align: right;">
-                    <div style="display: inline-flex; gap: 8px;">
-                        <a href="/api/backups/{{ b.snapshot_id }}/download" class="btn btn-secondary btn-sm" title="Download tar.gz archive">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                                <polyline points="7 10 12 15 17 10"/>
-                                <line x1="12" y1="15" x2="12" y2="3"/>
-                            </svg>
-                            Download
-                        </a>
-                        <button class="btn btn-success btn-sm" onclick="openRestoreModal('{{ b.snapshot_id }}')" title="Restore cluster from this snapshot">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polyline points="1 4 1 10 7 10"/>
-                                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
-                            </svg>
-                            Restore
-                        </button>
-                        <button class="btn btn-danger btn-sm" onclick="deleteBackup('{{ b.snapshot_id }}')" title="Delete from MinIO">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polyline points="3 6 5 6 21 6"/>
-                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                            </svg>
-                        </button>
-                    </div>
-                </td>
-            </tr>
-            {% endfor %}
+        {% for b in backups %}
+        <tr>
+            <td style="font-family: monospace; font-weight: 600; color: var(--primary);">
+                {{ b.snapshot_id }}
+            </td>
+            <td>
+                {% if b.backup_type == "full" %}
+                <span class="badge badge-leader">Full</span>
+                {% else %}
+                <span class="badge badge-standby">Incremental</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if let Some(label) = b.label %}
+                <span style="font-size: 0.85rem; font-weight: 500;">{{ label }}</span>
+                {% else %}
+                <span style="color: var(--text-muted); font-size: 0.85rem;">-</span>
+                {% endif %}
+            </td>
+            <td style="color: var(--text-muted); font-size: 0.9rem;">
+                {{ b.created_at }}
+            </td>
+            <td style="font-weight: 600;">
+                {{ b.size_pretty }}
+            </td>
+            <td class="wal-range">
+                {{ b.start_wal }} &rarr; {{ b.stop_wal }}
+            </td>
+            <td style="text-align: right;">
+                <div style="display: inline-flex; gap: 8px;">
+                    <a href="/api/backups/{{ b.snapshot_id }}/download" class="btn btn-secondary btn-sm"
+                        title="Download tar.gz archive">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
+                        </svg>
+                        Download
+                    </a>
+                    <button class="btn btn-success btn-sm" onclick="openRestoreModal('{{ b.snapshot_id }}')"
+                        title="Restore cluster from this snapshot">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <polyline points="1 4 1 10 7 10" />
+                            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                        </svg>
+                        Restore
+                    </button>
+                    <button class="btn btn-danger btn-sm" onclick="deleteBackup('{{ b.snapshot_id }}')"
+                        title="Delete from MinIO">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <polyline points="3 6 5 6 21 6" />
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        </svg>
+                    </button>
+                </div>
+            </td>
+        </tr>
+        {% endfor %}
         {% endif %}
     </tbody>
 </table>
@@ -296,8 +347,9 @@
 <div id="backupModal" class="modal-backdrop">
     <div class="modal">
         <h2>Trigger Physical Backup</h2>
-        <p>This creates a consistent physical basebackup of the PostgreSQL leader via <code>pg_basebackup</code> and uploads the archive to OpenDAL / MinIO.</p>
-        
+        <p>This creates a consistent physical basebackup of the PostgreSQL leader via <code>pg_basebackup</code> and
+            uploads the archive to OpenDAL / MinIO.</p>
+
         <div class="form-group">
             <label for="backupType">Backup Type</label>
             <select id="backupType" class="form-control">
@@ -305,12 +357,12 @@
                 <option value="incremental">Incremental WAL Delta</option>
             </select>
         </div>
-        
+
         <div class="form-group">
             <label for="backupLabel">Optional Label / Note</label>
             <input type="text" id="backupLabel" class="form-control" placeholder="e.g. pre-migration-snapshot">
         </div>
-        
+
         <div class="modal-actions">
             <button class="btn btn-secondary" onclick="closeBackupModal()">Cancel</button>
             <button id="btnSubmitBackup" class="btn btn-primary" onclick="submitBackup()">Run Backup</button>
@@ -322,18 +374,21 @@
 <div id="restoreModal" class="modal-backdrop">
     <div class="modal">
         <h2 style="color: var(--warning);">Confirm Cluster Restore</h2>
-        <p>Restoring will recover PostgreSQL from snapshot <strong id="restoreSnapshotId" style="color: var(--primary);"></strong>. This recovers database files to the state captured at snapshot creation.</p>
-        
+        <p>Restoring will recover PostgreSQL from snapshot <strong id="restoreSnapshotId"
+                style="color: var(--primary);"></strong>. This recovers database files to the state captured at snapshot
+            creation.</p>
+
         <div class="form-group">
             <label for="recoveryTime">Optional PITR Target Time (UTC)</label>
-            <input type="text" id="recoveryTime" class="form-control" placeholder="YYYY-MM-DD HH:MM:SS (leave blank for latest in snapshot)">
+            <input type="text" id="recoveryTime" class="form-control"
+                placeholder="YYYY-MM-DD HH:MM:SS (leave blank for latest in snapshot)">
         </div>
 
         <div class="form-group">
             <label for="confirmText">Type <strong style="color: var(--danger);">RESTORE</strong> to confirm</label>
             <input type="text" id="confirmText" class="form-control" placeholder="RESTORE">
         </div>
-        
+
         <div class="modal-actions">
             <button class="btn btn-secondary" onclick="closeRestoreModal()">Cancel</button>
             <button id="btnSubmitRestore" class="btn btn-danger" onclick="submitRestore()">Execute Restore</button>

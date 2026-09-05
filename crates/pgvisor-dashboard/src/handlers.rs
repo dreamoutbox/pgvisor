@@ -212,6 +212,7 @@ impl StandaloneBackupService {
                 snapshot_id: "snap-20260904-200000".into(),
                 created_at: Utc::now() - chrono::Duration::hours(5),
                 backup_type: BackupType::Full,
+                label: Some("pre-migration-snapshot".into()),
                 start_wal: "000000010000000000000001".into(),
                 stop_wal: Some("000000010000000000000002".into()),
                 total_bytes: 14_850_000,
@@ -220,6 +221,7 @@ impl StandaloneBackupService {
                 snapshot_id: "snap-20260904-210000".into(),
                 created_at: Utc::now() - chrono::Duration::hours(4),
                 backup_type: BackupType::Incremental,
+                label: None,
                 start_wal: "000000010000000000000003".into(),
                 stop_wal: Some("000000010000000000000004".into()),
                 total_bytes: 2_450_000,
@@ -250,13 +252,14 @@ impl BackupService for StandaloneBackupService {
     async fn create_backup(
         &self,
         backup_type: BackupType,
-        _label: Option<String>,
+        label: Option<String>,
     ) -> Result<BasebackupMeta, String> {
         let now = Utc::now();
         let meta = BasebackupMeta {
             snapshot_id: format!("snap-{}", now.format("%Y%m%d-%H%M%S")),
             created_at: now,
             backup_type,
+            label,
             start_wal: "000000010000000000000010".into(),
             stop_wal: Some("000000010000000000000011".into()),
             total_bytes: match backup_type {
@@ -813,6 +816,7 @@ pub async fn get_backups_page(
                 snapshot_id: b.snapshot_id,
                 created_at: b.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
                 backup_type,
+                label: b.label,
                 start_wal: b.start_wal,
                 stop_wal: b.stop_wal.unwrap_or_else(|| "-".to_string()),
                 size_pretty: format_bytes(b.total_bytes),

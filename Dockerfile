@@ -9,8 +9,8 @@ COPY crates/ crates/
 
 RUN cargo build --release
 
-# Final runtime image based on official PostgreSQL 16
-FROM postgres:16-bookworm
+# Final runtime image based on official PostgreSQL 18.6
+FROM postgres:18.6-bookworm
 
 # Install ca-certificates and curl for healthchecks and S3 MinIO communication
 RUN apt-get update && apt-get install -y --no-install-recommends \

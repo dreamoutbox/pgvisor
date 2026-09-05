@@ -121,6 +121,7 @@ pub struct BackupItemView {
     pub snapshot_id: String,
     pub created_at: String,
     pub backup_type: String,
+    pub label: Option<String>,
     pub start_wal: String,
     pub stop_wal: String,
     pub size_pretty: String,
