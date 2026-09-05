@@ -42,9 +42,15 @@
 
 - [x] chore: show "Optional Label / Note" in table at "Basebackups & Snapshots" page.
 
+- [x] running all tests
+
 - [ ] add web dashboard auth.
 
+- [ ] test adding new node
+
 - [ ] manually switchover new leader
+
+- [ ] make test run concurrent. use custom pre-define ports for each tests.
 
 - [ ] very bad disaster testing: 3 nodes setup. 2 nodes down.
       - start as 3 nodes 
@@ -58,13 +64,9 @@
       - assert node2 rejoin as standby.
       - assert database cluster is working, data is ok and have leader.
 
-- [ ] test adding new node
-
 - [ ] add audit logs view in web dashboard for node up/down. backup/restore perform. dangerous SQL (DROP TABLE/TRUNCATE/DELETE) logging. so when it happens, we can use the time to restore with PITR.
 
 - [ ] add page for manage databaser users and permissions.
-
-
 
 - [ ] add README.md
 

@@ -9,6 +9,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
+# Ensure Ctrl+C terminates all child processes and exits immediately
+cleanup() {
+    echo ""
+    echo "========================================================="
+    echo "  Test suite interrupted by user (Ctrl+C). Aborting..."
+    echo "========================================================="
+    trap - INT TERM EXIT
+    kill -- -$$ 2>/dev/null || true
+    exit 130
+}
+trap cleanup INT TERM
+
 FIRST_RESET_ARGS=""
 for arg in "$@"; do
     case "$arg" in

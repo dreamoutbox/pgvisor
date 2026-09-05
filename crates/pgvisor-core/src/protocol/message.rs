@@ -13,9 +13,7 @@ use pgwire::messages::startup::{
     ParameterStatus as PgWireParameterStatus, SecretKey,
 };
 use pgwire::messages::terminate::Terminate as PgWireTerminate;
-use pgwire::messages::{
-    DecodeContext, Message, PgWireBackendMessage, PgWireFrontendMessage, SslNegotiationMetaMessage,
-};
+use pgwire::messages::{DecodeContext, Message, PgWireBackendMessage, PgWireFrontendMessage};
 use std::collections::HashMap;
 
 pub use pgwire::messages::response::TransactionStatus;
@@ -110,33 +108,38 @@ impl InitialClientMessage {
             return Ok(None);
         }
 
+        if src.len() >= 8 {
+            let code = i32::from_be_bytes([src[4], src[5], src[6], src[7]]);
+            if len == 8 && code == SSL_REQUEST_CODE {
+                src.advance(8);
+                return Ok(Some(Self::SslRequest));
+            }
+
+            if len == 16 && code == CANCEL_REQUEST_CODE {
+                let pid = u32::from_be_bytes([src[8], src[9], src[10], src[11]]);
+                let secret = u32::from_be_bytes([src[12], src[13], src[14], src[15]]);
+                src.advance(16);
+                return Ok(Some(Self::CancelRequest {
+                    process_id: pid,
+                    secret_key: secret,
+                }));
+            }
+        }
+
         let mut ctx = DecodeContext::default();
-        ctx.awaiting_frontend_ssl = true;
+        ctx.awaiting_frontend_ssl = false;
+        ctx.awaiting_frontend_startup = true;
 
         match PgWireFrontendMessage::decode(src, &ctx) {
-            Ok(Some(PgWireFrontendMessage::SslNegotiation(
-                SslNegotiationMetaMessage::PostgresSsl(_),
-            ))) => Ok(Some(Self::SslRequest)),
-            Ok(Some(PgWireFrontendMessage::SslNegotiation(SslNegotiationMetaMessage::None))) => {
-                ctx.awaiting_frontend_ssl = false;
-                ctx.awaiting_frontend_startup = true;
-                match PgWireFrontendMessage::decode(src, &ctx) {
-                    Ok(Some(PgWireFrontendMessage::Startup(startup))) => {
-                        Ok(Some(Self::Startup(StartupMessage::from_pgwire(&startup))))
-                    }
-                    Ok(Some(PgWireFrontendMessage::CancelRequest(cancel))) => {
-                        let secret = cancel.secret_key.as_i32().unwrap_or(0) as u32;
-                        Ok(Some(Self::CancelRequest {
-                            process_id: cancel.pid as u32,
-                            secret_key: secret,
-                        }))
-                    }
-                    Ok(_) => Ok(None),
-                    Err(e) => Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        e.to_string(),
-                    )),
-                }
+            Ok(Some(PgWireFrontendMessage::Startup(startup))) => {
+                Ok(Some(Self::Startup(StartupMessage::from_pgwire(&startup))))
+            }
+            Ok(Some(PgWireFrontendMessage::CancelRequest(cancel))) => {
+                let secret = cancel.secret_key.as_i32().unwrap_or(0) as u32;
+                Ok(Some(Self::CancelRequest {
+                    process_id: cancel.pid as u32,
+                    secret_key: secret,
+                }))
             }
             Ok(_) => Ok(None),
             Err(e) => Err(std::io::Error::new(
@@ -200,51 +203,43 @@ impl FrontendMessage {
             return Ok(None);
         }
 
+        let mut ctx = DecodeContext::default();
+        ctx.awaiting_frontend_ssl = false;
+        ctx.awaiting_frontend_startup = false;
+
         match tag {
-            b'Q' => {
-                let ctx = DecodeContext::default();
-                match PgWireFrontendMessage::decode(src, &ctx) {
-                    Ok(Some(PgWireFrontendMessage::Query(q))) => Ok(Some(Self::Query(q.query))),
-                    Ok(_) => Ok(None),
-                    Err(e) => Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        e.to_string(),
-                    )),
-                }
-            }
-            b'X' => {
-                let ctx = DecodeContext::default();
-                match PgWireFrontendMessage::decode(src, &ctx) {
-                    Ok(Some(PgWireFrontendMessage::Terminate(_))) => Ok(Some(Self::Terminate)),
-                    Ok(_) => Ok(None),
-                    Err(e) => Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        e.to_string(),
-                    )),
-                }
-            }
-            b'S' => {
-                let ctx = DecodeContext::default();
-                match PgWireFrontendMessage::decode(src, &ctx) {
-                    Ok(Some(PgWireFrontendMessage::Sync(_))) => Ok(Some(Self::Sync)),
-                    Ok(_) => Ok(None),
-                    Err(e) => Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        e.to_string(),
-                    )),
-                }
-            }
-            b'H' => {
-                let ctx = DecodeContext::default();
-                match PgWireFrontendMessage::decode(src, &ctx) {
-                    Ok(Some(PgWireFrontendMessage::Flush(_))) => Ok(Some(Self::Flush)),
-                    Ok(_) => Ok(None),
-                    Err(e) => Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        e.to_string(),
-                    )),
-                }
-            }
+            b'Q' => match PgWireFrontendMessage::decode(src, &ctx) {
+                Ok(Some(PgWireFrontendMessage::Query(q))) => Ok(Some(Self::Query(q.query))),
+                Ok(_) => Ok(None),
+                Err(e) => Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    e.to_string(),
+                )),
+            },
+            b'X' => match PgWireFrontendMessage::decode(src, &ctx) {
+                Ok(Some(PgWireFrontendMessage::Terminate(_))) => Ok(Some(Self::Terminate)),
+                Ok(_) => Ok(None),
+                Err(e) => Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    e.to_string(),
+                )),
+            },
+            b'S' => match PgWireFrontendMessage::decode(src, &ctx) {
+                Ok(Some(PgWireFrontendMessage::Sync(_))) => Ok(Some(Self::Sync)),
+                Ok(_) => Ok(None),
+                Err(e) => Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    e.to_string(),
+                )),
+            },
+            b'H' => match PgWireFrontendMessage::decode(src, &ctx) {
+                Ok(Some(PgWireFrontendMessage::Flush(_))) => Ok(Some(Self::Flush)),
+                Ok(_) => Ok(None),
+                Err(e) => Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    e.to_string(),
+                )),
+            },
             _ => {
                 // Extended query packets or unknown tags: split frame and preserve raw payload
                 let mut frame = src.split_to(1 + len);

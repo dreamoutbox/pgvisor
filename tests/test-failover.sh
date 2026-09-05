@@ -30,12 +30,12 @@ run_proxy_sql() {
     local output=""
     for attempt in 1 2 3 4 5; do
         if command -v psql &> /dev/null; then
-            if output=$(PGPASSWORD="" psql -h "${PROXY_HOST}" -p "${PROXY_PORT}" -U postgres -d postgres -t -A -c "${query}" 2>&1); then
+            if output=$(PGPASSWORD="" PGCONNECT_TIMEOUT=5 timeout 15 psql -h "${PROXY_HOST}" -p "${PROXY_PORT}" -U postgres -d postgres -t -A -c "${query}" 2>&1); then
                 echo "${output}"
                 return 0
             fi
         else
-            if output=$(docker compose exec -T pgvisor-proxy psql -h localhost -p 5432 -U postgres -d postgres -t -A -c "${query}" 2>&1); then
+            if output=$(timeout 15 docker compose exec -T pgvisor-proxy psql -h localhost -p 5432 -U postgres -d postgres -t -A -c "${query}" 2>&1); then
                 echo "${output}"
                 return 0
             fi
