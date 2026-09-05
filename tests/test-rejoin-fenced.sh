@@ -4,25 +4,22 @@ set -euo pipefail
 # ==============================================================================
 # PgVisor: Rejoin Node Fenced & Replication Verification Test
 #
-# Investigates what happens when the original leader (pgvisor-node1) is stopped,
-# failover promotes a new leader, and pgvisor-node1 is restarted.
-#
-# Verifies:
-#   1. Initial topology & seed baseline data at T0 ('t0_initial').
-#   2. Stop pgvisor-node1 container to trigger failover.
-#   3. Wait for standby promotion (node2 or node3 becomes leader).
-#   4. Write post-failover data at T1 ('t1_post_failover') to the new leader.
-#   5. Confirm surviving standby replicates T1 data.
-#   6. Restart container pgvisor-node1.
-#   7. Verify node1 sidecar enters "fenced" status (split-brain guard).
-#   8. Verify node1 local PostgreSQL process state (stopped / unreachable).
-#   9. Verify leader's pg_stat_replication (node1 is NOT replicating).
-#  10. Verify web dashboard /nodes reports node1 as Fenced.
-#  11. Clean up test table.
+# Self-contained concurrent test profile.
 # ==============================================================================
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Pre-defined test port & project constants
+readonly TEST_PROXY_PORT=6032
+readonly TEST_DASHBOARD_PORT=8680
+readonly TEST_MINIO_PORT=9600
+readonly TEST_MINIO_CONSOLE=9601
+readonly PROJECT_NAME="pgvisor-rejoin-fenced"
+readonly COMPOSE_FILE="${REPO_ROOT}/composes/docker-compose.rejoin-fenced.yml"
+
 PROXY_HOST="${PGVISOR_HOST:-localhost}"
-PROXY_PORT="${PGVISOR_PORT:-5432}"
+PROXY_PORT="${PGVISOR_PORT:-${TEST_PROXY_PORT}}"
 TABLE_NAME="t_rejoin_test"
 ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
 AUTH_HEADER=()
@@ -30,9 +27,32 @@ if [ -n "${ADMIN_TOKEN}" ]; then
     AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
 fi
 
+NODE1_CONTAINER="pgvisor-rejoin-fenced-node1"
+NODE2_CONTAINER="pgvisor-rejoin-fenced-node2"
+NODE3_CONTAINER="pgvisor-rejoin-fenced-node3"
+PROXY_CONTAINER="pgvisor-rejoin-fenced-proxy"
+
+cleanup() {
+    echo "Tearing down cluster ${PROJECT_NAME}..."
+    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
 echo "========================================================="
 echo "  PgVisor Rejoin Node Fenced & Replication Test         "
+echo "  Project: ${PROJECT_NAME} | Port: ${PROXY_PORT}        "
 echo "========================================================="
+
+echo "[0/10] Starting isolated test cluster ${PROJECT_NAME}..."
+docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
+docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" up -d
+
+echo "Waiting for cluster nodes to report healthy..."
+until [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE1_CONTAINER}" 2>/dev/null)" = "healthy" ] && \
+      [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE2_CONTAINER}" 2>/dev/null)" = "healthy" ] && \
+      [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE3_CONTAINER}" 2>/dev/null)" = "healthy" ]; do
+    sleep 1
+done
 
 # Helper to execute SQL via PgVisor proxy
 run_proxy_sql() {
@@ -45,7 +65,7 @@ run_proxy_sql() {
                 return 0
             fi
         else
-            if output=$(timeout 15 docker compose exec -T pgvisor-proxy psql -h localhost -p 5432 -U postgres -d postgres -t -A -c "${query}" 2>&1); then
+            if output=$(timeout 15 docker exec -i "${PROXY_CONTAINER}" psql -h localhost -p 5432 -U postgres -d postgres -t -A -c "${query}" 2>&1); then
                 echo "${output}"
                 return 0
             fi
@@ -60,13 +80,13 @@ run_proxy_sql() {
 run_node_sql() {
     local container="$1"
     local query="$2"
-    docker compose exec -T "${container}" psql -U postgres -d postgres -t -A -c "${query}" 2>/dev/null || true
+    docker exec -i "${container}" psql -U postgres -d postgres -t -A -c "${query}" 2>/dev/null || true
 }
 
 # Helper to query sidecar control status
 get_sidecar_status() {
     local container="$1"
-    docker compose exec -T "${container}" curl -s http://localhost:8080/control/status 2>/dev/null || true
+    docker exec -i "${container}" curl -s http://localhost:8080/control/status 2>/dev/null || true
 }
 
 # Helper to extract JSON field using jq, python3, or grep
@@ -98,9 +118,9 @@ COUNT_T0=$(run_proxy_sql "SELECT count(*) FROM ${TABLE_NAME};")
 echo "+ Table seeded. Row count = ${COUNT_T0}"
 
 echo ""
-echo "[3/10] Stopping pgvisor-node1 container to simulate node crash..."
-docker compose stop pgvisor-node1 > /dev/null
-echo "+ Container pgvisor-node1 stopped."
+echo "[3/10] Stopping ${NODE1_CONTAINER} container to simulate node crash..."
+docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" stop pgvisor-node1 > /dev/null
+echo "+ Container ${NODE1_CONTAINER} stopped."
 
 echo ""
 echo "[4/10] Waiting for standby promotion to new leader..."
@@ -110,21 +130,21 @@ MAX_WAIT=20
 ELAPSED=0
 
 while [[ ${ELAPSED} -lt ${MAX_WAIT} ]]; do
-    ST2=$(get_sidecar_status "pgvisor-node2")
+    ST2=$(get_sidecar_status "${NODE2_CONTAINER}")
     ROLE2=$(echo "${ST2}" | json_extract "role")
     STATUS2=$(echo "${ST2}" | json_extract "status")
 
-    ST3=$(get_sidecar_status "pgvisor-node3")
+    ST3=$(get_sidecar_status "${NODE3_CONTAINER}")
     ROLE3=$(echo "${ST3}" | json_extract "role")
     STATUS3=$(echo "${ST3}" | json_extract "status")
 
     if [[ "${ROLE2}" == "leader" && "${STATUS2}" == "running" ]]; then
-        NEW_LEADER="pgvisor-node2"
-        SURVIVING_STANDBY="pgvisor-node3"
+        NEW_LEADER="${NODE2_CONTAINER}"
+        SURVIVING_STANDBY="${NODE3_CONTAINER}"
         break
     elif [[ "${ROLE3}" == "leader" && "${STATUS3}" == "running" ]]; then
-        NEW_LEADER="pgvisor-node3"
-        SURVIVING_STANDBY="pgvisor-node2"
+        NEW_LEADER="${NODE3_CONTAINER}"
+        SURVIVING_STANDBY="${NODE2_CONTAINER}"
         break
     fi
 
@@ -134,7 +154,7 @@ done
 
 if [[ -z "${NEW_LEADER}" ]]; then
     echo "ERROR: Election timed out. No standby promoted to leader."
-    docker compose start pgvisor-node1
+    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1
     exit 1
 fi
 echo "+ Standby promoted to leader: ${NEW_LEADER}"
@@ -142,7 +162,6 @@ echo "+ Surviving standby replica: ${SURVIVING_STANDBY}"
 
 echo ""
 echo "[5/10] Writing post-failover data at T1 ('t1_post_failover') to promoted leader..."
-# Give proxy topology discovery a moment to switch leader
 sleep 2
 run_proxy_sql "INSERT INTO ${TABLE_NAME} (val) VALUES ('t1_post_failover');" > /dev/null
 TOTAL_ROWS=$(run_proxy_sql "SELECT count(*) FROM ${TABLE_NAME};")
@@ -164,28 +183,27 @@ if [[ "${STANDBY_ROWS}" != "2" ]]; then
 fi
 
 echo ""
-echo "[7/10] Restarting pgvisor-node1 container and checking sidecar supervision state..."
-docker compose start pgvisor-node1 > /dev/null
+echo "[7/10] Restarting ${NODE1_CONTAINER} container and checking sidecar supervision state..."
+docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1 > /dev/null
 
-# Allow sidecar to boot and run split-brain discovery
 sleep 3
 
-NODE1_STATUS_JSON=$(get_sidecar_status "pgvisor-node1")
+NODE1_STATUS_JSON=$(get_sidecar_status "${NODE1_CONTAINER}")
 NODE1_ROLE=$(echo "${NODE1_STATUS_JSON}" | json_extract "role")
 NODE1_STATUS=$(echo "${NODE1_STATUS_JSON}" | json_extract "status")
 
-echo "+ pgvisor-node1 sidecar status: role='${NODE1_ROLE}', status='${NODE1_STATUS}'"
+echo "+ ${NODE1_CONTAINER} sidecar status: role='${NODE1_ROLE}', status='${NODE1_STATUS}'"
 echo "  Raw JSON: ${NODE1_STATUS_JSON}"
 
 if [[ "${NODE1_ROLE}" == "fenced" && "${NODE1_STATUS}" == "fenced" ]]; then
-    echo "+ CONFIRMED: pgvisor-node1 was automatically FENCED by split-brain guard."
+    echo "+ CONFIRMED: ${NODE1_CONTAINER} was automatically FENCED by split-brain guard."
 else
-    echo "ERROR: Unexpected status for pgvisor-node1: role=${NODE1_ROLE}, status=${NODE1_STATUS}"
+    echo "ERROR: Unexpected status for ${NODE1_CONTAINER}: role=${NODE1_ROLE}, status=${NODE1_STATUS}"
 fi
 
 echo ""
 echo "[8/10] Checking if local PostgreSQL on node1 is running or accepting queries..."
-if docker compose exec -T pgvisor-node1 psql -U postgres -d postgres -c "SELECT 1;" > /dev/null 2>&1; then
+if docker exec -i "${NODE1_CONTAINER}" psql -U postgres -d postgres -c "SELECT 1;" > /dev/null 2>&1; then
     echo "WARNING: Local PostgreSQL is running on node1!"
 else
     echo "+ CONFIRMED: PostgreSQL on node1 is completely STOPPED (pg_ctl stop -m immediate)."
@@ -206,7 +224,7 @@ fi
 
 echo ""
 echo "[10/10] Checking Web Dashboard display for node1..."
-DASHBOARD_NODE_STATUS=$(docker compose exec -T pgvisor-proxy curl -s ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} http://localhost:8080/nodes 2>/dev/null || true)
+DASHBOARD_NODE_STATUS=$(docker exec -i "${PROXY_CONTAINER}" curl -s ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} http://localhost:8080/nodes 2>/dev/null || true)
 if echo "${DASHBOARD_NODE_STATUS}" | grep -q "Fenced (Quorum Lost)"; then
     echo "+ CONFIRMED: Dashboard renders node1 as 'Fenced (Quorum Lost)'."
 fi

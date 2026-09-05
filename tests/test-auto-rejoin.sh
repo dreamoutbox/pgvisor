@@ -4,23 +4,23 @@ set -euo pipefail
 # ==============================================================================
 # PgVisor: Automatic Standby Rejoin Verification Test
 #
-# Verifies:
-#   1. Initial topology & baseline connectivity with seeded data ('t0_initial').
-#   2. Stop pgvisor-node1 container to simulate leader crash.
-#   3. Wait for standby promotion (node2 or node3 becomes leader).
-#   4. Write post-failover data at T1 ('t1_post_failover') through proxy.
-#   5. Confirm surviving standby replicates T1 data.
-#   6. Restart container pgvisor-node1.
-#   7. Wait for pgvisor-node1 to fence, auto-rejoin via pg_basebackup, and become running standby.
-#   8. Verify pgvisor-node1 PostgreSQL process is in recovery mode (pg_is_in_recovery=t).
-#   9. Verify pgvisor-node1 replicated all writes (count=2, contains 't0_initial' and 't1_post_failover').
-#  10. Verify leader's pg_stat_replication has 2 active streaming replication replicas.
-#  11. Verify Web Dashboard (/nodes) renders pgvisor-node1 as a healthy Standby.
-#  12. Clean up test table.
+# Self-contained concurrent test profile.
 # ==============================================================================
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Pre-defined test port & project constants
+readonly TEST_PROXY_PORT=5932
+readonly TEST_DASHBOARD_PORT=8580
+readonly TEST_MINIO_PORT=9500
+readonly TEST_MINIO_CONSOLE=9501
+readonly PROJECT_NAME="pgvisor-auto-rejoin"
+readonly COMPOSE_FILE="${REPO_ROOT}/composes/docker-compose.auto-rejoin.yml"
+
 PROXY_HOST="${PGVISOR_HOST:-localhost}"
-PROXY_PORT="${PGVISOR_PORT:-5432}"
+PROXY_PORT="${PGVISOR_PORT:-${TEST_PROXY_PORT}}"
+DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://localhost:${TEST_DASHBOARD_PORT}}"
 TABLE_NAME="t_auto_rejoin"
 ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
 AUTH_HEADER=()
@@ -28,9 +28,32 @@ if [ -n "${ADMIN_TOKEN}" ]; then
     AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
 fi
 
+NODE1_CONTAINER="pgvisor-auto-rejoin-node1"
+NODE2_CONTAINER="pgvisor-auto-rejoin-node2"
+NODE3_CONTAINER="pgvisor-auto-rejoin-node3"
+PROXY_CONTAINER="pgvisor-auto-rejoin-proxy"
+
+cleanup() {
+    echo "Tearing down cluster ${PROJECT_NAME}..."
+    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
 echo "========================================================="
 echo "  PgVisor Automatic Standby Rejoin Verification Test     "
+echo "  Project: ${PROJECT_NAME} | Port: ${PROXY_PORT}         "
 echo "========================================================="
+
+echo "[0/11] Starting isolated test cluster ${PROJECT_NAME}..."
+docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
+docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" up -d
+
+echo "Waiting for cluster nodes to report healthy..."
+until [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE1_CONTAINER}" 2>/dev/null)" = "healthy" ] && \
+      [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE2_CONTAINER}" 2>/dev/null)" = "healthy" ] && \
+      [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE3_CONTAINER}" 2>/dev/null)" = "healthy" ]; do
+    sleep 1
+done
 
 # Helper to execute SQL via PgVisor proxy
 run_proxy_sql() {
@@ -43,7 +66,7 @@ run_proxy_sql() {
                 return 0
             fi
         else
-            if output=$(timeout 15 docker compose exec -T pgvisor-proxy psql -h localhost -p 5432 -U postgres -d postgres -t -A -c "${query}" 2>&1); then
+            if output=$(timeout 15 docker exec -i "${PROXY_CONTAINER}" psql -h localhost -p 5432 -U postgres -d postgres -t -A -c "${query}" 2>&1); then
                 echo "${output}"
                 return 0
             fi
@@ -58,13 +81,13 @@ run_proxy_sql() {
 run_node_sql() {
     local container="$1"
     local query="$2"
-    docker compose exec -T "${container}" psql -U postgres -d postgres -t -A -c "${query}" 2>/dev/null || true
+    docker exec -i "${container}" psql -U postgres -d postgres -t -A -c "${query}" 2>/dev/null || true
 }
 
 # Helper to query sidecar control status
 get_sidecar_status() {
     local container="$1"
-    docker compose exec -T "${container}" curl -s http://localhost:8080/control/status 2>/dev/null || true
+    docker exec -i "${container}" curl -s http://localhost:8080/control/status 2>/dev/null || true
 }
 
 # Helper to extract JSON field using jq, python3, or grep
@@ -100,9 +123,9 @@ fi
 echo "+ Baseline row seeded. Table row count = ${COUNT_T0}"
 
 echo ""
-echo "[3/11] Stopping pgvisor-node1 container to simulate leader crash..."
-docker compose stop pgvisor-node1 > /dev/null
-echo "+ Container pgvisor-node1 stopped."
+echo "[3/11] Stopping ${NODE1_CONTAINER} container to simulate leader crash..."
+docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" stop pgvisor-node1 > /dev/null
+echo "+ Container ${NODE1_CONTAINER} stopped."
 
 echo ""
 echo "[4/11] Waiting for standby promotion to new leader..."
@@ -112,21 +135,21 @@ MAX_WAIT=20
 ELAPSED=0
 
 while [[ ${ELAPSED} -lt ${MAX_WAIT} ]]; do
-    ST2=$(get_sidecar_status "pgvisor-node2")
+    ST2=$(get_sidecar_status "${NODE2_CONTAINER}")
     ROLE2=$(echo "${ST2}" | json_extract "role")
     STATUS2=$(echo "${ST2}" | json_extract "status")
 
-    ST3=$(get_sidecar_status "pgvisor-node3")
+    ST3=$(get_sidecar_status "${NODE3_CONTAINER}")
     ROLE3=$(echo "${ST3}" | json_extract "role")
     STATUS3=$(echo "${ST3}" | json_extract "status")
 
     if [[ "${ROLE2}" == "leader" && "${STATUS2}" == "running" ]]; then
-        NEW_LEADER="pgvisor-node2"
-        SURVIVING_STANDBY="pgvisor-node3"
+        NEW_LEADER="${NODE2_CONTAINER}"
+        SURVIVING_STANDBY="${NODE3_CONTAINER}"
         break
     elif [[ "${ROLE3}" == "leader" && "${STATUS3}" == "running" ]]; then
-        NEW_LEADER="pgvisor-node3"
-        SURVIVING_STANDBY="pgvisor-node2"
+        NEW_LEADER="${NODE3_CONTAINER}"
+        SURVIVING_STANDBY="${NODE2_CONTAINER}"
         break
     fi
 
@@ -136,7 +159,7 @@ done
 
 if [[ -z "${NEW_LEADER}" ]]; then
     echo "ERROR: Standby promotion timed out."
-    docker compose start pgvisor-node1
+    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1
     exit 1
 fi
 echo "+ Standby promoted to leader: ${NEW_LEADER}"
@@ -149,7 +172,7 @@ run_proxy_sql "INSERT INTO ${TABLE_NAME} (val) VALUES ('t1_post_failover');" > /
 TOTAL_ROWS=$(run_proxy_sql "SELECT count(*) FROM ${TABLE_NAME};")
 if [[ "${TOTAL_ROWS}" != "2" ]]; then
     echo "ERROR: Expected 2 rows after post-failover write, got: ${TOTAL_ROWS}"
-    docker compose start pgvisor-node1
+    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1
     exit 1
 fi
 echo "+ Post-failover write completed via proxy. Total rows in leader = ${TOTAL_ROWS}"
@@ -167,21 +190,21 @@ done
 echo "+ Surviving standby verified with row count = ${STANDBY_ROWS}"
 
 echo ""
-echo "[7/11] Restarting pgvisor-node1 and waiting for auto-rejoin as standby..."
-docker compose start pgvisor-node1 > /dev/null
+echo "[7/11] Restarting ${NODE1_CONTAINER} and waiting for auto-rejoin as standby..."
+docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1 > /dev/null
 
 AUTO_REJOINED=false
 REJOIN_WAIT=30
 REJOIN_ELAPSED=0
 
 while [[ ${REJOIN_ELAPSED} -lt ${REJOIN_WAIT} ]]; do
-    N1_ST=$(get_sidecar_status "pgvisor-node1")
+    N1_ST=$(get_sidecar_status "${NODE1_CONTAINER}")
     N1_ROLE=$(echo "${N1_ST}" | json_extract "role")
     N1_STATUS=$(echo "${N1_ST}" | json_extract "status")
 
     if [[ "${N1_ROLE}" == "standby" && "${N1_STATUS}" == "running" ]]; then
         AUTO_REJOINED=true
-        echo "+ pgvisor-node1 successfully transitioned to role='standby', status='running'!"
+        echo "+ ${NODE1_CONTAINER} successfully transitioned to role='standby', status='running'!"
         break
     fi
 
@@ -190,25 +213,25 @@ while [[ ${REJOIN_ELAPSED} -lt ${REJOIN_WAIT} ]]; do
 done
 
 if [[ "${AUTO_REJOINED}" != "true" ]]; then
-    FINAL_ST=$(get_sidecar_status "pgvisor-node1")
-    echo "ERROR: pgvisor-node1 failed to auto-rejoin as standby within ${REJOIN_WAIT}s. Final state: ${FINAL_ST}"
+    FINAL_ST=$(get_sidecar_status "${NODE1_CONTAINER}")
+    echo "ERROR: ${NODE1_CONTAINER} failed to auto-rejoin as standby within ${REJOIN_WAIT}s. Final state: ${FINAL_ST}"
     exit 1
 fi
 
 echo ""
-echo "[8/11] Verifying pgvisor-node1 PostgreSQL recovery mode..."
-NODE1_RECOVERY=$(run_node_sql "pgvisor-node1" "SELECT pg_is_in_recovery();")
+echo "[8/11] Verifying ${NODE1_CONTAINER} PostgreSQL recovery mode..."
+NODE1_RECOVERY=$(run_node_sql "${NODE1_CONTAINER}" "SELECT pg_is_in_recovery();")
 if [[ "${NODE1_RECOVERY}" != "t" ]]; then
-    echo "ERROR: pgvisor-node1 expected to be in recovery mode (pg_is_in_recovery=t), got: ${NODE1_RECOVERY}"
+    echo "ERROR: ${NODE1_CONTAINER} expected to be in recovery mode (pg_is_in_recovery=t), got: ${NODE1_RECOVERY}"
     exit 1
 fi
-echo "+ Verified: pgvisor-node1 is running in PostgreSQL recovery/standby mode (pg_is_in_recovery=t)."
+echo "+ Verified: ${NODE1_CONTAINER} is running in PostgreSQL recovery/standby mode (pg_is_in_recovery=t)."
 
 echo ""
-echo "[9/11] Verifying replication data on rejoined pgvisor-node1..."
+echo "[9/11] Verifying replication data on rejoined ${NODE1_CONTAINER}..."
 NODE1_ROWS=""
 for i in 1 2 3 4 5; do
-    NODE1_ROWS=$(run_node_sql "pgvisor-node1" "SELECT count(*) FROM ${TABLE_NAME};")
+    NODE1_ROWS=$(run_node_sql "${NODE1_CONTAINER}" "SELECT count(*) FROM ${TABLE_NAME};")
     if [[ "${NODE1_ROWS}" == "2" ]]; then
         break
     fi
@@ -219,7 +242,7 @@ if [[ "${NODE1_ROWS}" != "2" ]]; then
     echo "ERROR: Expected 2 rows on rejoined node1, got: ${NODE1_ROWS}"
     exit 1
 fi
-echo "+ Verified: pgvisor-node1 replicated all data! Row count = ${NODE1_ROWS} (both 't0_initial' and 't1_post_failover' present)."
+echo "+ Verified: ${NODE1_CONTAINER} replicated all data! Row count = ${NODE1_ROWS} (both 't0_initial' and 't1_post_failover' present)."
 
 echo ""
 echo "[10/11] Verifying active WAL streaming replication connections on leader (${NEW_LEADER})..."
@@ -233,7 +256,7 @@ echo "+ Verified: BOTH standbys are actively streaming replication from the lead
 
 echo ""
 echo "[11/11] Verifying Web Dashboard node status..."
-DASHBOARD_HTML=$(docker compose exec -T pgvisor-proxy curl -s ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} http://localhost:8080/nodes 2>/dev/null || true)
+DASHBOARD_HTML=$(docker exec -i "${PROXY_CONTAINER}" curl -s ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} http://localhost:8080/nodes 2>/dev/null || true)
 if echo "${DASHBOARD_HTML}" | grep -q "Fenced (Quorum Lost)"; then
     echo "WARNING: Dashboard still displays a fenced badge."
 else

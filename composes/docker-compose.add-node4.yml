@@ -1,3 +1,4 @@
+# Auto-generated overlay for pgvisor-add-node testing
 volumes:
   node4_data:
 
@@ -6,8 +7,9 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: pgvisor-pgvisor-node1:latest
-    container_name: pgvisor-node4
+    image: pgvisor-test-node:latest
+    container_name: pgvisor-add-node-node4
+    mem_limit: 1g
     restart: "no"
     environment:
       POSTGRES_USER: postgres

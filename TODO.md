@@ -60,7 +60,7 @@
 
 - [x] web dashboard still show pg version as 16.3 after change to `postgres:18.6-bookworm` in Dockerfile.
 
-- [ ] make test run concurrent. use custom pre-define ports for each tests.
+- [x] make test run concurrent. use custom pre-define ports for each tests.
 
 - [ ] manually switchover new leader. dev can perform switchover in web dashboard.
 

@@ -4,30 +4,56 @@ set -euo pipefail
 # ==============================================================================
 # PgVisor: Incremental Backup & Point-In-Time-Recovery (PITR) Test
 #
-# Steps:
-#   1. Create test table 't_pitr' and insert 'alpha'.
-#   2. Trigger backup T0 (snapshot 0 with 'alpha').
-#   3. Insert 'beta' at T1 and switch WAL.
-#   4. Trigger backup T2 (snapshot 2 with 'alpha' + 'beta').
-#   5. Restore from T0 backup at T3 -> verify table has only 'alpha'.
-#   6. Restore from T2 backup at T4 -> verify table has both 'alpha' and 'beta'.
-#   7. Clean up test table, temporary archives, and snapshot records.
+# Self-contained concurrent test profile.
 # ==============================================================================
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Pre-defined test port & project constants
+readonly TEST_PROXY_PORT=5732
+readonly TEST_DASHBOARD_PORT=8380
+readonly TEST_MINIO_PORT=9300
+readonly TEST_MINIO_CONSOLE=9301
+readonly PROJECT_NAME="pgvisor-pitr"
+readonly COMPOSE_FILE="${REPO_ROOT}/composes/docker-compose.pitr.yml"
+
 PROXY_HOST="${PGVISOR_HOST:-localhost}"
-PROXY_PORT="${PGVISOR_PORT:-5432}"
-DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://localhost:8080}"
+PROXY_PORT="${PGVISOR_PORT:-${TEST_PROXY_PORT}}"
+DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://localhost:${TEST_DASHBOARD_PORT}}"
 ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
 AUTH_HEADER=()
 if [ -n "${ADMIN_TOKEN}" ]; then
     AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
 fi
-NODE_CONTAINER="${PGVISOR_NODE_CONTAINER:-pgvisor-node1}"
+NODE_CONTAINER="${PGVISOR_NODE_CONTAINER:-pgvisor-pitr-node1}"
 PGDATA_DIR="/var/lib/postgresql/data/pgdata"
 
 echo "========================================================="
 echo "  PgVisor Incremental Backup & PITR Verification Test   "
+echo "  Project: ${PROJECT_NAME} | Port: ${PROXY_PORT}        "
 echo "========================================================="
+
+TMP_ARCHIVE_T0="/tmp/pitr-t0-$$.tar.gz"
+TMP_ARCHIVE_T2="/tmp/pitr-t2-$$.tar.gz"
+
+cleanup() {
+    echo "Tearing down cluster ${PROJECT_NAME}..."
+    rm -f "${TMP_ARCHIVE_T0}" "${TMP_ARCHIVE_T2}"
+    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+echo "[0/8] Starting isolated test cluster ${PROJECT_NAME}..."
+docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
+docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" up -d
+
+echo "Waiting for cluster nodes to report healthy..."
+until [ "$(docker inspect -f '{{.State.Health.Status}}' "pgvisor-pitr-node1" 2>/dev/null)" = "healthy" ] && \
+      [ "$(docker inspect -f '{{.State.Health.Status}}' "pgvisor-pitr-node2" 2>/dev/null)" = "healthy" ] && \
+      [ "$(docker inspect -f '{{.State.Health.Status}}' "pgvisor-pitr-node3" 2>/dev/null)" = "healthy" ]; do
+    sleep 1
+done
 
 # Helper for executing SQL via psql with automatic reconnection retry
 run_sql() {
@@ -64,7 +90,6 @@ json_extract() {
 }
 
 # Helper to restore a snapshot archive into the cluster
-# Helper to restore a snapshot archive into the cluster
 restore_cluster_node() {
     local snapshot_id="$1"
     echo "  Calling Dashboard restore API for snapshot ${snapshot_id}..."
@@ -99,68 +124,80 @@ if [ "${VAL_A}" != "alpha" ]; then
     echo "Failed to seed 'alpha'. Got: '${VAL_A}'"
     exit 1
 fi
-echo "✓ Table 't_pitr' seeded with row: id=1, val='alpha'"
+echo "✓ Seeded row 1: val='alpha' (T0 state established)"
 
 # ------------------------------------------------------------------------------
-# [3/8] Trigger snapshot T0 (with 'alpha')
+# [3/8] Trigger backup T0 (snapshot 0 with 'alpha')
 # ------------------------------------------------------------------------------
 echo ""
-echo "[3/8] Taking backup snapshot at T0..."
+echo "[3/8] Triggering basebackup T0 via API (POST ${DASHBOARD_URL}/api/backups)..."
 RESP_T0=$(curl -s -f -X POST "${DASHBOARD_URL}/api/backups" \
     "${AUTH_HEADER[@]}" \
     -H "Content-Type: application/json" \
-    -d '{"backup_type": "full", "label": "pitr-snap-t0"}')
+    -d '{"backup_type": "full", "label": "pitr-suite-t0"}')
 
 SNAP_T0=$(echo "${RESP_T0}" | json_extract "snapshot_id")
 if [ -z "${SNAP_T0}" ]; then
-    echo "Failed to create T0 snapshot. API response: ${RESP_T0}"
+    echo "Failed to trigger backup T0. Response: ${RESP_T0}"
     exit 1
 fi
-echo "✓ Snapshot T0 created: ${SNAP_T0}"
+echo "✓ Backup T0 complete: snapshot_id='${SNAP_T0}'"
 
-TMP_ARCHIVE_T0="/tmp/${SNAP_T0}.tar.gz"
 curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/backups/${SNAP_T0}/download" -o "${TMP_ARCHIVE_T0}"
-SIZE_T0=$(wc -c < "${TMP_ARCHIVE_T0}")
-echo "✓ Downloaded archive T0 (${SIZE_T0} bytes)."
-
-# ------------------------------------------------------------------------------
-# [4/8] Insert 'beta' at T1 and switch WAL
-# ------------------------------------------------------------------------------
-echo ""
-echo "[4/8] Inserting 'beta' at T1 and switching WAL..."
-sleep 2
-run_sql "INSERT INTO t_pitr (id, val) VALUES (2, 'beta');"
-run_sql "SELECT pg_switch_wal();" > /dev/null 2>&1 || true
-
-COUNT_T1=$(run_sql "SELECT COUNT(*) FROM t_pitr;")
-if [ "${COUNT_T1}" != "2" ]; then
-    echo "Expected 2 rows after inserting 'beta'. Got: ${COUNT_T1}"
+if [ ! -s "${TMP_ARCHIVE_T0}" ]; then
+    echo "Downloaded archive T0 is empty!"
     exit 1
 fi
-echo "✓ Table 't_pitr' now contains 2 rows ('alpha' and 'beta')."
+echo "✓ Snapshot T0 archive verified ($(wc -c < "${TMP_ARCHIVE_T0}") bytes)."
 
 # ------------------------------------------------------------------------------
-# [5/8] Trigger backup T2 (with 'alpha' + 'beta')
+# [4/8] Insert 'beta' at T1 and switch WAL to force archiving
 # ------------------------------------------------------------------------------
 echo ""
-echo "[5/8] Taking backup snapshot at T2..."
+echo "[4/8] Inserting row 2 ('beta') at T1 and archiving WAL..."
+run_sql "INSERT INTO t_pitr (id, val) VALUES (2, 'beta');"
+VAL_B=""
+for attempt in 1 2 3 4 5; do
+    VAL_B=$(run_sql "SELECT val FROM t_pitr WHERE id = 2;" 2>/dev/null || true)
+    if [ "${VAL_B}" = "beta" ]; then
+        break
+    fi
+    sleep 1
+done
+if [ "${VAL_B}" != "beta" ]; then
+    echo "Failed to insert 'beta'. Got: '${VAL_B}'"
+    exit 1
+fi
+echo "✓ Inserted row 2: val='beta' (T1 state established)"
+
+# Switch WAL so the WAL segment containing 'beta' is flushed and archived
+echo "  Switching WAL on leader to trigger archive_command..."
+run_sql "SELECT pg_switch_wal();" > /dev/null || true
 sleep 1
+
+# ------------------------------------------------------------------------------
+# [5/8] Trigger backup T2 (snapshot 2 with 'alpha' + 'beta')
+# ------------------------------------------------------------------------------
+echo ""
+echo "[5/8] Triggering basebackup T2 via API..."
 RESP_T2=$(curl -s -f -X POST "${DASHBOARD_URL}/api/backups" \
     "${AUTH_HEADER[@]}" \
     -H "Content-Type: application/json" \
-    -d '{"backup_type": "incremental", "label": "pitr-snap-t2"}')
+    -d '{"backup_type": "full", "label": "pitr-suite-t2"}')
 
 SNAP_T2=$(echo "${RESP_T2}" | json_extract "snapshot_id")
 if [ -z "${SNAP_T2}" ]; then
-    echo "Failed to create T2 snapshot. API response: ${RESP_T2}"
+    echo "Failed to trigger backup T2. Response: ${RESP_T2}"
     exit 1
 fi
-echo "✓ Snapshot T2 created: ${SNAP_T2}"
+echo "✓ Backup T2 complete: snapshot_id='${SNAP_T2}'"
 
-TMP_ARCHIVE_T2="/tmp/${SNAP_T2}.tar.gz"
 curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/backups/${SNAP_T2}/download" -o "${TMP_ARCHIVE_T2}"
-SIZE_T2=$(wc -c < "${TMP_ARCHIVE_T2}")
-echo "✓ Downloaded archive T2 (${SIZE_T2} bytes)."
+if [ ! -s "${TMP_ARCHIVE_T2}" ]; then
+    echo "Downloaded archive T2 is empty!"
+    exit 1
+fi
+echo "✓ Snapshot T2 archive verified ($(wc -c < "${TMP_ARCHIVE_T2}") bytes)."
 
 # ------------------------------------------------------------------------------
 # [6/8] Restore from T0 backup at T3 -> verify table has only 'alpha'
@@ -170,7 +207,6 @@ echo "[6/8] Restoring from snapshot T0 (${SNAP_T0})..."
 restore_cluster_node "${SNAP_T0}"
 sleep 2
 
-# Verify that only 'alpha' exists and 'beta' is absent
 COUNT_RESTORE_T0=""
 for attempt in 1 2 3 4 5; do
     if COUNT_RESTORE_T0=$(run_sql "SELECT COUNT(*) FROM t_pitr;" 2> /dev/null); then

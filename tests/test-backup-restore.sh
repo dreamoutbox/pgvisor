@@ -4,30 +4,55 @@ set -euo pipefail
 # ==============================================================================
 # PgVisor: Full Basebackup and Restore Verification Test
 #
-# Steps:
-#   1. Create test table 't1' and insert 'alpha'.
-#   2. Trigger full physical basebackup via dashboard API (T0).
-#   3. Verify backup is listed in API and download archive.
-#   4. Drop table 't1' to simulate accidental drop / disaster.
-#   5. Restore from snapshot archive into cluster node (T1).
-#   6. Verify table 't1' and 'alpha' are fully recovered.
-#   7. Clean up test table and temporary artifacts.
+# Self-contained concurrent test profile.
 # ==============================================================================
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Pre-defined test port & project constants
+readonly TEST_PROXY_PORT=5632
+readonly TEST_DASHBOARD_PORT=8280
+readonly TEST_MINIO_PORT=9200
+readonly TEST_MINIO_CONSOLE=9201
+readonly PROJECT_NAME="pgvisor-backup-restore"
+readonly COMPOSE_FILE="${REPO_ROOT}/composes/docker-compose.backup-restore.yml"
+
 PROXY_HOST="${PGVISOR_HOST:-localhost}"
-PROXY_PORT="${PGVISOR_PORT:-5432}"
-DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://localhost:8080}"
+PROXY_PORT="${PGVISOR_PORT:-${TEST_PROXY_PORT}}"
+DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://localhost:${TEST_DASHBOARD_PORT}}"
 ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
 AUTH_HEADER=()
 if [ -n "${ADMIN_TOKEN}" ]; then
     AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
 fi
-NODE_CONTAINER="${PGVISOR_NODE_CONTAINER:-pgvisor-node1}"
+NODE_CONTAINER="${PGVISOR_NODE_CONTAINER:-pgvisor-backup-restore-node1}"
 PGDATA_DIR="/var/lib/postgresql/data/pgdata"
 
 echo "========================================================="
 echo "  PgVisor Full Basebackup & Restore Verification Test    "
+echo "  Project: ${PROJECT_NAME} | Port: ${PROXY_PORT}         "
 echo "========================================================="
+
+TMP_ARCHIVE="/tmp/backup-restore-$$.tar.gz"
+
+cleanup() {
+    echo "Tearing down cluster ${PROJECT_NAME}..."
+    rm -f "${TMP_ARCHIVE}"
+    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+echo "[0/7] Starting isolated test cluster ${PROJECT_NAME}..."
+docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
+docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" up -d
+
+echo "Waiting for cluster nodes to report healthy..."
+until [ "$(docker inspect -f '{{.State.Health.Status}}' "pgvisor-backup-restore-node1" 2>/dev/null)" = "healthy" ] && \
+      [ "$(docker inspect -f '{{.State.Health.Status}}' "pgvisor-backup-restore-node2" 2>/dev/null)" = "healthy" ] && \
+      [ "$(docker inspect -f '{{.State.Health.Status}}' "pgvisor-backup-restore-node3" 2>/dev/null)" = "healthy" ]; do
+    sleep 1
+done
 
 # Helper for executing SQL via psql with automatic reconnection retry
 run_sql() {
@@ -114,7 +139,6 @@ if ! echo "${BACKUP_LIST}" | grep -q "${SNAPSHOT_ID}"; then
     exit 1
 fi
 
-TMP_ARCHIVE="/tmp/${SNAPSHOT_ID}.tar.gz"
 curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/backups/${SNAPSHOT_ID}/download" -o "${TMP_ARCHIVE}"
 if [ ! -s "${TMP_ARCHIVE}" ]; then
     echo "Downloaded archive is empty!"
@@ -142,7 +166,6 @@ echo "✓ Table 't1' dropped successfully (verified missing)."
 echo ""
 echo "[6/7] Restoring snapshot ${SNAPSHOT_ID} into cluster node '${NODE_CONTAINER}'..."
 
-# Test the dashboard restore API endpoint
 RESTORE_RESP=$(curl -s -f -X POST "${DASHBOARD_URL}/api/backups/${SNAPSHOT_ID}/restore" \
     "${AUTH_HEADER[@]}" \
     -H "Content-Type: application/json" \
@@ -155,10 +178,8 @@ echo "✓ Cluster leader restored and standbys re-synchronized automatically via
 # ------------------------------------------------------------------------------
 echo ""
 echo "[7/7] Verifying recovered data in 't1' via PgVisor proxy..."
-# Allow brief moment for proxy pool connections to settle after node restarts
 sleep 2
 
-# Retry query up to 5 times to handle proxy pool reconnection
 RECOVERED_VAL=""
 for attempt in {1..5}; do
     if RECOVERED_VAL=$(run_sql "SELECT val FROM t1 WHERE id = 1;" 2> /dev/null); then
@@ -174,7 +195,6 @@ if [ "${RECOVERED_VAL}" != "alpha" ]; then
 fi
 echo "✓ Successfully recovered data: id=1, val='${RECOVERED_VAL}'"
 
-# Clean up
 echo ""
 echo "Cleaning up test artifacts..."
 run_sql "DROP TABLE IF EXISTS t1;" > /dev/null 2>&1 || true

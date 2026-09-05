@@ -4,25 +4,51 @@ set -euo pipefail
 # ==============================================================================
 # PgVisor: High Availability Failover & Auto-Promotion Verification Test
 #
-# Steps:
-#   1. Verify initial cluster connectivity and baseline topology.
-#   2. Create test table 't_failover' and insert baseline record 'alpha_t0'.
-#   3. Simulate leader failure: stop pgvisor-node1.
-#   4. Wait for consensus election and standby promotion (node2 or node3).
-#   5. Verify write availability through PgVisor proxy without client reconfiguration.
-#   6. Verify replication consistency on surviving standby replica.
-#   7. Restart pgvisor-node1 and verify split-brain prevention.
-#   8. Clean up test table.
+# Self-contained concurrent test profile.
 # ==============================================================================
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Pre-defined test port & project constants
+readonly TEST_PROXY_PORT=5832
+readonly TEST_DASHBOARD_PORT=8480
+readonly TEST_MINIO_PORT=9400
+readonly TEST_MINIO_CONSOLE=9401
+readonly PROJECT_NAME="pgvisor-failover"
+readonly COMPOSE_FILE="${REPO_ROOT}/composes/docker-compose.failover.yml"
+
 PROXY_HOST="${PGVISOR_HOST:-localhost}"
-PROXY_PORT="${PGVISOR_PORT:-5432}"
-DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://localhost:8080}"
+PROXY_PORT="${PGVISOR_PORT:-${TEST_PROXY_PORT}}"
+DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://localhost:${TEST_DASHBOARD_PORT}}"
 TABLE_NAME="t_failover"
+
+NODE1_CONTAINER="pgvisor-failover-node1"
+NODE2_CONTAINER="pgvisor-failover-node2"
+NODE3_CONTAINER="pgvisor-failover-node3"
+PROXY_CONTAINER="pgvisor-failover-proxy"
+
+cleanup() {
+    echo "Tearing down cluster ${PROJECT_NAME}..."
+    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
 echo "========================================================="
 echo "  PgVisor High Availability Failover Verification Test   "
+echo "  Project: ${PROJECT_NAME} | Port: ${PROXY_PORT}         "
 echo "========================================================="
+
+echo "[0/8] Starting isolated test cluster ${PROJECT_NAME}..."
+docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
+docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" up -d
+
+echo "Waiting for cluster nodes to report healthy..."
+until [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE1_CONTAINER}" 2>/dev/null)" = "healthy" ] && \
+      [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE2_CONTAINER}" 2>/dev/null)" = "healthy" ] && \
+      [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE3_CONTAINER}" 2>/dev/null)" = "healthy" ]; do
+    sleep 1
+done
 
 # Helper to execute SQL via PgVisor proxy
 run_proxy_sql() {
@@ -35,7 +61,7 @@ run_proxy_sql() {
                 return 0
             fi
         else
-            if output=$(timeout 15 docker compose exec -T pgvisor-proxy psql -h localhost -p 5432 -U postgres -d postgres -t -A -c "${query}" 2>&1); then
+            if output=$(timeout 15 docker exec -i "${PROXY_CONTAINER}" psql -h localhost -p 5432 -U postgres -d postgres -t -A -c "${query}" 2>&1); then
                 echo "${output}"
                 return 0
             fi
@@ -50,13 +76,13 @@ run_proxy_sql() {
 run_node_sql() {
     local container="$1"
     local query="$2"
-    docker compose exec -T "${container}" psql -U postgres -d postgres -t -A -c "${query}" 2>/dev/null || true
+    docker exec -i "${container}" psql -U postgres -d postgres -t -A -c "${query}" 2>/dev/null || true
 }
 
 # Helper to query sidecar control status
 get_sidecar_status() {
     local container="$1"
-    docker compose exec -T "${container}" curl -s http://localhost:8080/control/status 2>/dev/null || true
+    docker exec -i "${container}" curl -s http://localhost:8080/control/status 2>/dev/null || true
 }
 
 # Helper to extract JSON field using jq, python3, or grep
@@ -80,12 +106,12 @@ fi
 echo "+ PostgreSQL cluster proxy is reachable."
 
 # Check initial node roles
-NODE1_RECOVERY=$(run_node_sql "pgvisor-node1" "SELECT pg_is_in_recovery();")
-NODE2_RECOVERY=$(run_node_sql "pgvisor-node2" "SELECT pg_is_in_recovery();")
-NODE3_RECOVERY=$(run_node_sql "pgvisor-node3" "SELECT pg_is_in_recovery();")
+NODE1_RECOVERY=$(run_node_sql "${NODE1_CONTAINER}" "SELECT pg_is_in_recovery();")
+NODE2_RECOVERY=$(run_node_sql "${NODE2_CONTAINER}" "SELECT pg_is_in_recovery();")
+NODE3_RECOVERY=$(run_node_sql "${NODE3_CONTAINER}" "SELECT pg_is_in_recovery();")
 
 if [[ "${NODE1_RECOVERY}" != "f" ]]; then
-    echo "ERROR: pgvisor-node1 is expected to be read-write primary (pg_is_in_recovery=f), got: ${NODE1_RECOVERY}"
+    echo "ERROR: ${NODE1_CONTAINER} is expected to be read-write primary (pg_is_in_recovery=f), got: ${NODE1_RECOVERY}"
     exit 1
 fi
 if [[ "${NODE2_RECOVERY}" != "t" || "${NODE3_RECOVERY}" != "t" ]]; then
@@ -108,9 +134,9 @@ fi
 echo "+ Baseline row seeded via proxy: val='alpha_t0'"
 
 echo ""
-echo "[3/8] Simulating leader failure: stopping container pgvisor-node1..."
-docker compose stop pgvisor-node1
-echo "+ Container pgvisor-node1 stopped."
+echo "[3/8] Simulating leader failure: stopping container ${NODE1_CONTAINER}..."
+docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" stop pgvisor-node1
+echo "+ Container ${NODE1_CONTAINER} stopped."
 
 echo ""
 echo "[4/8] Waiting for consensus election and standby promotion..."
@@ -121,22 +147,22 @@ ELAPSED=0
 
 while [[ ${ELAPSED} -lt ${MAX_WAIT} ]]; do
     # Check node2
-    ST2=$(get_sidecar_status "pgvisor-node2")
+    ST2=$(get_sidecar_status "${NODE2_CONTAINER}")
     ROLE2=$(echo "${ST2}" | json_extract "role")
     STATUS2=$(echo "${ST2}" | json_extract "status")
 
     # Check node3
-    ST3=$(get_sidecar_status "pgvisor-node3")
+    ST3=$(get_sidecar_status "${NODE3_CONTAINER}")
     ROLE3=$(echo "${ST3}" | json_extract "role")
     STATUS3=$(echo "${ST3}" | json_extract "status")
 
     if [[ "${ROLE2}" == "leader" && "${STATUS2}" == "running" ]]; then
-        NEW_LEADER="pgvisor-node2"
-        SURVIVING_STANDBY="pgvisor-node3"
+        NEW_LEADER="${NODE2_CONTAINER}"
+        SURVIVING_STANDBY="${NODE3_CONTAINER}"
         break
     elif [[ "${ROLE3}" == "leader" && "${STATUS3}" == "running" ]]; then
-        NEW_LEADER="pgvisor-node3"
-        SURVIVING_STANDBY="pgvisor-node2"
+        NEW_LEADER="${NODE3_CONTAINER}"
+        SURVIVING_STANDBY="${NODE2_CONTAINER}"
         break
     fi
 
@@ -148,7 +174,7 @@ if [[ -z "${NEW_LEADER}" ]]; then
     echo "ERROR: Election timeout exceeded (${MAX_WAIT}s). Neither node2 nor node3 was promoted."
     echo "Node2 status: ${ST2:-none}"
     echo "Node3 status: ${ST3:-none}"
-    docker compose start pgvisor-node1
+    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1
     exit 1
 fi
 
@@ -158,7 +184,7 @@ echo "+ Failover successful! Promoted node: ${NEW_LEADER} (elapsed: ${ELAPSED}s)
 NEW_LEADER_RECOVERY=$(run_node_sql "${NEW_LEADER}" "SELECT pg_is_in_recovery();")
 if [[ "${NEW_LEADER_RECOVERY}" != "f" ]]; then
     echo "ERROR: Promoted leader ${NEW_LEADER} pg_is_in_recovery should be 'f', got: ${NEW_LEADER_RECOVERY}"
-    docker compose start pgvisor-node1
+    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1
     exit 1
 fi
 echo "+ PostgreSQL on ${NEW_LEADER} confirmed in read-write mode (pg_is_in_recovery=f)."
@@ -176,21 +202,20 @@ done
 
 if [[ "${WRITE_SUCCESS}" != "true" ]]; then
     echo "ERROR: Failed to write to cluster through proxy following failover"
-    docker compose start pgvisor-node1
+    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1
     exit 1
 fi
 
 TOTAL_ROWS=$(run_proxy_sql "SELECT count(*) FROM ${TABLE_NAME};")
 if [[ "${TOTAL_ROWS}" != "2" ]]; then
     echo "ERROR: Expected 2 rows after failover write, got: ${TOTAL_ROWS}"
-    docker compose start pgvisor-node1
+    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1
     exit 1
 fi
 echo "+ Write succeeded through proxy port ${PROXY_PORT}! Table now contains 2 rows ('alpha_t0', 'beta_t1')."
 
 echo ""
 echo "[6/8] Verifying replication on surviving standby (${SURVIVING_STANDBY})..."
-# Allow a brief moment for streaming replication catch-up
 STANDBY_ROWS=""
 for attempt in 1 2 3 4 5; do
     STANDBY_ROWS=$(run_node_sql "${SURVIVING_STANDBY}" "SELECT count(*) FROM ${TABLE_NAME};")
@@ -208,13 +233,12 @@ fi
 
 echo ""
 echo "[7/8] Restarting pgvisor-node1 and verifying split-brain prevention..."
-docker start pgvisor-node1 > /dev/null || docker compose start pgvisor-node1 > /dev/null
+docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1
 
-# Wait for node1 to start
 sleep 3
-NODE1_POST_RECOVERY=$(run_node_sql "pgvisor-node1" "SELECT pg_is_in_recovery();")
+NODE1_POST_RECOVERY=$(run_node_sql "${NODE1_CONTAINER}" "SELECT pg_is_in_recovery();")
 echo "+ Node1 restarted. Recovery status: ${NODE1_POST_RECOVERY:-unreachable}"
-# Verify active leader is still the promoted leader
+
 ACTIVE_LEADER_RECOVERY=$(run_node_sql "${NEW_LEADER}" "SELECT pg_is_in_recovery();")
 if [[ "${ACTIVE_LEADER_RECOVERY}" != "f" ]]; then
     echo "ERROR: Promoted leader ${NEW_LEADER} lost leadership after node1 restart!"
