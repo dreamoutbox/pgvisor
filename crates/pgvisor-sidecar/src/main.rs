@@ -26,6 +26,7 @@ struct SidecarState {
     backup_manager: Option<Arc<BackupManager>>,
     node_id: u64,
     role: Arc<RwLock<String>>,
+    pg_version: String,
 }
 
 #[derive(Deserialize)]
@@ -50,6 +51,7 @@ struct StatusResponse {
     role: String,
     status: String,
     child_pid: u32,
+    pg_version: String,
 }
 
 async fn handle_status(State(state): State<SidecarState>) -> impl IntoResponse {
@@ -65,13 +67,17 @@ async fn handle_status(State(state): State<SidecarState>) -> impl IntoResponse {
         role: current_role,
         status: status_str.to_string(),
         child_pid: state.supervisor.child_pid(),
+        pg_version: state.pg_version.clone(),
     })
 }
 
 async fn handle_promote(
     State(state): State<SidecarState>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    info!(node_id = state.node_id, "Handling manual/automated promotion request");
+    info!(
+        node_id = state.node_id,
+        "Handling manual/automated promotion request"
+    );
     state.supervisor.promote().await.map_err(|e| {
         (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -126,7 +132,10 @@ async fn handle_repoint(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let current_role = state.role.read().await.clone();
     if current_role == "leader" {
-        info!(node_id = state.node_id, "Ignoring repoint request because node is currently leader");
+        info!(
+            node_id = state.node_id,
+            "Ignoring repoint request because node is currently leader"
+        );
         return Ok(Json(serde_json::json!({
             "status": "ok",
             "message": "Node is leader, ignoring repoint",
@@ -135,15 +144,24 @@ async fn handle_repoint(
         })));
     }
 
-    info!(node_id = state.node_id, conninfo = %payload.primary_conninfo, "Handling standby re-point request");
-    state.supervisor.repoint_primary(&payload.primary_conninfo).await.map_err(|e| {
-        (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": format!("Repoint failed: {}", e)
-            })),
-        )
-    })?;
+    let mut target_conninfo = payload.primary_conninfo.clone();
+    if !target_conninfo.contains("application_name=") {
+        target_conninfo.push_str(&format!(" application_name=pgvisor-node{}", state.node_id));
+    }
+
+    info!(node_id = state.node_id, conninfo = %target_conninfo, "Handling standby re-point request");
+    state
+        .supervisor
+        .repoint_primary(&target_conninfo)
+        .await
+        .map_err(|e| {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Repoint failed: {}", e)
+                })),
+            )
+        })?;
 
     {
         let mut r = state.role.write().await;
@@ -172,17 +190,14 @@ async fn handle_restore(
     })?;
 
     info!(snapshot_id = %payload.snapshot_id, "Fetching snapshot archive from storage");
-    let (_meta, tar_bytes) = bm
-        .get_basebackup(&payload.snapshot_id)
-        .await
-        .map_err(|e| {
-            (
-                axum::http::StatusCode::NOT_FOUND,
-                Json(serde_json::json!({
-                    "error": format!("Failed to fetch snapshot {}: {}", payload.snapshot_id, e)
-                })),
-            )
-        })?;
+    let (_meta, tar_bytes) = bm.get_basebackup(&payload.snapshot_id).await.map_err(|e| {
+        (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("Failed to fetch snapshot {}: {}", payload.snapshot_id, e)
+            })),
+        )
+    })?;
 
     info!(snapshot_id = %payload.snapshot_id, bytes = tar_bytes.len(), "Restoring PostgreSQL data directory");
     state
@@ -213,7 +228,7 @@ async fn handle_resync(
     State(state): State<SidecarState>,
     payload: Option<Json<ResyncPayload>>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let primary_conninfo = payload
+    let mut primary_conninfo = payload
         .and_then(|p| p.primary_conninfo.clone())
         .or_else(|| state.config.primary_conninfo.clone())
         .ok_or_else(|| {
@@ -224,6 +239,10 @@ async fn handle_resync(
                 })),
             )
         })?;
+
+    if !primary_conninfo.contains("application_name=") {
+        primary_conninfo.push_str(&format!(" application_name=pgvisor-node{}", state.node_id));
+    }
 
     info!(%primary_conninfo, "Executing standby re-sync from primary");
     state
@@ -250,6 +269,33 @@ async fn handle_resync(
     })))
 }
 
+async fn detect_postgres_version(data_dir: &std::path::Path) -> String {
+    if let Ok(output) = tokio::process::Command::new("postgres")
+        .arg("-V")
+        .output()
+        .await
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for part in stdout.split_whitespace() {
+                let trimmed = part.trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
+                if trimmed.contains('.') && trimmed.chars().all(|c| c.is_ascii_digit() || c == '.')
+                {
+                    return trimmed.to_string();
+                }
+            }
+        }
+    }
+    let pg_version_file = data_dir.join("PG_VERSION");
+    if let Ok(content) = tokio::fs::read_to_string(pg_version_file).await {
+        let trimmed = content.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+    "18.6".to_string()
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -274,10 +320,16 @@ async fn main() -> Result<()> {
         .unwrap_or(1);
 
     let role = env::var("PGVISOR_ROLE").unwrap_or_else(|_| "leader".to_string());
-    let cluster_id = env::var("PGVISOR_CLUSTER_ID").unwrap_or_else(|_| "pgvisor-cluster".to_string());
+    let cluster_id =
+        env::var("PGVISOR_CLUSTER_ID").unwrap_or_else(|_| "pgvisor-cluster".to_string());
 
     let superuser = env::var("POSTGRES_USER").unwrap_or_else(|_| "postgres".to_string());
-    let primary_conninfo = env::var("PRIMARY_CONNINFO").ok();
+    let mut primary_conninfo = env::var("PRIMARY_CONNINFO").ok();
+    if let Some(conn) = primary_conninfo.as_mut() {
+        if !conn.contains("application_name=") {
+            conn.push_str(&format!(" application_name=pgvisor-node{}", node_id));
+        }
+    }
 
     info!(?data_dir, port, %superuser, node_id, %role, "pgvisor-sidecar supervisor starting up");
 
@@ -293,6 +345,9 @@ async fn main() -> Result<()> {
     };
 
     supervisor.start(&config).await?;
+
+    let pg_version = detect_postgres_version(&data_dir).await;
+    info!(%pg_version, "Detected PostgreSQL server version");
 
     // Initialize OpenDAL storage operator for backup management if configured
     let s3_endpoint = env::var("S3_ENDPOINT").unwrap_or_else(|_| "http://minio:9000".to_string());
@@ -324,6 +379,7 @@ async fn main() -> Result<()> {
         backup_manager,
         node_id,
         role: role_ref.clone(),
+        pg_version,
     };
 
     let control_port: u16 = env::var("PGVISOR_CONTROL_PORT")
@@ -390,8 +446,8 @@ async fn main() -> Result<()> {
                             if let Ok(st) = resp.json::<StatusResponse>().await {
                                 if st.role == "leader" && st.status == "running" {
                                     let conninfo = format!(
-                                        "host=pgvisor-node{} port=5432 user=postgres",
-                                        st.node_id
+                                        "host=pgvisor-node{} port=5432 user=postgres application_name=pgvisor-node{}",
+                                        st.node_id, monitor_state.node_id
                                     );
                                     active_leader = Some((st.node_id, conninfo));
                                     break;
@@ -410,7 +466,11 @@ async fn main() -> Result<()> {
                         let mut standby_config = monitor_state.config.clone();
                         standby_config.primary_conninfo = Some(conninfo.clone());
 
-                        match monitor_state.supervisor.resync_from_primary(&conninfo, &standby_config).await {
+                        match monitor_state
+                            .supervisor
+                            .resync_from_primary(&conninfo, &standby_config)
+                            .await
+                        {
                             Ok(()) => {
                                 info!(
                                     node_id = monitor_state.node_id,
@@ -525,22 +585,29 @@ async fn main() -> Result<()> {
                                         let self_host = format!("node{}:", monitor_state.node_id);
                                         let self_host2 = format!("node{}", monitor_state.node_id);
                                         for peer in &peers {
-                                            if peer.contains(&self_host) || peer.ends_with(&self_host2) {
+                                            if peer.contains(&self_host)
+                                                || peer.ends_with(&self_host2)
+                                            {
                                                 continue;
                                             }
-                                            let repoint_url =
-                                                format!("{}/control/repoint", peer.trim_end_matches('/'));
+                                            let repoint_url = format!(
+                                                "{}/control/repoint",
+                                                peer.trim_end_matches('/')
+                                            );
                                             let payload = serde_json::json!({
                                                 "primary_conninfo": my_conninfo
                                             });
-                                            let _ = client.post(&repoint_url).json(&payload).send().await;
+                                            let _ = client
+                                                .post(&repoint_url)
+                                                .json(&payload)
+                                                .send()
+                                                .await;
                                         }
                                     }
                                 } else {
                                     info!(
                                         node_id = monitor_state.node_id,
-                                        winner_id,
-                                        "Waiting for peer candidate to promote"
+                                        winner_id, "Waiting for peer candidate to promote"
                                     );
                                 }
                             }

@@ -85,7 +85,7 @@ impl ClientSession {
                         // Standard parameter statuses expected by Postgres clients
                         BackendMessage::ParameterStatus {
                             name: "server_version".into(),
-                            value: "16.3".into(),
+                            value: "18.6".into(),
                         }
                         .encode(&mut resp);
                         BackendMessage::ParameterStatus {

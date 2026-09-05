@@ -23,6 +23,9 @@ fn is_leader_required(sql: &str) -> bool {
     }
 
     let upper = without_trailing_semicolon.to_uppercase();
+    if upper.contains("PG_STAT_REPLICATION") {
+        return true;
+    }
     let first_word = upper.split_whitespace().next().unwrap_or("");
 
     match first_word {

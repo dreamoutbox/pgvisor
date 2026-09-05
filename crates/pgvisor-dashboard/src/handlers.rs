@@ -153,7 +153,7 @@ impl SqlExecutor for StandaloneSqlExecutor {
             (
                 vec!["version".into()],
                 vec![vec![
-                    "PostgreSQL 16.3 on x86_64-pc-linux-gnu, compiled by gcc, 64-bit".into(),
+                    "PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc, 64-bit".into(),
                 ]],
             )
         } else {
@@ -353,7 +353,7 @@ impl DashboardState {
                     address: "127.0.0.1:5432".into(),
                     role: NodeRole::Leader,
                     state: NodeHealthState::Healthy,
-                    pg_version: "16.3".into(),
+                    pg_version: "18.6".into(),
                     replication_lag_bytes: 0,
                     uptime_secs: 3600,
                     is_local: true,
@@ -363,7 +363,7 @@ impl DashboardState {
                     address: "127.0.0.1:5433".into(),
                     role: NodeRole::Standby,
                     state: NodeHealthState::Healthy,
-                    pg_version: "16.3".into(),
+                    pg_version: "18.6".into(),
                     replication_lag_bytes: 64,
                     uptime_secs: 3580,
                     is_local: false,
@@ -373,7 +373,7 @@ impl DashboardState {
                     address: "127.0.0.1:5434".into(),
                     role: NodeRole::Standby,
                     state: NodeHealthState::Healthy,
-                    pg_version: "16.3".into(),
+                    pg_version: "18.6".into(),
                     replication_lag_bytes: 128,
                     uptime_secs: 3550,
                     is_local: false,
@@ -713,6 +713,12 @@ pub async fn api_table_data(
 pub async fn api_status(State(state): State<Arc<DashboardState>>) -> Json<ClusterOverview> {
     let overview = state.overview.read().await.clone();
     Json(overview)
+}
+
+/// GET /api/nodes -> Returns list of cluster nodes summary JSON
+pub async fn api_nodes(State(state): State<Arc<DashboardState>>) -> Json<Vec<NodeSummary>> {
+    let overview = state.overview.read().await;
+    Json(overview.nodes.clone())
 }
 
 /// POST /api/sql -> Validates read-only safety, enforces statement timeout, executes SQL
