@@ -4,7 +4,7 @@
 - `crates/pgvisor-dashboard/src/security.rs` = `SqlSecurityGuard` (comment stripping, multi-statement rejection, read-only validation) and admin token authentication (`verify_admin_token`, `extract_token_from_headers`)
 - `crates/pgvisor-dashboard/src/templates.rs` = Askama template structs (`OverviewTemplate`, `NodesTemplate`, `SqlConsoleTemplate`, `TablesTemplate`, `BackupsTemplate`, `LoginTemplate`)
 - `crates/pgvisor-dashboard/templates/` = HTML templates (`base.html`, `overview.html`, `nodes.html`, `sql.html`, `tables.html`, `backups.html`, `login.html`)
-- `crates/pgvisor-dashboard/src/handlers.rs` = Axum route handlers for HTML pages (`/`, `/nodes`, `/tables`, `/sql`, `/backups`, `/login`, `/logout`) and `/api/status`, `/api/sql`, `/api/tables`, `/api/backups` endpoints
+- `crates/pgvisor-dashboard/src/handlers.rs` = Axum route handlers for HTML pages (`/`, `/nodes`, `/tables`, `/sql`, `/backups`, `/login`, `/logout`) and `/api/status`, `/api/nodes`, `/api/sql`, `/api/tables`, `/api/backups` endpoints
 - `crates/pgvisor-dashboard/src/lib.rs` = Router assembly, `auth_middleware`, and unit tests
 - `crates/pgvisor-dashboard/src/main.rs` = Standalone HTTP server binary
 - `crates/pgvisor-proxy/src/executor.rs` = `ProxySqlExecutor` running dashboard queries against live Postgres cluster connections

@@ -36,7 +36,7 @@
 
 - [x] investigate rejoin node (from docker container remove/stop) Supervision Status is "Fenced (Quorum Lost)" and role is "Standby (Replica)". the rejoin (old node1 leader) should join the cluster as a standby replica.
 
-- [x] change postgres version to 17/18
+- [x] change postgres version to 18
 
 - [x] use external rust crate for postgres protocol if exists. no need to manually implement this. use https://crates.io/crates/pgwire
 
@@ -46,14 +46,23 @@
 
 - [x] add web dashboard auth.
 
-- [ ] test adding new node
-      - start as 3 nodes
-      - add new node4
-      - assert node4 should be follower
+- [x] test adding new node (`tests/test-add-node.sh`)
+      - start cluster with 3 nodes (node1 leader, node2/node3 standbys)
+      - seed baseline table and records via proxy (`t0_pre_scale`)
+      - launch pgvisor-node4 container connected to leader with PGVISOR_ROLE=standby
+      - assert node4 sidecar reports status="running" and role="standby"
+      - assert node4 cloned existing data (`t0_pre_scale` present via pg_basebackup)
+      - assert leader pg_stat_replication shows 3 active WAL sender connections
+      - write new record (`t1_post_scale`) through proxy
+      - assert node4 receives streaming replication (both records present, pg_is_in_recovery=t)
+      - assert node4 stays standby without spurious elections over several heartbeat intervals
+      - teardown node4 container and volume cleanly
 
-- [ ] manually switchover new leader
+- [x] web dashboard still show pg version as 16.3 after change to `postgres:18.6-bookworm` in Dockerfile.
 
 - [ ] make test run concurrent. use custom pre-define ports for each tests.
+
+- [ ] manually switchover new leader. dev can perform switchover in web dashboard.
 
 - [ ] very bad disaster testing: 3 nodes setup. 2 nodes down.
       - start as 3 nodes 
