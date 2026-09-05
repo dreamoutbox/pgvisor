@@ -8,17 +8,21 @@ use askama::Template;
 #[template(path = "overview.html")]
 pub struct OverviewTemplate<'a> {
     pub overview: &'a ClusterOverview,
+    pub auth_enabled: bool,
 }
 
 #[derive(Template)]
 #[template(path = "nodes.html")]
 pub struct NodesTemplate<'a> {
     pub nodes: &'a [NodeSummary],
+    pub auth_enabled: bool,
 }
 
 #[derive(Template)]
 #[template(path = "sql.html")]
-pub struct SqlConsoleTemplate {}
+pub struct SqlConsoleTemplate {
+    pub auth_enabled: bool,
+}
 
 #[derive(Template)]
 #[template(path = "tables.html")]
@@ -34,6 +38,7 @@ pub struct TablesTemplate<'a> {
     pub limit: usize,
     pub total_pages: usize,
     pub initial_sql: Option<&'a str>,
+    pub auth_enabled: bool,
 }
 
 impl<'a> TablesTemplate<'a> {
@@ -47,4 +52,12 @@ impl<'a> TablesTemplate<'a> {
 pub struct BackupsTemplate<'a> {
     pub backups: &'a [BackupItemView],
     pub summary: &'a BackupOverviewSummary,
+    pub auth_enabled: bool,
+}
+
+#[derive(Template)]
+#[template(path = "login.html")]
+pub struct LoginTemplate<'a> {
+    pub cluster_id: &'a str,
+    pub error: Option<&'a str>,
 }

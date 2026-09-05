@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign In - PgVisor Dashboard</title>
+    <style>
+        :root {
+            --bg-main: #0f172a;
+            --bg-card: #1e293b;
+            --bg-card-hover: #334155;
+            --border: #334155;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #38bdf8;
+            --primary-hover: #0ea5e9;
+            --danger: #f87171;
+            --danger-bg: rgba(248, 113, 113, 0.15);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+
+        .login-card {
+            width: 100%;
+            max-width: 420px;
+            background-color: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 36px 32px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+        }
+
+        .logo-header {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            margin-bottom: 28px;
+            gap: 12px;
+        }
+
+        .logo-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 10px;
+            background: rgba(56, 189, 248, 0.15);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--primary);
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        .subtitle {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .error-alert {
+            background-color: var(--danger-bg);
+            border: 1px solid var(--danger);
+            color: var(--danger);
+            padding: 12px 14px;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        form {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .field-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        label {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--text-muted);
+        }
+
+        input[type="password"],
+        input[type="text"] {
+            width: 100%;
+            padding: 12px 14px;
+            background-color: var(--bg-main);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-main);
+            font-size: 0.95rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        input[type="password"]:focus,
+        input[type="text"]:focus {
+            border-color: var(--primary);
+        }
+
+        button[type="submit"] {
+            width: 100%;
+            padding: 12px;
+            background-color: var(--primary);
+            color: #0f172a;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        button[type="submit"]:hover {
+            background-color: var(--primary-hover);
+        }
+
+        .footer {
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="login-card">
+        <div class="logo-header">
+            <div class="logo-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                </svg>
+            </div>
+            <h1>PgVisor Dashboard</h1>
+            <p class="subtitle">Cluster: <strong>{{ cluster_id }}</strong></p>
+        </div>
+
+        {% if let Some(err) = error %}
+        <div class="error-alert">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="8" x2="12" y2="12"></line>
+                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
+            <span>{{ err }}</span>
+        </div>
+        {% endif %}
+
+        <form method="POST" action="/login">
+            <div class="field-group">
+                <label for="token">Admin Authentication Token</label>
+                <input type="password" id="token" name="token" placeholder="Enter admin token..." required autofocus
+                    autocomplete="current-password">
+            </div>
+            <button type="submit">Authenticate</button>
+        </form>
+
+        <div class="footer">
+            PostgreSQL High Availability &amp; Proxy Supervisor
+        </div>
+    </div>
+</body>
+
+</html>
