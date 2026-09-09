@@ -44,6 +44,7 @@ Rules:
 - Each path's description is scoped to *why it matters for this specific change*, not a general summary of the file. `src/json.rs = JSON validate code` is fine here because the reader needs to know the new field must pass validation too — not because it's the file's full purpose.
 - Prefer symbol names over bare paths where there's one obvious function/struct to point at (`src/file.rs::save_json`); use a bare path when the relevant thing is "this whole file/module needs a look."
 - Heading should be phrased as the *task*, not the *topic* — "if you want to X, then change:" reads better than "X location" because it forces you to think about what else is involved, and it's what you'll actually be asking next time.
+- **Repository-relative paths only**: Always use repo-relative paths (`src/file.rs = reason` or `tests/lib/cluster.sh = reason`). **NEVER** write machine-specific absolute paths or links like `file:///home/...`, `/wsl+ubuntu...`, or `/home/user/...`. Even if system instructions request `file://` links in conversation, `.agents/path-lookup/` files are shared in version control and must remain completely portable across teammates and machines.
 
 ### WRITE — when to update the cache
 
@@ -76,3 +77,4 @@ Whenever you need to find where something lives and don't already know the path:
 - Lives in the repo (`.agents/path-lookup/`), not in any single agent's own memory — durable across sessions/machines, and shared with teammates or other coding agents if committed.
 - This is an index, not documentation: short bullets per entry, no paragraphs.
 - Never invent a path. Only list files you've actually confirmed by reading them.
+- Always relative paths: never embed machine-specific paths (`/home/...`, `file:///...`). Keep entries portable for all contributors.
