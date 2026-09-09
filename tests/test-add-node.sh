@@ -9,6 +9,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=tests/lib/cluster.sh
+source "${SCRIPT_DIR}/lib/cluster.sh"
 
 # Pre-defined test port & project constants
 readonly TEST_PROXY_PORT=6132
@@ -38,7 +40,7 @@ PROXY_CONTAINER="pgvisor-add-node-proxy"
 cleanup() {
     echo ""
     echo "Tearing down cluster ${PROJECT_NAME}..."
-    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_BASE}" -f "${COMPOSE_NODE4}" down -v --remove-orphans > /dev/null 2>&1 || true
+    cluster_down "${PROJECT_NAME}" "${COMPOSE_BASE}" -f "${COMPOSE_NODE4}"
     echo "+ Cleanup complete."
 }
 trap cleanup EXIT
@@ -49,15 +51,12 @@ echo "  Project: ${PROJECT_NAME} | Port: ${PROXY_PORT}         "
 echo "========================================================="
 
 echo "[0/10] Starting baseline cluster ${PROJECT_NAME}..."
-docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_BASE}" -f "${COMPOSE_NODE4}" down -v --remove-orphans > /dev/null 2>&1 || true
-docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_BASE}" up -d
+cluster_down "${PROJECT_NAME}" "${COMPOSE_BASE}" -f "${COMPOSE_NODE4}"
+cluster_up   "${PROJECT_NAME}" "${COMPOSE_BASE}"
 
-echo "Waiting for baseline cluster nodes to report healthy..."
-until [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE1_CONTAINER}" 2>/dev/null)" = "healthy" ] && \
-      [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE2_CONTAINER}" 2>/dev/null)" = "healthy" ] && \
-      [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE3_CONTAINER}" 2>/dev/null)" = "healthy" ]; do
-    sleep 1
-done
+echo "Waiting for baseline cluster containers to report healthy..."
+wait_for_healthy 120 "${PROJECT_NAME}-minio" "${NODE1_CONTAINER}" "${NODE2_CONTAINER}" "${NODE3_CONTAINER}"
+wait_for_proxy_ready "${DASHBOARD_URL}" 60 "${AUTH_HEADER[@]}"
 
 # Helper to execute SQL via PgVisor proxy
 run_proxy_sql() {
@@ -160,28 +159,11 @@ elif [[ "${ACTIVE_LEADER}" == *"node3"* ]]; then
     LEADER_SVC="pgvisor-node3"
 fi
 export PRIMARY_CONNINFO="host=${LEADER_SVC} port=5432 user=postgres"
-docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_BASE}" -f "${COMPOSE_NODE4}" up -d pgvisor-node4
+docker compose --progress quiet -p "${PROJECT_NAME}" -f "${COMPOSE_BASE}" -f "${COMPOSE_NODE4}" up -d pgvisor-node4
 
 echo "Waiting for ${NODE4_CONTAINER} container to report healthy..."
-MAX_WAIT=30
-ELAPSED=0
-NODE4_HEALTHY=false
-while [[ ${ELAPSED} -lt ${MAX_WAIT} ]]; do
-    HEALTH_STATUS=$(docker inspect -f '{{.State.Health.Status}}' "${NODE4_CONTAINER}" 2>/dev/null || echo "starting")
-    if [[ "${HEALTH_STATUS}" == "healthy" ]]; then
-        NODE4_HEALTHY=true
-        break
-    fi
-    sleep 1
-    ELAPSED=$((ELAPSED + 1))
-done
-
-if [[ "${NODE4_HEALTHY}" != "true" ]]; then
-    echo "ERROR: ${NODE4_CONTAINER} did not become healthy within ${MAX_WAIT}s"
-    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_BASE}" -f "${COMPOSE_NODE4}" logs pgvisor-node4
-    exit 1
-fi
-echo "+ ${NODE4_CONTAINER} container is healthy (elapsed: ${ELAPSED}s)."
+wait_for_healthy 60 "${NODE4_CONTAINER}"
+echo "+ ${NODE4_CONTAINER} container is healthy."
 
 echo ""
 echo "[4/10] Verifying ${NODE4_CONTAINER} sidecar status and role..."

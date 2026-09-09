@@ -66,15 +66,56 @@ fi
 log_msg "[3/4] Launching MinIO + 3 Nodes + 1 Proxy services..."
 run_cmd docker compose up -d
 
+# Wait for minio-init to complete and clean up the dangling container
+if docker inspect pgvisor-minio-init > /dev/null 2>&1; then
+    log_msg "Waiting for minio-init to complete and cleaning up container..."
+    exit_code=$(timeout 30 docker wait pgvisor-minio-init 2>/dev/null || echo "timeout")
+    if [ "${exit_code}" != "0" ]; then
+        echo "ERROR: pgvisor-minio-init failed with exit code ${exit_code}" >&2
+        docker logs pgvisor-minio-init >&2 || true
+        exit 1
+    fi
+    docker rm -f pgvisor-minio-init > /dev/null 2>&1 || true
+fi
+
 log_msg "[4/4] Verifying cluster startup and waiting for health checks..."
-until [ "$(docker inspect -f '{{.State.Health.Status}}' pgvisor-node1 2>/dev/null)" = "healthy" ] && \
-      [ "$(docker inspect -f '{{.State.Health.Status}}' pgvisor-node2 2>/dev/null)" = "healthy" ] && \
-      [ "$(docker inspect -f '{{.State.Health.Status}}' pgvisor-node3 2>/dev/null)" = "healthy" ]; do
+HEALTH_TIMEOUT=120
+DEADLINE=$(( $(date +%s) + HEALTH_TIMEOUT ))
+REQUIRED_CONTAINERS=("pgvisor-minio" "pgvisor-node1" "pgvisor-node2" "pgvisor-node3")
+
+while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+    ALL_HEALTHY=true
+    for c in "${REQUIRED_CONTAINERS[@]}"; do
+        status=$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo "missing")
+        if [ "$status" = "exited" ] || [ "$status" = "dead" ]; then
+            echo "ERROR: Container $c exited unexpectedly!" >&2
+            docker logs --tail 30 "$c" >&2 || true
+            exit 1
+        fi
+        health=$(docker inspect -f '{{.State.Health.Status}}' "$c" 2>/dev/null || echo "none")
+        if [ "$health" != "healthy" ]; then
+            ALL_HEALTHY=false
+            break
+        fi
+    done
+
+    if [ "$ALL_HEALTHY" = true ]; then
+        break
+    fi
+
     if [ "${SILENT}" = false ]; then
         echo "Waiting for PostgreSQL cluster nodes to report healthy..."
     fi
     sleep 1
 done
+
+if [ "$ALL_HEALTHY" != true ]; then
+    echo "ERROR: Timed out waiting for containers to become healthy after ${HEALTH_TIMEOUT}s:" >&2
+    for c in "${REQUIRED_CONTAINERS[@]}"; do
+        echo "  - $c: $(docker inspect -f 'status={{.State.Status}}, health={{.State.Health.Status}}' "$c" 2>/dev/null || echo 'not found')" >&2
+    done
+    exit 1
+fi
 
 if [ "${SILENT}" = false ]; then
     echo "========================================================="

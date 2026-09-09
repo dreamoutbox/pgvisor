@@ -15,6 +15,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=tests/lib/cluster.sh
+source "${SCRIPT_DIR}/lib/cluster.sh"
 SQL_FILE="${REPO_ROOT}/scripts/test-transaction.sql"
 
 # Pre-defined test port & project constants
@@ -52,7 +54,7 @@ fi
 
 cleanup() {
     echo "Tearing down cluster ${PROJECT_NAME}..."
-    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
+    cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
 }
 trap cleanup EXIT
 
@@ -85,20 +87,14 @@ echo "  Project: ${PROJECT_NAME} | Proxy port: ${PROXY_PORT}"
 echo "========================================================="
 
 echo "[0/4] Starting isolated test cluster ${PROJECT_NAME}..."
-docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
-docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" up -d
+cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
+cluster_up   "${PROJECT_NAME}" "${COMPOSE_FILE}"
 
-echo "Waiting for cluster nodes to report healthy..."
-until [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE1_CONTAINER}" 2>/dev/null)" = "healthy" ] && \
-      [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE2_CONTAINER}" 2>/dev/null)" = "healthy" ] && \
-      [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE3_CONTAINER}" 2>/dev/null)" = "healthy" ]; do
-    sleep 1
-done
+echo "Waiting for cluster containers to report healthy..."
+wait_for_healthy 120 "${PROJECT_NAME}-minio" "${NODE1_CONTAINER}" "${NODE2_CONTAINER}" "${NODE3_CONTAINER}"
 
 echo "Waiting for proxy to become ready..."
-until curl -s "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/status" > /dev/null 2>&1; do
-    sleep 1
-done
+wait_for_proxy_ready "${DASHBOARD_URL}" 60 "${AUTH_HEADER[@]}"
 
 # ---------------------------------------------------------------
 # Run the SQL fixture (creates table, exercises all 3 scenarios,

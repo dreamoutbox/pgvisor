@@ -9,6 +9,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=tests/lib/cluster.sh
+source "${SCRIPT_DIR}/lib/cluster.sh"
 
 # Pre-defined test port & project constants
 readonly TEST_PROXY_PORT=5932
@@ -35,7 +37,7 @@ PROXY_CONTAINER="pgvisor-auto-rejoin-proxy"
 
 cleanup() {
     echo "Tearing down cluster ${PROJECT_NAME}..."
-    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
+    cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
 }
 trap cleanup EXIT
 
@@ -45,15 +47,12 @@ echo "  Project: ${PROJECT_NAME} | Port: ${PROXY_PORT}         "
 echo "========================================================="
 
 echo "[0/11] Starting isolated test cluster ${PROJECT_NAME}..."
-docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
-docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" up -d
+cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
+cluster_up   "${PROJECT_NAME}" "${COMPOSE_FILE}"
 
-echo "Waiting for cluster nodes to report healthy..."
-until [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE1_CONTAINER}" 2>/dev/null)" = "healthy" ] && \
-      [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE2_CONTAINER}" 2>/dev/null)" = "healthy" ] && \
-      [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE3_CONTAINER}" 2>/dev/null)" = "healthy" ]; do
-    sleep 1
-done
+echo "Waiting for cluster containers to report healthy..."
+wait_for_healthy 120 "${PROJECT_NAME}-minio" "${NODE1_CONTAINER}" "${NODE2_CONTAINER}" "${NODE3_CONTAINER}"
+wait_for_proxy_ready "${DASHBOARD_URL}" 60 "${AUTH_HEADER[@]}"
 
 # Helper to execute SQL via PgVisor proxy
 run_proxy_sql() {
@@ -124,7 +123,7 @@ echo "+ Baseline row seeded. Table row count = ${COUNT_T0}"
 
 echo ""
 echo "[3/11] Stopping ${NODE1_CONTAINER} container to simulate leader crash..."
-docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" stop pgvisor-node1 > /dev/null
+stop_node "${NODE1_CONTAINER}"
 echo "+ Container ${NODE1_CONTAINER} stopped."
 
 echo ""
@@ -159,7 +158,7 @@ done
 
 if [[ -z "${NEW_LEADER}" ]]; then
     echo "ERROR: Standby promotion timed out."
-    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1
+    start_node "${NODE1_CONTAINER}" "${PROJECT_NAME}" "${COMPOSE_FILE}" pgvisor-node1
     exit 1
 fi
 echo "+ Standby promoted to leader: ${NEW_LEADER}"
@@ -172,7 +171,7 @@ run_proxy_sql "INSERT INTO ${TABLE_NAME} (val) VALUES ('t1_post_failover');" > /
 TOTAL_ROWS=$(run_proxy_sql "SELECT count(*) FROM ${TABLE_NAME};")
 if [[ "${TOTAL_ROWS}" != "2" ]]; then
     echo "ERROR: Expected 2 rows after post-failover write, got: ${TOTAL_ROWS}"
-    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1
+    start_node "${NODE1_CONTAINER}" "${PROJECT_NAME}" "${COMPOSE_FILE}" pgvisor-node1
     exit 1
 fi
 echo "+ Post-failover write completed via proxy. Total rows in leader = ${TOTAL_ROWS}"
@@ -191,7 +190,7 @@ echo "+ Surviving standby verified with row count = ${STANDBY_ROWS}"
 
 echo ""
 echo "[7/11] Restarting ${NODE1_CONTAINER} and waiting for auto-rejoin as standby..."
-docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1 > /dev/null
+start_node "${NODE1_CONTAINER}" "${PROJECT_NAME}" "${COMPOSE_FILE}" pgvisor-node1
 
 AUTO_REJOINED=false
 REJOIN_WAIT=30

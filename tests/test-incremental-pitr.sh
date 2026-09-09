@@ -9,6 +9,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=tests/lib/cluster.sh
+source "${SCRIPT_DIR}/lib/cluster.sh"
 
 # Pre-defined test port & project constants
 readonly TEST_PROXY_PORT=5732
@@ -40,20 +42,17 @@ TMP_ARCHIVE_T2="/tmp/pitr-t2-$$.tar.gz"
 cleanup() {
     echo "Tearing down cluster ${PROJECT_NAME}..."
     rm -f "${TMP_ARCHIVE_T0}" "${TMP_ARCHIVE_T2}"
-    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
+    cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
 }
 trap cleanup EXIT
 
 echo "[0/8] Starting isolated test cluster ${PROJECT_NAME}..."
-docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
-docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" up -d
+cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
+cluster_up   "${PROJECT_NAME}" "${COMPOSE_FILE}"
 
-echo "Waiting for cluster nodes to report healthy..."
-until [ "$(docker inspect -f '{{.State.Health.Status}}' "pgvisor-pitr-node1" 2>/dev/null)" = "healthy" ] && \
-      [ "$(docker inspect -f '{{.State.Health.Status}}' "pgvisor-pitr-node2" 2>/dev/null)" = "healthy" ] && \
-      [ "$(docker inspect -f '{{.State.Health.Status}}' "pgvisor-pitr-node3" 2>/dev/null)" = "healthy" ]; do
-    sleep 1
-done
+echo "Waiting for cluster containers to report healthy..."
+wait_for_healthy 120 "${PROJECT_NAME}-minio" "pgvisor-pitr-node1" "pgvisor-pitr-node2" "pgvisor-pitr-node3"
+wait_for_proxy_ready "${DASHBOARD_URL}" 60 "${AUTH_HEADER[@]}"
 
 # Helper for executing SQL via psql with automatic reconnection retry
 run_sql() {

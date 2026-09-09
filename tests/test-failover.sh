@@ -9,6 +9,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=tests/lib/cluster.sh
+source "${SCRIPT_DIR}/lib/cluster.sh"
 
 # Pre-defined test port & project constants
 readonly TEST_PROXY_PORT=5832
@@ -30,7 +32,7 @@ PROXY_CONTAINER="pgvisor-failover-proxy"
 
 cleanup() {
     echo "Tearing down cluster ${PROJECT_NAME}..."
-    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
+    cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
 }
 trap cleanup EXIT
 
@@ -40,15 +42,12 @@ echo "  Project: ${PROJECT_NAME} | Port: ${PROXY_PORT}         "
 echo "========================================================="
 
 echo "[0/8] Starting isolated test cluster ${PROJECT_NAME}..."
-docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
-docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" up -d
+cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
+cluster_up   "${PROJECT_NAME}" "${COMPOSE_FILE}"
 
-echo "Waiting for cluster nodes to report healthy..."
-until [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE1_CONTAINER}" 2>/dev/null)" = "healthy" ] && \
-      [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE2_CONTAINER}" 2>/dev/null)" = "healthy" ] && \
-      [ "$(docker inspect -f '{{.State.Health.Status}}' "${NODE3_CONTAINER}" 2>/dev/null)" = "healthy" ]; do
-    sleep 1
-done
+echo "Waiting for cluster containers to report healthy..."
+wait_for_healthy 120 "${PROJECT_NAME}-minio" "${NODE1_CONTAINER}" "${NODE2_CONTAINER}" "${NODE3_CONTAINER}"
+wait_for_proxy_ready "${DASHBOARD_URL}" 60
 
 # Helper to execute SQL via PgVisor proxy
 run_proxy_sql() {
@@ -135,7 +134,7 @@ echo "+ Baseline row seeded via proxy: val='alpha_t0'"
 
 echo ""
 echo "[3/8] Simulating leader failure: stopping container ${NODE1_CONTAINER}..."
-docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" stop pgvisor-node1
+stop_node "${NODE1_CONTAINER}"
 echo "+ Container ${NODE1_CONTAINER} stopped."
 
 echo ""
@@ -174,7 +173,7 @@ if [[ -z "${NEW_LEADER}" ]]; then
     echo "ERROR: Election timeout exceeded (${MAX_WAIT}s). Neither node2 nor node3 was promoted."
     echo "Node2 status: ${ST2:-none}"
     echo "Node3 status: ${ST3:-none}"
-    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1
+    start_node "${NODE1_CONTAINER}" "${PROJECT_NAME}" "${COMPOSE_FILE}" pgvisor-node1
     exit 1
 fi
 
@@ -184,7 +183,7 @@ echo "+ Failover successful! Promoted node: ${NEW_LEADER} (elapsed: ${ELAPSED}s)
 NEW_LEADER_RECOVERY=$(run_node_sql "${NEW_LEADER}" "SELECT pg_is_in_recovery();")
 if [[ "${NEW_LEADER_RECOVERY}" != "f" ]]; then
     echo "ERROR: Promoted leader ${NEW_LEADER} pg_is_in_recovery should be 'f', got: ${NEW_LEADER_RECOVERY}"
-    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1
+    start_node "${NODE1_CONTAINER}" "${PROJECT_NAME}" "${COMPOSE_FILE}" pgvisor-node1
     exit 1
 fi
 echo "+ PostgreSQL on ${NEW_LEADER} confirmed in read-write mode (pg_is_in_recovery=f)."
@@ -202,14 +201,14 @@ done
 
 if [[ "${WRITE_SUCCESS}" != "true" ]]; then
     echo "ERROR: Failed to write to cluster through proxy following failover"
-    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1
+    start_node "${NODE1_CONTAINER}" "${PROJECT_NAME}" "${COMPOSE_FILE}" pgvisor-node1
     exit 1
 fi
 
 TOTAL_ROWS=$(run_proxy_sql "SELECT count(*) FROM ${TABLE_NAME};")
 if [[ "${TOTAL_ROWS}" != "2" ]]; then
     echo "ERROR: Expected 2 rows after failover write, got: ${TOTAL_ROWS}"
-    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1
+    start_node "${NODE1_CONTAINER}" "${PROJECT_NAME}" "${COMPOSE_FILE}" pgvisor-node1
     exit 1
 fi
 echo "+ Write succeeded through proxy port ${PROXY_PORT}! Table now contains 2 rows ('alpha_t0', 'beta_t1')."
@@ -233,7 +232,7 @@ fi
 
 echo ""
 echo "[7/8] Restarting pgvisor-node1 and verifying split-brain prevention..."
-docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" start pgvisor-node1
+start_node "${NODE1_CONTAINER}" "${PROJECT_NAME}" "${COMPOSE_FILE}" pgvisor-node1
 
 sleep 3
 NODE1_POST_RECOVERY=$(run_node_sql "${NODE1_CONTAINER}" "SELECT pg_is_in_recovery();")

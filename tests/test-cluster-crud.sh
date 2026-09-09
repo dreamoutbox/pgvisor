@@ -7,6 +7,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=tests/lib/cluster.sh
+source "${SCRIPT_DIR}/lib/cluster.sh"
 SQL_FILE="${REPO_ROOT}/scripts/test-crud.sql"
 
 # Pre-defined test port & project constants
@@ -24,7 +26,7 @@ fi
 
 cleanup() {
     echo "Tearing down cluster ${PROJECT_NAME}..."
-    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
+    cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
 }
 trap cleanup EXIT
 
@@ -33,15 +35,12 @@ echo "  Executing PgVisor Demo CRUD Test (Port: ${TEST_PROXY_PORT})"
 echo "========================================================="
 
 echo "[1/3] Starting isolated test cluster ${PROJECT_NAME}..."
-docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" down -v --remove-orphans > /dev/null 2>&1 || true
-docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" up -d
+cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
+cluster_up   "${PROJECT_NAME}" "${COMPOSE_FILE}"
 
-echo "[2/3] Waiting for cluster nodes to report healthy..."
-until [ "$(docker inspect -f '{{.State.Health.Status}}' "pgvisor-crud-node1" 2>/dev/null)" = "healthy" ] && \
-      [ "$(docker inspect -f '{{.State.Health.Status}}' "pgvisor-crud-node2" 2>/dev/null)" = "healthy" ] && \
-      [ "$(docker inspect -f '{{.State.Health.Status}}' "pgvisor-crud-node3" 2>/dev/null)" = "healthy" ]; do
-    sleep 1
-done
+echo "[2/3] Waiting for cluster containers to report healthy..."
+wait_for_healthy 120 "${PROJECT_NAME}-minio" "pgvisor-crud-node1" "pgvisor-crud-node2" "pgvisor-crud-node3"
+wait_for_proxy_ready "http://localhost:${TEST_DASHBOARD_PORT}" 60
 
 echo "[3/3] Executing CRUD operations..."
 if command -v psql &> /dev/null; then

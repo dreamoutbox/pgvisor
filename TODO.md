@@ -68,6 +68,8 @@
 
 - [x] add transaction SQL test
 
+- [x] chore: remove verbose in test logs
+
 - [ ] assert write query always go to leader and read only go to replica.
 
 - [ ] add audit logs view in web dashboard for node up/down. 
