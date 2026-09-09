@@ -4,9 +4,9 @@ trigger: always_on
 
 ## Path lookup cache
 
-Before searching the codebase for where something lives, check `.agent/path-lookup/*.md` first for a matching entry (format: "if you want to change X, files to check:" + bulleted paths with one-line reasons). Verify each listed path still exists before trusting it — one cheap read, not a full search. If a path is stale, search normally, then fix that entry in place.
+Before searching the codebase for where something lives, check `.agents/path-lookup/*.md` first for a matching entry (format: "if you want to change X, files to check:" + bulleted paths with one-line reasons). Verify each listed path still exists before trusting it — one cheap read, not a full search. If a path is stale, search normally, then fix that entry in place.
 
-After finishing an edit, and when summarizing the changes you made: write or update an entry in the relevant `.agent/path-lookup/<module>.md` file (create it if missing). Heading = "if you want to change X, then check:", one bullet per file touched or that this kind of change should check, each with a one-line reason. If an entry already covers this change, add any file it was missing rather than duplicating the heading.
+After finishing an edit, and when summarizing the changes you made: write or update an entry in the relevant `.agents/path-lookup/<module>.md` file (create it if missing). Heading = "if you want to change X, then check:", one bullet per file touched or that this kind of change should check, each with a one-line reason. If an entry already covers this change, add any file it was missing rather than duplicating the heading.
 
 ---
 
@@ -17,7 +17,7 @@ A persistent, self-healing index of "where do I look if I want to change X" answ
 ### Storage layout
 
 ```
-.agent/path-lookup/
+.agents/path-lookup/
 ├── json.md
 ├── auth.md
 ├── database.md
@@ -63,7 +63,7 @@ Skip caching one-off, unlikely-to-recur lookups (e.g., the exact file the user j
 
 Whenever you need to find where something lives and don't already know the path:
 
-1. Check if `.agent/path-lookup/` exists.
+1. Check if `.agents/path-lookup/` exists.
 2. Look for a matching heading — check the obviously-relevant module file first, otherwise grep headings across all files in the dir.
 3. If found, verify **every listed path** before trusting the entry: cheap reads, not a broad search.
 4. If any listed path is stale (not found):
@@ -73,6 +73,6 @@ Whenever you need to find where something lives and don't already know the path:
 
 ### Notes
 
-- Lives in the repo (`.agent/path-lookup/`), not in any single agent's own memory — durable across sessions/machines, and shared with teammates or other coding agents if committed.
+- Lives in the repo (`.agents/path-lookup/`), not in any single agent's own memory — durable across sessions/machines, and shared with teammates or other coding agents if committed.
 - This is an index, not documentation: short bullets per entry, no paragraphs.
 - Never invent a path. Only list files you've actually confirmed by reading them.

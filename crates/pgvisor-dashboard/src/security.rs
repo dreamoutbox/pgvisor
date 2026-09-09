@@ -231,6 +231,15 @@ impl SqlSecurityGuard {
             "DO $$",
         ];
         for kw in &forbidden {
+            // UPDATE and TRUNCATE are valid PostgreSQL table privilege names.
+            // When the statement verb is GRANT or REVOKE, "UPDATE " or "TRUNCATE "
+            // in the body is necessarily a privilege keyword, not a DDL/DML statement
+            // — those cases would have been caught above by the first_word check.
+            if (*kw == "UPDATE " || *kw == "TRUNCATE ")
+                && (first_word == "GRANT" || first_word == "REVOKE")
+            {
+                continue;
+            }
             if upper.contains(kw) {
                 return Err(SecurityError::MutationForbidden(format!(
                     "Forbidden keyword '{}' detected in user management DDL",
@@ -509,6 +518,48 @@ mod tests {
         ));
         assert!(matches!(
             guard.validate_user_management_ddl("CREATE ROLE app_user; DROP TABLE users;"),
+            Err(SecurityError::MultiStatementForbidden(_))
+        ));
+
+        // GRANT/REVOKE UPDATE and TRUNCATE privilege — UPDATE and TRUNCATE are valid table
+        // privilege names and must not be rejected by the forbidden-keyword scan.
+        assert!(guard
+            .validate_user_management_ddl(
+                "GRANT UPDATE ON TABLE public.\"pgvisor_demo\" TO \"app_user\";",
+            )
+            .is_ok());
+        assert!(guard
+            .validate_user_management_ddl(
+                "GRANT TRUNCATE ON TABLE public.\"pgvisor_demo\" TO \"app_user\";",
+            )
+            .is_ok());
+        assert!(guard
+            .validate_user_management_ddl(
+                "GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public.users TO app_user;",
+            )
+            .is_ok());
+        assert!(guard
+            .validate_user_management_ddl(
+                "REVOKE UPDATE ON TABLE public.\"pgvisor_demo\" FROM \"app_user\";",
+            )
+            .is_ok());
+        assert!(guard
+            .validate_user_management_ddl(
+                "REVOKE TRUNCATE ON TABLE public.\"pgvisor_demo\" FROM \"app_user\";",
+            )
+            .is_ok());
+
+        // Injection via multi-statement still blocked even when UPDATE or TRUNCATE appears.
+        assert!(matches!(
+            guard.validate_user_management_ddl(
+                "GRANT SELECT ON TABLE foo TO bar; UPDATE users SET pass='x';",
+            ),
+            Err(SecurityError::MultiStatementForbidden(_))
+        ));
+        assert!(matches!(
+            guard.validate_user_management_ddl(
+                "GRANT SELECT ON TABLE foo TO bar; TRUNCATE TABLE users;",
+            ),
             Err(SecurityError::MultiStatementForbidden(_))
         ));
 
