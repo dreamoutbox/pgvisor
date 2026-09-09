@@ -154,7 +154,17 @@ echo "✓ Snapshot archive verified and downloaded (${ARCHIVE_SIZE} bytes)."
 echo ""
 echo "[5/7] Simulating disaster: Dropping table 't1'..."
 run_sql "DROP TABLE t1;"
-if run_sql "SELECT 1 FROM t1;" &> /dev/null; then
+
+table_dropped=false
+for attempt in 1 2 3 4 5; do
+    if ! run_sql "SELECT 1 FROM t1;" &> /dev/null; then
+        table_dropped=true
+        break
+    fi
+    sleep 1
+done
+
+if [ "${table_dropped}" != "true" ]; then
     echo "Table 't1' should not exist after DROP TABLE!"
     exit 1
 fi

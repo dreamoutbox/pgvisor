@@ -173,6 +173,75 @@ impl SqlSecurityGuard {
         Ok(without_trailing_semicolon.to_string())
     }
 
+    /// Validates DDL statements for user and permission management.
+    /// Strictly permits only CREATE ROLE/USER, DROP ROLE/USER, ALTER ROLE/USER,
+    /// GRANT, and REVOKE statements.
+    pub fn validate_user_management_ddl(&self, raw_sql: &str) -> Result<String, SecurityError> {
+        let cleaned = Self::strip_comments(raw_sql);
+        let trimmed = cleaned.trim();
+
+        if trimmed.is_empty() {
+            return Err(SecurityError::EmptyQuery);
+        }
+
+        if !self.allow_mutations {
+            return Err(SecurityError::MutationForbidden(
+                "User management DDL is forbidden in read-only mode".into(),
+            ));
+        }
+
+        let without_trailing_semicolon = trimmed.trim_end_matches(';').trim();
+        if without_trailing_semicolon.contains(';') {
+            return Err(SecurityError::MultiStatementForbidden(
+                "Multiple statements separated by semicolon are disallowed".into(),
+            ));
+        }
+
+        let upper = without_trailing_semicolon.to_uppercase();
+        let first_word = upper.split_whitespace().next().unwrap_or_default();
+        let second_word = upper.split_whitespace().nth(1).unwrap_or_default();
+
+        let is_valid_role_ddl = match first_word {
+            "CREATE" => second_word == "ROLE" || second_word == "USER",
+            "DROP" => second_word == "ROLE" || second_word == "USER",
+            "ALTER" => second_word == "ROLE" || second_word == "USER",
+            "GRANT" => upper.contains(" TO "),
+            "REVOKE" => upper.contains(" FROM "),
+            _ => false,
+        };
+
+        if !is_valid_role_ddl {
+            return Err(SecurityError::MutationForbidden(format!(
+                "Statement is not an allowed user management DDL: '{}'",
+                first_word
+            )));
+        }
+
+        // Safeguard against nested hazardous DDL or injection
+        let forbidden = [
+            "DROP TABLE",
+            "DROP DATABASE",
+            "DROP SCHEMA",
+            "TRUNCATE ",
+            "DELETE FROM",
+            "UPDATE ",
+            "INSERT INTO",
+            "COPY ",
+            "EXECUTE ",
+            "DO $$",
+        ];
+        for kw in &forbidden {
+            if upper.contains(kw) {
+                return Err(SecurityError::MutationForbidden(format!(
+                    "Forbidden keyword '{}' detected in user management DDL",
+                    kw
+                )));
+            }
+        }
+
+        Ok(without_trailing_semicolon.to_string())
+    }
+
     /// Verifies admin authentication token.
     pub fn verify_admin_token(
         auth_header: Option<&str>,
@@ -382,7 +451,12 @@ mod tests {
 
         // Cookie pgvisor_token
         let mut headers = HeaderMap::new();
-        headers.insert(COOKIE, "other_val=123; pgvisor_token=cookie-secret; foo=bar".parse().unwrap());
+        headers.insert(
+            COOKIE,
+            "other_val=123; pgvisor_token=cookie-secret; foo=bar"
+                .parse()
+                .unwrap(),
+        );
         assert_eq!(
             SqlSecurityGuard::extract_token_from_headers(&headers),
             Some("cookie-secret".to_string())
@@ -391,5 +465,58 @@ mod tests {
         // Empty / none
         let headers = HeaderMap::new();
         assert_eq!(SqlSecurityGuard::extract_token_from_headers(&headers), None);
+    }
+
+    #[test]
+    fn test_validate_user_management_ddl() {
+        let guard = SqlSecurityGuard::default();
+
+        // Valid user management DDL statements
+        assert!(guard
+            .validate_user_management_ddl("CREATE ROLE app_user WITH LOGIN PASSWORD 'secret';")
+            .is_ok());
+        assert!(guard
+            .validate_user_management_ddl("ALTER ROLE app_user WITH CREATEDB;")
+            .is_ok());
+        assert!(guard
+            .validate_user_management_ddl("DROP ROLE app_user;")
+            .is_ok());
+        assert!(guard
+            .validate_user_management_ddl("GRANT SELECT, INSERT ON TABLE public.users TO app_user;")
+            .is_ok());
+        assert!(guard
+            .validate_user_management_ddl("REVOKE INSERT ON TABLE public.users FROM app_user;")
+            .is_ok());
+        assert!(guard
+            .validate_user_management_ddl("GRANT admin_group TO app_user;")
+            .is_ok());
+        assert!(guard
+            .validate_user_management_ddl("REVOKE admin_group FROM app_user;")
+            .is_ok());
+
+        // Dangerous or forbidden SQL
+        assert!(matches!(
+            guard.validate_user_management_ddl("DROP TABLE users;"),
+            Err(SecurityError::MutationForbidden(_))
+        ));
+        assert!(matches!(
+            guard.validate_user_management_ddl("SELECT * FROM pg_roles;"),
+            Err(SecurityError::MutationForbidden(_))
+        ));
+        assert!(matches!(
+            guard.validate_user_management_ddl("INSERT INTO users VALUES (1);"),
+            Err(SecurityError::MutationForbidden(_))
+        ));
+        assert!(matches!(
+            guard.validate_user_management_ddl("CREATE ROLE app_user; DROP TABLE users;"),
+            Err(SecurityError::MultiStatementForbidden(_))
+        ));
+
+        // Read-only mode blocks user management DDL
+        let ro_guard = SqlSecurityGuard::new_read_only(Duration::from_secs(5), 100);
+        assert!(matches!(
+            ro_guard.validate_user_management_ddl("CREATE ROLE app_user;"),
+            Err(SecurityError::MutationForbidden(_))
+        ));
     }
 }

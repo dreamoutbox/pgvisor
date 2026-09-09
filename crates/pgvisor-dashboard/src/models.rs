@@ -171,3 +171,109 @@ pub struct SwitchoverResponse {
     pub new_leader_id: u64,
 }
 
+/// Closed set of supported table-level privilege types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TablePrivilegeKind {
+    Select,
+    Insert,
+    Update,
+    Delete,
+    Truncate,
+    References,
+    Trigger,
+}
+
+impl TablePrivilegeKind {
+    pub fn as_sql_str(&self) -> &'static str {
+        match self {
+            Self::Select => "SELECT",
+            Self::Insert => "INSERT",
+            Self::Update => "UPDATE",
+            Self::Delete => "DELETE",
+            Self::Truncate => "TRUNCATE",
+            Self::References => "REFERENCES",
+            Self::Trigger => "TRIGGER",
+        }
+    }
+}
+
+/// A PostgreSQL role as returned by pg_roles (excluding system pg_* roles).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PgRole {
+    pub rolname: String,
+    pub rolcanlogin: bool,
+    pub rolcreatedb: bool,
+    pub rolcreaterole: bool,
+    pub rolreplication: bool,
+    pub rolsuper: bool,
+    pub rolconnlimit: i32,
+    pub member_of: Vec<String>,
+}
+
+/// A table-level privilege entry for a role on a specific table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TablePrivilege {
+    pub table_name: String,
+    pub schema: String,
+    pub select: bool,
+    pub insert: bool,
+    pub update: bool,
+    pub delete: bool,
+    pub truncate: bool,
+    pub references: bool,
+    pub trigger: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_conn_limit() -> i32 {
+    -1
+}
+
+/// Request to create a new database role.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateRoleRequest {
+    pub name: String,
+    pub password: Option<String>,
+    #[serde(default = "default_true")]
+    pub login: bool,
+    #[serde(default)]
+    pub createdb: bool,
+    #[serde(default)]
+    pub createrole: bool,
+    #[serde(default)]
+    pub replication: bool,
+    #[serde(default = "default_conn_limit")]
+    pub connection_limit: i32,
+}
+
+/// Request to alter attributes of an existing role.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AlterRoleRequest {
+    pub password: Option<String>,
+    pub login: Option<bool>,
+    pub createdb: Option<bool>,
+    pub createrole: Option<bool>,
+    pub replication: Option<bool>,
+    pub connection_limit: Option<i32>,
+}
+
+/// Request to grant or revoke role membership.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoleMembershipRequest {
+    pub member_role: String,
+    pub group_role: String,
+}
+
+/// Request to grant or revoke a table-level privilege.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TablePrivilegeRequest {
+    pub table_name: String,
+    pub schema: Option<String>,
+    pub privilege: TablePrivilegeKind,
+    pub grant: bool,
+}
+

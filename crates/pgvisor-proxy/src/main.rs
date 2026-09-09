@@ -147,6 +147,9 @@ async fn main() -> Result<()> {
             pool.clone(),
         ));
         dash_state_inner.cluster_service = cluster_service;
+        dash_state_inner.user_service = Arc::new(pgvisor_dashboard::handlers::SqlUserService::new(
+            dash_state_inner.sql_executor.clone(),
+        ));
 
         let dash_state = Arc::new(dash_state_inner);
         dash_state_opt = Some(dash_state.clone());

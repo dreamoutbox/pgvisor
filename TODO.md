@@ -64,7 +64,11 @@
 
 - [x] manually switchover new leader. dev can perform switchover in web dashboard.
 
-- [ ] add page for manage databaser users and permissions.
+- [x] add page for manage databaser users and permissions.
+
+- [ ] add transaction SQL test
+
+- [ ] assert write query always go to leader and read only go to replica.
 
 - [ ] add audit logs view in web dashboard for node up/down. 
       - backup/restore perform. 
@@ -89,6 +93,8 @@
 - [ ] add github workflow to run tests. build docker image and publish to docker hub. 
 
 - [ ] testing two proxy. 3 nodes. then stop proxy1 and assert still access DB with proxy2.
+
+- [ ] move rust tests to tests directory.
 
 - [ ] run `cargo test` use cargo-nextest to run tests. one by one. fail fast.
 

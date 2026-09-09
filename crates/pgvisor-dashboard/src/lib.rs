@@ -12,10 +12,12 @@ use axum::{Json, Router};
 use std::sync::Arc;
 
 use crate::handlers::{
-    api_create_backup, api_delete_backup, api_download_backup, api_execute_sql, api_list_backups,
-    api_list_tables, api_nodes, api_restore_backup, api_status, api_switchover, api_table_data,
+    api_alter_user, api_create_backup, api_create_user, api_delete_backup, api_download_backup,
+    api_drop_user, api_execute_sql, api_get_privileges, api_get_user, api_grant_membership,
+    api_list_backups, api_list_tables, api_list_users, api_nodes, api_restore_backup,
+    api_revoke_membership, api_set_privilege, api_status, api_switchover, api_table_data,
     api_table_schema, get_backups_page, get_login_page, get_logout, get_nodes, get_overview,
-    get_sql_console, get_tables_page, post_login, DashboardState,
+    get_sql_console, get_tables_page, get_users_page, post_login, DashboardState,
 };
 use crate::security::SqlSecurityGuard;
 
@@ -68,6 +70,7 @@ pub fn create_router(state: Arc<DashboardState>) -> Router {
         .route("/tables", get(get_tables_page))
         .route("/sql", get(get_sql_console))
         .route("/backups", get(get_backups_page))
+        .route("/users", get(get_users_page))
         .route("/api/status", get(api_status))
         .route("/api/nodes", get(api_nodes))
         .route("/api/sql", post(api_execute_sql))
@@ -88,6 +91,20 @@ pub fn create_router(state: Arc<DashboardState>) -> Router {
         )
         .route("/api/backups/:snapshot_id", delete(api_delete_backup))
         .route("/api/cluster/switchover", post(api_switchover))
+        .route("/api/users", get(api_list_users).post(api_create_user))
+        .route(
+            "/api/users/:role",
+            get(api_get_user).put(api_alter_user).delete(api_drop_user),
+        )
+        .route("/api/users/:role/memberships", post(api_grant_membership))
+        .route(
+            "/api/users/:role/memberships/:group",
+            delete(api_revoke_membership),
+        )
+        .route(
+            "/api/users/:role/privileges",
+            get(api_get_privileges).post(api_set_privilege),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -276,6 +293,122 @@ mod tests {
         let req = Request::builder()
             .method("DELETE")
             .uri("/api/backups/snap-20260904-200000")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 15. Test GET /users page
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/users")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 16. Test GET /api/users
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/users")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 17. Test GET /api/users/app_user
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/users/app_user")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 18. Test POST /api/users (create new role)
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/users")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                r#"{"name": "test_dev", "login": true, "createdb": true, "connection_limit": 20}"#,
+            ))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 19. Test PUT /api/users/test_dev (alter role)
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/api/users/test_dev")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"connection_limit": 10}"#))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 20. Test POST /api/users/test_dev/memberships (grant membership)
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/users/test_dev/memberships")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                r#"{"member_role": "test_dev", "group_role": "read_only_group"}"#,
+            ))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 21. Test GET /api/users/test_dev/privileges
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/users/test_dev/privileges")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 22. Test POST /api/users/test_dev/privileges (set privilege)
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/users/test_dev/privileges")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                r#"{"table_name": "pgvisor_demo", "privilege": "select", "grant": true}"#,
+            ))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 23. Test DELETE /api/users/test_dev/memberships/read_only_group
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/users/test_dev/memberships/read_only_group")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 24. Test DELETE /api/users/test_dev
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/users/test_dev")
             .body(Body::empty())
             .unwrap();
         let response = app.clone().oneshot(req).await.unwrap();
@@ -496,4 +629,3 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }
-

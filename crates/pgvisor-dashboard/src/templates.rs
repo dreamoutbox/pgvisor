@@ -1,6 +1,6 @@
 use crate::models::{
     BackupItemView, BackupOverviewSummary, ClusterOverview, ColumnInfo, NodeHealthState, NodeRole,
-    NodeSummary, TableSummary,
+    NodeSummary, PgRole, TablePrivilege, TableSummary,
 };
 use askama::Template;
 
@@ -60,4 +60,22 @@ pub struct BackupsTemplate<'a> {
 pub struct LoginTemplate<'a> {
     pub cluster_id: &'a str,
     pub error: Option<&'a str>,
+}
+
+#[derive(Template)]
+#[template(path = "users.html")]
+pub struct UsersTemplate<'a> {
+    pub roles: &'a [PgRole],
+    pub active_role: Option<&'a PgRole>,
+    pub active_tab: &'a str,
+    pub table_privileges: &'a [TablePrivilege],
+    pub all_tables: &'a [TableSummary],
+    pub all_roles: &'a [PgRole],
+    pub auth_enabled: bool,
+}
+
+impl<'a> UsersTemplate<'a> {
+    pub fn is_active_role(&self, name: &str) -> bool {
+        self.active_role.map(|r| r.rolname.as_str()) == Some(name)
+    }
 }

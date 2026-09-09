@@ -1,0 +1,654 @@
+{% extends "base.html" %}
+
+{% block title %}PgVisor - Users & Roles{% endblock %}
+{% block nav_users %}active{% endblock %}
+
+{% block content %}
+<style>
+    .tab-btn {
+        padding: 8px 16px;
+        color: var(--text-muted);
+        text-decoration: none;
+        border-radius: 6px;
+        font-size: 0.9rem;
+        font-weight: 500;
+        transition: all 0.2s;
+    }
+    .tab-btn:hover {
+        background: var(--bg-card-hover);
+        color: var(--text-main);
+    }
+    .active-tab {
+        background: var(--bg-card-hover);
+        color: var(--primary);
+        font-weight: 600;
+    }
+    .role-item:hover {
+        background-color: var(--bg-card-hover) !important;
+    }
+    .active-role {
+        background-color: rgba(56, 189, 248, 0.15) !important;
+        border-left: 3px solid var(--primary);
+    }
+    .form-group {
+        margin-bottom: 16px;
+    }
+    .form-label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 0.85rem;
+        color: var(--text-muted);
+        font-weight: 500;
+    }
+    .form-input {
+        width: 100%;
+        background: #0b0f19;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 8px 12px;
+        color: var(--text-main);
+        font-size: 0.9rem;
+        outline: none;
+    }
+    .form-input:focus {
+        border-color: var(--primary);
+    }
+    .checkbox-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        font-size: 0.9rem;
+        color: var(--text-main);
+    }
+    .btn {
+        padding: 8px 16px;
+        border-radius: 6px;
+        border: none;
+        font-weight: 600;
+        cursor: pointer;
+        font-size: 0.85rem;
+        transition: opacity 0.2s;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .btn:hover {
+        opacity: 0.9;
+    }
+    .btn-primary {
+        background: var(--primary);
+        color: #0f172a;
+    }
+    .btn-danger {
+        background: var(--danger);
+        color: #0f172a;
+    }
+    .btn-secondary {
+        background: var(--border);
+        color: var(--text-main);
+    }
+    .modal-overlay {
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0, 0, 0, 0.7);
+        display: none;
+        justify-content: center;
+        align-items: center;
+        z-index: 1000;
+    }
+    .modal-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 24px;
+        width: 480px;
+        max-width: 90vw;
+    }
+    .toast {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 12px 20px;
+        border-radius: 6px;
+        font-size: 0.9rem;
+        font-weight: 500;
+        display: none;
+        z-index: 2000;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    }
+    .toast-success {
+        background: #166534;
+        color: #bbf7d0;
+        border: 1px solid #22c55e;
+    }
+    .toast-error {
+        background: #991b1b;
+        color: #fecaca;
+        border: 1px solid #ef4444;
+    }
+    .priv-table th, .priv-table td {
+        padding: 10px 14px;
+        font-size: 0.85rem;
+        text-align: center;
+    }
+    .priv-table th:first-child, .priv-table td:first-child {
+        text-align: left;
+    }
+</style>
+
+<div id="toast" class="toast"></div>
+
+<header>
+    <div>
+        <h1>Users &amp; Roles Management</h1>
+        <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 4px;">
+            Manage PostgreSQL database roles, authentication attributes, group memberships, and table privileges
+        </p>
+    </div>
+    <div style="display: flex; gap: 10px; align-items: center;">
+        <span class="badge badge-standby">Cluster IAM</span>
+        <span class="badge badge-healthy">Postgres Roles</span>
+    </div>
+</header>
+
+<div style="display: flex; gap: 24px; align-items: flex-start;">
+    <!-- Left Panel: Role List -->
+    <div class="card" style="width: 280px; padding: 16px; flex-shrink: 0;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin: 0; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">
+                Roles ({{ roles.len() }})
+            </h3>
+            <button onclick="openCreateModal()" class="btn btn-primary" style="padding: 4px 10px; font-size: 0.75rem;">+ New Role</button>
+        </div>
+
+        <input type="text" id="role-search" placeholder="Filter roles..." oninput="filterRoleList()"
+               style="width: 100%; background: #0b0f19; border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; color: var(--text-main); font-size: 0.85rem; margin-bottom: 12px;">
+
+        <div id="role-list" style="display: flex; flex-direction: column; gap: 4px; max-height: 540px; overflow-y: auto;">
+            {% for r in roles %}
+            <a href="/users?role={{ r.rolname }}&tab={{ active_tab }}" 
+               class="role-item {% if self.is_active_role(r.rolname.as_str()) %}active-role{% endif %}"
+               data-name="{{ r.rolname }}"
+               style="display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; border-radius: 6px; text-decoration: none; color: var(--text-main); font-size: 0.9rem; transition: background 0.15s;">
+                <span style="font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    {{ r.rolname }}
+                </span>
+                <div style="display: flex; gap: 4px; align-items: center;">
+                    {% if r.rolsuper %}
+                    <span class="badge badge-fenced" style="font-size: 0.65rem; padding: 2px 4px;">Super</span>
+                    {% endif %}
+                    {% if r.rolcanlogin %}
+                    <span class="badge badge-healthy" style="font-size: 0.65rem; padding: 2px 4px;">Login</span>
+                    {% else %}
+                    <span class="badge badge-standby" style="font-size: 0.65rem; padding: 2px 4px;">Group</span>
+                    {% endif %}
+                </div>
+            </a>
+            {% endfor %}
+            {% if roles.is_empty() %}
+            <p style="color: var(--text-muted); font-size: 0.85rem; padding: 8px 4px;">No database roles found.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Right Panel: Role Detail & Permissions -->
+    <div style="flex: 1; min-width: 0;">
+        {% if let Some(role) = active_role %}
+        <!-- Role Summary Header -->
+        <div class="card" style="padding: 16px 20px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <h2 style="font-size: 1.4rem; font-weight: 700; margin: 0;">{{ role.rolname }}</h2>
+                    {% if role.rolsuper %}
+                    <span class="badge badge-fenced">Superuser (Read-Only)</span>
+                    {% endif %}
+                    {% if role.rolcanlogin %}
+                    <span class="badge badge-healthy">Can Login</span>
+                    {% else %}
+                    <span class="badge badge-standby">Group Role</span>
+                    {% endif %}
+                    {% if role.rolreplication %}
+                    <span class="badge badge-leader">Replication</span>
+                    {% endif %}
+                </div>
+                <div style="margin-top: 6px; font-size: 0.85rem; color: var(--text-muted);">
+                    Connection Limit: {% if role.rolconnlimit == -1 %}Unlimited{% else %}{{ role.rolconnlimit }}{% endif %}
+                    {% if !role.member_of.is_empty() %}
+                    &bull; Member of: {% for m in role.member_of %}<span style="color: var(--primary);">{{ m }}</span>{% if !loop.last %}, {% endif %}{% endfor %}
+                    {% endif %}
+                </div>
+            </div>
+            <button onclick="confirmDropRole('{{ role.rolname }}')" class="btn btn-danger" style="font-size: 0.8rem;">
+                Drop Role
+            </button>
+        </div>
+
+        <!-- Tab Navigation Bar -->
+        <div style="display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
+            <a href="/users?role={{ role.rolname }}&tab=attributes" class="tab-btn {% if active_tab == "attributes" %}active-tab{% endif %}">
+                Role Attributes
+            </a>
+            <a href="/users?role={{ role.rolname }}&tab=memberships" class="tab-btn {% if active_tab == "memberships" %}active-tab{% endif %}">
+                Group Memberships ({{ role.member_of.len() }})
+            </a>
+            <a href="/users?role={{ role.rolname }}&tab=privileges" class="tab-btn {% if active_tab == "privileges" %}active-tab{% endif %}">
+                Table Privileges ({{ table_privileges.len() }})
+            </a>
+        </div>
+
+        <!-- Tab 1: Attributes -->
+        {% if active_tab == "attributes" %}
+        <div class="card" style="padding: 24px;">
+            <h3 style="font-size: 1rem; margin-bottom: 16px; color: var(--text-main);">Configure Role Attributes</h3>
+            <form id="alter-role-form" onsubmit="handleAlterRole(event, '{{ role.rolname }}')">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+                    <div class="form-group">
+                        <label class="form-label">Set New Password</label>
+                        <input type="password" id="attr-password" class="form-input" placeholder="Leave blank to keep current password">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Connection Limit (-1 for unlimited)</label>
+                        <input type="number" id="attr-connlimit" class="form-input" value="{{ role.rolconnlimit }}">
+                    </div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="attr-login" {% if role.rolcanlogin %}checked{% endif %}>
+                        <span>Can Login (<code>LOGIN</code>)</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="attr-createdb" {% if role.rolcreatedb %}checked{% endif %}>
+                        <span>Can Create Databases (<code>CREATEDB</code>)</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="attr-createrole" {% if role.rolcreaterole %}checked{% endif %}>
+                        <span>Can Create Roles (<code>CREATEROLE</code>)</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="attr-replication" {% if role.rolreplication %}checked{% endif %}>
+                        <span>Can Initiate Streaming Replication (<code>REPLICATION</code>)</span>
+                    </label>
+                </div>
+
+                <div style="margin-bottom: 20px; padding: 12px 16px; background: rgba(0,0,0,0.2); border-radius: 6px; border: 1px solid var(--border);">
+                    <label class="checkbox-label" style="opacity: 0.7; cursor: not-allowed;">
+                        <input type="checkbox" {% if role.rolsuper %}checked{% endif %} disabled>
+                        <span>Superuser (<code>SUPERUSER</code>) &mdash; <em style="color: var(--text-muted); font-size: 0.8rem;">Read-only in dashboard for safety</em></span>
+                    </label>
+                </div>
+
+                <button type="submit" class="btn btn-primary">Save Attributes</button>
+            </form>
+        </div>
+        {% endif %}
+
+        <!-- Tab 2: Memberships -->
+        {% if active_tab == "memberships" %}
+        <div class="card" style="padding: 20px; margin-bottom: 20px;">
+            <h3 style="font-size: 1rem; margin-bottom: 12px; color: var(--text-main);">Current Group Memberships</h3>
+            {% if role.member_of.is_empty() %}
+            <p style="color: var(--text-muted); font-size: 0.9rem;">This role is not currently a member of any other roles.</p>
+            {% else %}
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+                {% for group in role.member_of %}
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: rgba(0,0,0,0.2); border-radius: 6px; border: 1px solid var(--border);">
+                    <span style="font-weight: 500;">{{ group }}</span>
+                    <button onclick="revokeMembership('{{ role.rolname }}', '{{ group }}')" class="btn btn-danger" style="padding: 4px 10px; font-size: 0.75rem;">
+                        Revoke
+                    </button>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="card" style="padding: 20px;">
+            <h3 style="font-size: 1rem; margin-bottom: 12px; color: var(--text-main);">Grant New Group Membership</h3>
+            <div style="display: flex; gap: 12px; align-items: center;">
+                <select id="grant-group-select" class="form-input" style="flex: 1;">
+                    <option value="">-- Select group role --</option>
+                    {% for candidate in all_roles %}
+                    {% if candidate.rolname != role.rolname %}
+                    <option value="{{ candidate.rolname }}">{{ candidate.rolname }}</option>
+                    {% endif %}
+                    {% endfor %}
+                </select>
+                <button onclick="grantMembership('{{ role.rolname }}')" class="btn btn-primary">
+                    Grant Membership
+                </button>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Tab 3: Privileges -->
+        {% if active_tab == "privileges" %}
+        <div class="card" style="padding: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <h3 style="font-size: 1rem; margin: 0; color: var(--text-main);">Table Privileges (public schema)</h3>
+                <span style="font-size: 0.8rem; color: var(--text-muted);">Toggling checkboxes immediately executes GRANT / REVOKE</span>
+            </div>
+
+            <div style="overflow-x: auto;">
+                <table class="priv-table" style="width: 100%;">
+                    <thead>
+                        <tr>
+                            <th>Table Name</th>
+                            <th>SELECT</th>
+                            <th>INSERT</th>
+                            <th>UPDATE</th>
+                            <th>DELETE</th>
+                            <th>TRUNCATE</th>
+                            <th>REFERENCES</th>
+                            <th>TRIGGER</th>
+                            <th>All</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for priv in table_privileges %}
+                        <tr id="priv-row-{{ priv.table_name }}">
+                            <td style="font-weight: 500;">{{ priv.table_name }}</td>
+                            <td>
+                                <input type="checkbox" onchange="togglePrivilege(this, '{{ role.rolname }}', '{{ priv.table_name }}', 'select')" {% if priv.select %}checked{% endif %}>
+                            </td>
+                            <td>
+                                <input type="checkbox" onchange="togglePrivilege(this, '{{ role.rolname }}', '{{ priv.table_name }}', 'insert')" {% if priv.insert %}checked{% endif %}>
+                            </td>
+                            <td>
+                                <input type="checkbox" onchange="togglePrivilege(this, '{{ role.rolname }}', '{{ priv.table_name }}', 'update')" {% if priv.update %}checked{% endif %}>
+                            </td>
+                            <td>
+                                <input type="checkbox" onchange="togglePrivilege(this, '{{ role.rolname }}', '{{ priv.table_name }}', 'delete')" {% if priv.delete %}checked{% endif %}>
+                            </td>
+                            <td>
+                                <input type="checkbox" onchange="togglePrivilege(this, '{{ role.rolname }}', '{{ priv.table_name }}', 'truncate')" {% if priv.truncate %}checked{% endif %}>
+                            </td>
+                            <td>
+                                <input type="checkbox" onchange="togglePrivilege(this, '{{ role.rolname }}', '{{ priv.table_name }}', 'references')" {% if priv.references %}checked{% endif %}>
+                            </td>
+                            <td>
+                                <input type="checkbox" onchange="togglePrivilege(this, '{{ role.rolname }}', '{{ priv.table_name }}', 'trigger')" {% if priv.trigger %}checked{% endif %}>
+                            </td>
+                            <td>
+                                <button onclick="toggleAllPrivileges('{{ role.rolname }}', '{{ priv.table_name }}')" class="btn btn-secondary" style="padding: 2px 8px; font-size: 0.7rem;">
+                                    Toggle All
+                                </button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        {% if table_privileges.is_empty() %}
+                        <tr>
+                            <td colspan="9" style="text-align: center; color: var(--text-muted); padding: 24px;">No tables found in public schema.</td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        {% else %}
+        <!-- Empty State -->
+        <div class="card" style="padding: 48px; text-align: center;">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" style="margin-bottom: 16px;">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                <circle cx="8.5" cy="7" r="4"></circle>
+                <line x1="20" y1="8" x2="20" y2="14"></line>
+                <line x1="23" y1="11" x2="17" y2="11"></line>
+            </svg>
+            <h3 style="font-size: 1.1rem; margin-bottom: 8px;">Select or Create a Role</h3>
+            <p style="color: var(--text-muted); font-size: 0.9rem; max-width: 420px; margin: 0 auto 20px;">
+                Select a database role from the left sidebar to manage attributes, inspect group memberships, and configure table privileges.
+            </p>
+            <button onclick="openCreateModal()" class="btn btn-primary">+ Create New Role</button>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Create Role Modal -->
+<div id="create-role-modal" class="modal-overlay">
+    <div class="modal-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h3 style="margin: 0; font-size: 1.15rem;">Create New Role</h3>
+            <button onclick="closeCreateModal()" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.2rem;">&times;</button>
+        </div>
+        <form id="create-role-form" onsubmit="handleCreateRole(event)">
+            <div class="form-group">
+                <label class="form-label">Role Name *</label>
+                <input type="text" id="create-name" class="form-input" required placeholder="e.g. app_user">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Password</label>
+                <input type="password" id="create-password" class="form-input" placeholder="Optional initial password">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Connection Limit (-1 = unlimited)</label>
+                <input type="number" id="create-connlimit" class="form-input" value="-1">
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 24px;">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="create-login" checked>
+                    <span>Can Login (<code>LOGIN</code>)</span>
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="create-createdb">
+                    <span>Can Create Databases (<code>CREATEDB</code>)</span>
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="create-createrole">
+                    <span>Can Create Roles (<code>CREATEROLE</code>)</span>
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="create-replication">
+                    <span>Can Initiate Replication (<code>REPLICATION</code>)</span>
+                </label>
+            </div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button type="button" onclick="closeCreateModal()" class="btn btn-secondary">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create Role</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    function showToast(msg, isError) {
+        const toast = document.getElementById('toast');
+        toast.innerText = msg;
+        toast.className = 'toast ' + (isError ? 'toast-error' : 'toast-success');
+        toast.style.display = 'block';
+        setTimeout(() => { toast.style.display = 'none'; }, 3500);
+    }
+
+    function filterRoleList() {
+        const query = document.getElementById('role-search').value.toLowerCase();
+        document.querySelectorAll('#role-list .role-item').forEach(item => {
+            const name = item.getAttribute('data-name').toLowerCase();
+            item.style.display = name.includes(query) ? 'flex' : 'none';
+        });
+    }
+
+    function openCreateModal() {
+        document.getElementById('create-role-modal').style.display = 'flex';
+        document.getElementById('create-name').focus();
+    }
+
+    function closeCreateModal() {
+        document.getElementById('create-role-modal').style.display = 'none';
+    }
+
+    async function handleCreateRole(e) {
+        e.preventDefault();
+        const payload = {
+            name: document.getElementById('create-name').value.trim(),
+            password: document.getElementById('create-password').value || null,
+            login: document.getElementById('create-login').checked,
+            createdb: document.getElementById('create-createdb').checked,
+            createrole: document.getElementById('create-createrole').checked,
+            replication: document.getElementById('create-replication').checked,
+            connection_limit: parseInt(document.getElementById('create-connlimit').value, 10) || -1
+        };
+
+        try {
+            const res = await fetch('/api/users', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (res.ok) {
+                window.location.href = `/users?role=${encodeURIComponent(payload.name)}&tab=attributes`;
+            } else {
+                const err = await res.text();
+                showToast(`Failed to create role: ${err}`, true);
+            }
+        } catch (err) {
+            showToast(`Network error: ${err}`, true);
+        }
+    }
+
+    async function handleAlterRole(e, roleName) {
+        e.preventDefault();
+        const pwd = document.getElementById('attr-password').value;
+        const payload = {
+            password: pwd ? pwd : null,
+            login: document.getElementById('attr-login').checked,
+            createdb: document.getElementById('attr-createdb').checked,
+            createrole: document.getElementById('attr-createrole').checked,
+            replication: document.getElementById('attr-replication').checked,
+            connection_limit: parseInt(document.getElementById('attr-connlimit').value, 10) || -1
+        };
+
+        try {
+            const res = await fetch(`/api/users/${encodeURIComponent(roleName)}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (res.ok) {
+                showToast(`Role '${roleName}' attributes saved successfully.`, false);
+                document.getElementById('attr-password').value = '';
+            } else {
+                const err = await res.text();
+                showToast(`Failed to update role: ${err}`, true);
+            }
+        } catch (err) {
+            showToast(`Network error: ${err}`, true);
+        }
+    }
+
+    async function confirmDropRole(roleName) {
+        if (!confirm(`Are you sure you want to drop role '${roleName}'? This action cannot be undone.`)) {
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/users/${encodeURIComponent(roleName)}`, {
+                method: 'DELETE'
+            });
+            if (res.ok) {
+                window.location.href = '/users';
+            } else {
+                const err = await res.text();
+                showToast(`Failed to drop role: ${err}`, true);
+            }
+        } catch (err) {
+            showToast(`Network error: ${err}`, true);
+        }
+    }
+
+    async function grantMembership(roleName) {
+        const sel = document.getElementById('grant-group-select');
+        const group = sel.value;
+        if (!group) return;
+
+        try {
+            const res = await fetch(`/api/users/${encodeURIComponent(roleName)}/memberships`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ member_role: roleName, group_role: group })
+            });
+            if (res.ok) {
+                window.location.reload();
+            } else {
+                const err = await res.text();
+                showToast(`Failed to grant membership: ${err}`, true);
+            }
+        } catch (err) {
+            showToast(`Network error: ${err}`, true);
+        }
+    }
+
+    async function revokeMembership(roleName, group) {
+        if (!confirm(`Revoke membership of '${group}' from '${roleName}'?`)) return;
+
+        try {
+            const res = await fetch(`/api/users/${encodeURIComponent(roleName)}/memberships/${encodeURIComponent(group)}`, {
+                method: 'DELETE'
+            });
+            if (res.ok) {
+                window.location.reload();
+            } else {
+                const err = await res.text();
+                showToast(`Failed to revoke membership: ${err}`, true);
+            }
+        } catch (err) {
+            showToast(`Network error: ${err}`, true);
+        }
+    }
+
+    async function togglePrivilege(checkbox, roleName, tableName, privilege) {
+        const grant = checkbox.checked;
+        try {
+            const res = await fetch(`/api/users/${encodeURIComponent(roleName)}/privileges`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    table_name: tableName,
+                    schema: 'public',
+                    privilege: privilege,
+                    grant: grant
+                })
+            });
+            if (res.ok) {
+                showToast(`${grant ? 'Granted' : 'Revoked'} ${privilege.toUpperCase()} on ${tableName}`, false);
+            } else {
+                checkbox.checked = !grant;
+                const err = await res.text();
+                showToast(`Privilege update failed: ${err}`, true);
+            }
+        } catch (err) {
+            checkbox.checked = !grant;
+            showToast(`Network error: ${err}`, true);
+        }
+    }
+
+    async function toggleAllPrivileges(roleName, tableName) {
+        const row = document.getElementById(`priv-row-${tableName}`);
+        if (!row) return;
+        const checkboxes = row.querySelectorAll('input[type="checkbox"]');
+        const anyUnchecked = Array.from(checkboxes).some(cb => !cb.checked);
+        const targetState = anyUnchecked;
+
+        const privs = ['select', 'insert', 'update', 'delete', 'truncate', 'references', 'trigger'];
+        for (const priv of privs) {
+            try {
+                await fetch(`/api/users/${encodeURIComponent(roleName)}/privileges`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        table_name: tableName,
+                        schema: 'public',
+                        privilege: priv,
+                        grant: targetState
+                    })
+                });
+            } catch (e) {}
+        }
+        checkboxes.forEach(cb => { cb.checked = targetState; });
+        showToast(`${targetState ? 'Granted' : 'Revoked'} all privileges on ${tableName}`, false);
+    }
+</script>
+{% endblock %}
