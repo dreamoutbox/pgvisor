@@ -72,11 +72,13 @@
 
 - [x] assert write query always go to leader and read only go to replica.
 
-- [ ] add audit logs view in web dashboard for node up/down. 
+- [x] add audit logs page in web dashboard for 
+      - node up/down. 
       - backup/restore perform. 
       - dangerous SQL (DROP TABLE/TRUNCATE/DELETE) logging. so when it happens, we can use the time to restore with PITR. 
       - log worker election vote. and election result.
       - log worker join, leave event.
+      - user create/delete/grant permission
 
 - [ ] very bad disaster testing: 3 nodes setup. 2 nodes down.
       - start as 3 nodes 
@@ -92,6 +94,8 @@
 
 - [ ] testing two proxy. 3 nodes. then stop proxy1 and assert still access DB with proxy2.
 
+- [ ] web dashboard chart & graph for useful data
+
 - [ ] add README.md
 
 - [ ] add github workflow to run tests. build docker image and publish to docker hub. 
@@ -105,8 +109,6 @@
 # Backlog:
 
 - [ ] web dashboard change to use bootstrap5. less custom css/js.
-
-- [ ] web dashboard chart & graph
 
 - [ ] - **Dynamic Cluster Scaling**: Protocol for adding and removing sidecar nodes dynamically via OpenRaft joint consensus at runtime without node restarts.
 

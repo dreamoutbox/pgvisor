@@ -21,6 +21,20 @@
 - `crates/pgvisor-dashboard/templates/users.html` = Users & roles management HTML template with attributes, memberships, and privileges tabs
 - `crates/pgvisor-dashboard/templates/base.html` = Sidebar navigation link for `Users & Roles`
 - `crates/pgvisor-dashboard/src/lib.rs` = Route registration for `/users` and `/api/users/*`
-- `crates/pgvisor-proxy/src/main.rs` = Injects `SqlUserService` into proxy dashboard state
 - `tests/test-users-permissions.sh` = Integration test for role CRUD, memberships, and table privilege grants
 
+### If you want to modify cluster audit logs, dangerous SQL tracking, PITR recovery recommendations, or S3 audit event persistence:
+
+- `crates/pgvisor-core/src/audit.rs` = `AuditEventKind` enum, `AuditEvent` model, `AuditLog` ring buffer with background S3 persistence and startup loader
+- `crates/pgvisor-dashboard/src/models.rs` = `AuditEventView`, `AuditListResponse`, `AuditOverviewStats`
+- `crates/pgvisor-dashboard/src/templates.rs` = `AuditTemplate` Askama definition
+- `crates/pgvisor-dashboard/templates/audit.html` = Audit logs HTML dashboard page with search, filters, PITR timestamps, and responsive badges
+- `crates/pgvisor-dashboard/templates/base.html` = Sidebar navigation link and badge style formatting
+- `crates/pgvisor-dashboard/src/handlers.rs` = `/audit-logs` and `/api/audit-logs` Axum handlers, and audit event recording on user management actions
+- `crates/pgvisor-dashboard/src/lib.rs` = Route registration for `/audit-logs` and `/api/audit-logs`
+- `crates/pgvisor-proxy/src/session.rs` = Auditing dangerous SQL (DROP, TRUNCATE, DELETE) and user/permission SQL commands
+- `crates/pgvisor-proxy/src/backup.rs` = Auditing backup creation and restore operations
+- `crates/pgvisor-proxy/src/cluster.rs` = Auditing cluster switchover operations
+- `crates/pgvisor-proxy/src/main.rs` = AuditLog initialization with S3 operator, topology event polling, and sidecar `/control/events` ingestion
+- `crates/pgvisor-sidecar/src/main.rs` = Sidecar event recording and `GET /control/events` endpoint for promotion, demotion, and fencing
+- `tests/test-audit-logs.sh` = Integration test suite verifying 9 audit assertions end-to-end

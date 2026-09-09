@@ -6,8 +6,11 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use anyhow::Result;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -19,6 +22,15 @@ use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
+/// Auditable event record tracked within local sidecar lifecycle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SidecarEventRecord {
+    pub id: u64,
+    pub timestamp: String,
+    pub kind: String,
+    pub detail: String,
+}
+
 #[derive(Clone)]
 struct SidecarState {
     supervisor: Arc<PostgresSupervisor>,
@@ -27,6 +39,25 @@ struct SidecarState {
     node_id: u64,
     role: Arc<RwLock<String>>,
     pg_version: String,
+    events: Arc<RwLock<VecDeque<SidecarEventRecord>>>,
+    event_id: Arc<AtomicU64>,
+}
+
+impl SidecarState {
+    async fn record_event(&self, kind: &str, detail: impl Into<String>) {
+        let id = self.event_id.fetch_add(1, Ordering::SeqCst);
+        let record = SidecarEventRecord {
+            id,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            kind: kind.to_string(),
+            detail: detail.into(),
+        };
+        let mut q = self.events.write().await;
+        if q.len() >= 200 {
+            q.pop_front();
+        }
+        q.push_back(record);
+    }
 }
 
 #[derive(Deserialize)]
@@ -92,6 +123,13 @@ async fn handle_promote(
         *r = "leader".to_string();
     }
 
+    state
+        .record_event(
+            "election_result",
+            format!("Node {} successfully promoted to leader", state.node_id),
+        )
+        .await;
+
     Ok(Json(serde_json::json!({
         "status": "ok",
         "message": format!("Node {} successfully promoted to leader", state.node_id),
@@ -118,6 +156,13 @@ async fn handle_fence(
         *r = "fenced".to_string();
     }
 
+    state
+        .record_event(
+            "election_result",
+            format!("Node {} fenced immediately", state.node_id),
+        )
+        .await;
+
     Ok(Json(serde_json::json!({
         "status": "ok",
         "message": format!("Node {} fenced immediately", state.node_id),
@@ -143,6 +188,13 @@ async fn handle_demote(
         let mut r = state.role.write().await;
         *r = "fenced".to_string();
     }
+
+    state
+        .record_event(
+            "election_result",
+            format!("Node {} demoted and stopped cleanly", state.node_id),
+        )
+        .await;
 
     Ok(Json(serde_json::json!({
         "status": "ok",
@@ -193,6 +245,13 @@ async fn handle_repoint(
         let mut r = state.role.write().await;
         *r = "standby".to_string();
     }
+
+    state
+        .record_event(
+            "node_joined",
+            format!("Node {} re-pointed to {}", state.node_id, payload.primary_conninfo),
+        )
+        .await;
 
     Ok(Json(serde_json::json!({
         "status": "ok",
@@ -397,7 +456,9 @@ async fn main() -> Result<()> {
         }
     };
 
-    let role_ref = Arc::new(RwLock::new(role));
+    let role_ref = Arc::new(RwLock::new(role.clone()));
+    let events_queue = Arc::new(RwLock::new(VecDeque::new()));
+    let event_id_counter = Arc::new(AtomicU64::new(1));
 
     let control_state = SidecarState {
         supervisor: supervisor.clone(),
@@ -406,7 +467,45 @@ async fn main() -> Result<()> {
         node_id,
         role: role_ref.clone(),
         pg_version,
+        events: events_queue.clone(),
+        event_id: event_id_counter.clone(),
     };
+
+    // Log initial startup event
+    if role == "leader" {
+        control_state
+            .record_event(
+                "election_result",
+                format!("Node {} initialized as cluster leader", node_id),
+            )
+            .await;
+    } else {
+        control_state
+            .record_event(
+                "node_joined",
+                format!("Node {} joined cluster as standby replica", node_id),
+            )
+            .await;
+    }
+
+    #[derive(Deserialize)]
+    struct EventsQuery {
+        since_id: Option<u64>,
+    }
+
+    async fn handle_events(
+        State(state): State<SidecarState>,
+        Query(query): Query<EventsQuery>,
+    ) -> Json<Vec<SidecarEventRecord>> {
+        let since_id = query.since_id.unwrap_or(0);
+        let q = state.events.read().await;
+        let records: Vec<SidecarEventRecord> = q
+            .iter()
+            .filter(|e| e.id > since_id)
+            .cloned()
+            .collect();
+        Json(records)
+    }
 
     let control_port: u16 = env::var("PGVISOR_CONTROL_PORT")
         .ok()
@@ -416,6 +515,7 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         .route("/control/status", get(handle_status))
+        .route("/control/events", get(handle_events))
         .route("/control/restore", post(handle_restore))
         .route("/control/resync", post(handle_resync))
         .route("/control/promote", post(handle_promote))
@@ -508,6 +608,15 @@ async fn main() -> Result<()> {
                                     let mut r = monitor_state.role.write().await;
                                     *r = "standby".to_string();
                                 }
+                                monitor_state
+                                    .record_event(
+                                        "node_joined",
+                                        format!(
+                                            "Node {} auto-rejoined cluster as standby under leader {}",
+                                            monitor_state.node_id, leader_id
+                                        ),
+                                    )
+                                    .await;
                                 missed_heartbeats = 0;
                             }
                             Err(e) => {
@@ -545,6 +654,15 @@ async fn main() -> Result<()> {
                                         let mut r = monitor_state.role.write().await;
                                         *r = "fenced".to_string();
                                     }
+                                    monitor_state
+                                        .record_event(
+                                            "election_result",
+                                            format!(
+                                                "Node {} fenced due to split-brain leader detection",
+                                                monitor_state.node_id
+                                            ),
+                                        )
+                                        .await;
                                     break;
                                 }
                             }
@@ -602,6 +720,15 @@ async fn main() -> Result<()> {
                                             let mut r = monitor_state.role.write().await;
                                             *r = "leader".to_string();
                                         }
+                                        monitor_state
+                                            .record_event(
+                                                "election_result",
+                                                format!(
+                                                    "Node {} auto-promoted to leader after quorum election",
+                                                    monitor_state.node_id
+                                                ),
+                                            )
+                                            .await;
                                         missed_heartbeats = 0;
 
                                         // Broadcast repoint to peer standbys (excluding self)

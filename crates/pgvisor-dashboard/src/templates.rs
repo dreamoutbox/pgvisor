@@ -1,6 +1,6 @@
 use crate::models::{
-    BackupItemView, BackupOverviewSummary, ClusterOverview, ColumnInfo, NodeHealthState, NodeRole,
-    NodeSummary, PgRole, TablePrivilege, TableSummary,
+    AuditEventView, AuditOverviewStats, BackupItemView, BackupOverviewSummary, ClusterOverview,
+    ColumnInfo, NodeHealthState, NodeRole, NodeSummary, PgRole, TablePrivilege, TableSummary,
 };
 use askama::Template;
 
@@ -77,5 +77,75 @@ pub struct UsersTemplate<'a> {
 impl<'a> UsersTemplate<'a> {
     pub fn is_active_role(&self, name: &str) -> bool {
         self.active_role.map(|r| r.rolname.as_str()) == Some(name)
+    }
+}
+
+#[derive(Template)]
+#[template(path = "audit.html")]
+pub struct AuditTemplate<'a> {
+    pub events: &'a [AuditEventView],
+    pub stats: &'a AuditOverviewStats,
+    pub active_kind: Option<&'a str>,
+    pub search_query: Option<&'a str>,
+    pub page: usize,
+    pub limit: usize,
+    pub total_pages: usize,
+    pub total_events: usize,
+    pub auth_enabled: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_audit_template_rendering() {
+        let stats = AuditOverviewStats {
+            total_events: 2,
+            dangerous_sql_count: 1,
+            latest_pitr_target: Some("2026-09-09 12:00:00 UTC".to_string()),
+        };
+        let events = vec![
+            AuditEventView {
+                id: 1,
+                occurred_at: "2026-09-09 12:00:00 UTC".to_string(),
+                kind: "dangerous_sql".to_string(),
+                kind_display: "Dangerous SQL".to_string(),
+                node_id: Some(1),
+                node_address: Some("pgvisor-node1:5432".to_string()),
+                detail: "DROP TABLE test_tbl;".to_string(),
+                pitr_target: Some("2026-09-09 11:59:59 UTC".to_string()),
+            },
+            AuditEventView {
+                id: 2,
+                occurred_at: "2026-09-09 12:01:00 UTC".to_string(),
+                kind: "user_permission".to_string(),
+                kind_display: "User & Role".to_string(),
+                node_id: None,
+                node_address: None,
+                detail: "Role created".to_string(),
+                pitr_target: None,
+            },
+        ];
+
+        let template = AuditTemplate {
+            events: &events,
+            stats: &stats,
+            active_kind: None,
+            search_query: None,
+            page: 1,
+            limit: 50,
+            total_pages: 1,
+            total_events: 2,
+            auth_enabled: false,
+        };
+
+        let rendered = template
+            .render()
+            .expect("AuditTemplate must render without errors");
+        assert!(rendered.contains("Cluster Audit Logs"));
+        assert!(rendered.contains("PITR Restore Target:"));
+        assert!(rendered.contains("DROP TABLE test_tbl;"));
+        assert!(rendered.contains("User &amp; Role"));
     }
 }

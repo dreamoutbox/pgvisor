@@ -68,6 +68,7 @@ impl TransactionTracker {
             .split_whitespace()
             .next()
             .unwrap_or("")
+            .trim_end_matches(';')
             .to_ascii_uppercase();
 
         match first_word.as_str() {

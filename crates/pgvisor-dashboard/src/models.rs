@@ -277,3 +277,35 @@ pub struct TablePrivilegeRequest {
     pub grant: bool,
 }
 
+/// Presentational representation of an audit event for dashboard views.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditEventView {
+    pub id: u64,
+    pub occurred_at: String,
+    pub kind: String,
+    pub kind_display: String,
+    pub node_id: Option<u64>,
+    pub node_address: Option<String>,
+    pub detail: String,
+    pub pitr_target: Option<String>,
+}
+
+/// Paginated audit list response payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditListResponse {
+    pub events: Vec<AuditEventView>,
+    pub total: usize,
+    pub limit: usize,
+    pub offset: usize,
+    pub dangerous_sql_count: usize,
+    pub latest_pitr_target: Option<String>,
+}
+
+/// Aggregated metrics for audit dashboard headers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditOverviewStats {
+    pub total_events: usize,
+    pub dangerous_sql_count: usize,
+    pub latest_pitr_target: Option<String>,
+}
+

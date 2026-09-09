@@ -2,6 +2,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
+use pgvisor_core::audit::{AuditEventKind, AuditLog};
 use pgvisor_dashboard::handlers::ClusterService;
 use pgvisor_dashboard::models::SwitchoverResponse;
 
@@ -23,6 +24,7 @@ pub struct ProxyClusterService {
     standby_addrs: Arc<RwLock<Vec<String>>>,
     pool: ConnectionPool,
     http_client: reqwest::Client,
+    audit_log: Option<Arc<AuditLog>>,
 }
 
 impl ProxyClusterService {
@@ -43,7 +45,14 @@ impl ProxyClusterService {
             standby_addrs,
             pool,
             http_client,
+            audit_log: None,
         }
+    }
+
+    /// Injects central audit log store into cluster service.
+    pub fn with_audit_log(mut self, audit_log: Arc<AuditLog>) -> Self {
+        self.audit_log = Some(audit_log);
+        self
     }
 }
 
@@ -72,7 +81,10 @@ impl ClusterService for ProxyClusterService {
         let mut standby_control_urls: Vec<(u64, String)> = Vec::new();
 
         for target in &targets {
-            let status_url = format!("{}/control/status", target.control_url.trim_end_matches('/'));
+            let status_url = format!(
+                "{}/control/status",
+                target.control_url.trim_end_matches('/')
+            );
             if let Ok(resp) = self.http_client.get(&status_url).send().await {
                 if let Ok(st) = resp.json::<NodeStatusResponse>().await {
                     if st.node_id == target_node_id {
@@ -106,9 +118,8 @@ impl ClusterService for ProxyClusterService {
                 target_node_id
             )
         })?;
-        let new_leader_pg = target_pg_addr.ok_or_else(|| {
-            format!("Target node #{} address not found", target_node_id)
-        })?;
+        let new_leader_pg = target_pg_addr
+            .ok_or_else(|| format!("Target node #{} address not found", target_node_id))?;
 
         // 2. Step 1: Gracefully demote current leader (if active)
         if let Some(ref leader_url) = current_leader_control_url {
@@ -140,12 +151,7 @@ impl ClusterService for ProxyClusterService {
             .post(&promote_url)
             .send()
             .await
-            .map_err(|e| {
-                format!(
-                    "Failed to send promote command to {}: {}",
-                    promote_url, e
-                )
-            })?;
+            .map_err(|e| format!("Failed to send promote command to {}: {}", promote_url, e))?;
 
         if !resp.status().is_success() {
             let err_body = resp.text().await.unwrap_or_default();
@@ -167,7 +173,12 @@ impl ClusterService for ProxyClusterService {
             let payload = serde_json::json!({
                 "primary_conninfo": new_conninfo
             });
-            let _ = self.http_client.post(&repoint_url).json(&payload).send().await;
+            let _ = self
+                .http_client
+                .post(&repoint_url)
+                .json(&payload)
+                .send()
+                .await;
         }
 
         // 5. Step 4: Update proxy connection pool and topology
@@ -199,9 +210,28 @@ impl ClusterService for ProxyClusterService {
             "Leader switchover completed successfully"
         );
 
+        if let Some(audit) = self.audit_log.as_ref() {
+            let detail = format!(
+                "Manual switchover completed: Node #{} promoted to leader (previous leader: {:?})",
+                target_node_id, current_leader_id
+            );
+            audit
+                .append(
+                    AuditEventKind::ElectionResult,
+                    Some(target_node_id),
+                    Some(&new_leader_pg),
+                    detail,
+                    None,
+                )
+                .await;
+        }
+
         Ok(SwitchoverResponse {
             status: "ok".into(),
-            message: format!("Successfully switched over leader to Node #{}", target_node_id),
+            message: format!(
+                "Successfully switched over leader to Node #{}",
+                target_node_id
+            ),
             previous_leader_id: current_leader_id,
             new_leader_id: target_node_id,
         })

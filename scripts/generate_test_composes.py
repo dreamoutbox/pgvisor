@@ -32,6 +32,7 @@ PROFILES = [
     ("users-permissions", "users-permissions", 6332, 8980, 9900, 9901),
     ("transaction", "transaction", 6432, 9080, 10000, 10001),
     ("routing", "routing", 6532, 9180, 10100, 10101),
+    ("audit-logs", "audit-logs", 6632, 9280, 10200, 10201),
 ]
 
 

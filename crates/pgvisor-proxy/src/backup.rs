@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
+use pgvisor_core::audit::{AuditEventKind, AuditLog};
 use pgvisor_core::backup::{BackupManager, BackupType, BasebackupMeta};
 use pgvisor_dashboard::handlers::BackupService;
 use tempfile::tempdir;
@@ -22,6 +23,7 @@ pub struct ProxyBackupService {
     retention_days: u32,
     control_port: u16,
     http_client: reqwest::Client,
+    audit_log: Option<Arc<AuditLog>>,
 }
 
 impl ProxyBackupService {
@@ -45,7 +47,14 @@ impl ProxyBackupService {
             retention_days,
             control_port,
             http_client: reqwest::Client::new(),
+            audit_log: None,
         }
+    }
+
+    /// Injects central audit log store into the backup service.
+    pub fn with_audit_log(mut self, audit_log: Arc<AuditLog>) -> Self {
+        self.audit_log = Some(audit_log);
+        self
     }
 }
 
@@ -159,6 +168,24 @@ impl BackupService for ProxyBackupService {
             .map_err(|e| format!("Failed to save basebackup to OpenDAL: {}", e))?;
 
         info!(snapshot_id = %meta.snapshot_id, bytes = total_bytes, "Basebackup saved and registered successfully");
+
+        if let Some(audit) = self.audit_log.as_ref() {
+            let label_str = meta.label.as_deref().unwrap_or("none");
+            let detail = format!(
+                "Created {:?} physical basebackup snapshot '{}' (label: '{}', size: {} bytes)",
+                meta.backup_type, meta.snapshot_id, label_str, meta.total_bytes
+            );
+            audit
+                .append(
+                    AuditEventKind::BackupCreated,
+                    None,
+                    Some(&host),
+                    detail,
+                    None,
+                )
+                .await;
+        }
+
         Ok(meta)
     }
 
@@ -255,8 +282,25 @@ impl BackupService for ProxyBackupService {
         }
 
         let detail = target_time
+            .as_deref()
             .map(|t| format!(" with PITR target timestamp '{}'", t))
             .unwrap_or_default();
+
+        if let Some(audit) = self.audit_log.as_ref() {
+            let log_detail = format!(
+                "Snapshot '{}' successfully restored to cluster{}",
+                snapshot_id, detail
+            );
+            audit
+                .append(
+                    AuditEventKind::BackupRestored,
+                    None,
+                    Some(&leader_host),
+                    log_detail,
+                    target_time.clone(),
+                )
+                .await;
+        }
 
         Ok(format!(
             "Snapshot {} successfully restored to cluster{}",

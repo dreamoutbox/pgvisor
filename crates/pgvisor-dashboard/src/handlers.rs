@@ -13,16 +13,19 @@ use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use crate::models::{
-    format_bytes, AlterRoleRequest, BackupItemView, BackupOverviewSummary, ClusterOverview,
-    ColumnInfo, CreateBackupRequest, CreateRoleRequest, NodeHealthState, NodeRole, NodeSummary,
-    PgRole, RestoreBackupRequest, RoleMembershipRequest, SqlQueryError, SqlQueryRequest,
-    SqlQueryResult, SwitchoverRequest, SwitchoverResponse, TableDataResponse, TablePrivilege,
-    TablePrivilegeKind, TablePrivilegeRequest, TableSummary,
+    format_bytes, AlterRoleRequest, AuditEventView, AuditListResponse, AuditOverviewStats,
+    BackupItemView, BackupOverviewSummary, ClusterOverview, ColumnInfo, CreateBackupRequest,
+    CreateRoleRequest, NodeHealthState, NodeRole, NodeSummary, PgRole, RestoreBackupRequest,
+    RoleMembershipRequest, SqlQueryError, SqlQueryRequest, SqlQueryResult, SwitchoverRequest,
+    SwitchoverResponse, TableDataResponse, TablePrivilege, TablePrivilegeKind,
+    TablePrivilegeRequest, TableSummary,
 };
 use crate::security::{SecurityError, SqlSecurityGuard};
 use crate::templates::{
-    BackupsTemplate, LoginTemplate, NodesTemplate, OverviewTemplate, TablesTemplate, UsersTemplate,
+    AuditTemplate, BackupsTemplate, LoginTemplate, NodesTemplate, OverviewTemplate, TablesTemplate,
+    UsersTemplate,
 };
+use pgvisor_core::audit::{AuditEventKind, AuditLog};
 
 /// Abstraction for executing SQL queries on PostgreSQL backends.
 #[async_trait::async_trait]
@@ -377,7 +380,11 @@ pub trait UserService: Send + Sync {
     async fn alter_role(&self, name: &str, req: &AlterRoleRequest) -> Result<(), String>;
     async fn grant_membership(&self, role: &str, group_role: &str) -> Result<(), String>;
     async fn revoke_membership(&self, role: &str, group_role: &str) -> Result<(), String>;
-    async fn set_table_privilege(&self, role: &str, req: &TablePrivilegeRequest) -> Result<(), String>;
+    async fn set_table_privilege(
+        &self,
+        role: &str,
+        req: &TablePrivilegeRequest,
+    ) -> Result<(), String>;
 }
 
 /// In-memory mock user service for standalone dashboard testing and demo mode.
@@ -541,9 +548,14 @@ impl UserService for StandaloneUserService {
         Ok(())
     }
 
-    async fn set_table_privilege(&self, _role: &str, req: &TablePrivilegeRequest) -> Result<(), String> {
+    async fn set_table_privilege(
+        &self,
+        _role: &str,
+        req: &TablePrivilegeRequest,
+    ) -> Result<(), String> {
         let mut privs = self.table_privileges.write().await;
-        let priv_idx = if let Some(idx) = privs.iter().position(|p| p.table_name == req.table_name) {
+        let priv_idx = if let Some(idx) = privs.iter().position(|p| p.table_name == req.table_name)
+        {
             idx
         } else {
             privs.push(TablePrivilege {
@@ -605,35 +617,48 @@ impl UserService for SqlUserService {
         let sql = "SELECT r.rolname, r.rolcanlogin, r.rolcreatedb, r.rolcreaterole, r.rolreplication, r.rolsuper, r.rolconnlimit, COALESCE((SELECT string_agg(b.rolname, ',') FROM pg_auth_members m JOIN pg_roles b ON (m.roleid = b.oid) WHERE m.member = r.oid), '') as member_of FROM pg_roles r WHERE r.rolname NOT LIKE 'pg_%' AND r.rolname != 'postgres' ORDER BY r.rolname;";
         let res = self.sql_executor.execute(sql, 200).await?;
 
-        let roles = res.rows.into_iter().filter_map(|row| {
-            if row.len() >= 8 {
-                let rolname = row[0].clone();
-                let rolcanlogin = row[1].eq_ignore_ascii_case("t") || row[1].eq_ignore_ascii_case("true");
-                let rolcreatedb = row[2].eq_ignore_ascii_case("t") || row[2].eq_ignore_ascii_case("true");
-                let rolcreaterole = row[3].eq_ignore_ascii_case("t") || row[3].eq_ignore_ascii_case("true");
-                let rolreplication = row[4].eq_ignore_ascii_case("t") || row[4].eq_ignore_ascii_case("true");
-                let rolsuper = row[5].eq_ignore_ascii_case("t") || row[5].eq_ignore_ascii_case("true");
-                let rolconnlimit = row[6].parse::<i32>().unwrap_or(-1);
-                let member_of = if row[7].is_empty() {
-                    Vec::new()
-                } else {
-                    row[7].split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
-                };
+        let roles = res
+            .rows
+            .into_iter()
+            .filter_map(|row| {
+                if row.len() >= 8 {
+                    let rolname = row[0].clone();
+                    let rolcanlogin =
+                        row[1].eq_ignore_ascii_case("t") || row[1].eq_ignore_ascii_case("true");
+                    let rolcreatedb =
+                        row[2].eq_ignore_ascii_case("t") || row[2].eq_ignore_ascii_case("true");
+                    let rolcreaterole =
+                        row[3].eq_ignore_ascii_case("t") || row[3].eq_ignore_ascii_case("true");
+                    let rolreplication =
+                        row[4].eq_ignore_ascii_case("t") || row[4].eq_ignore_ascii_case("true");
+                    let rolsuper =
+                        row[5].eq_ignore_ascii_case("t") || row[5].eq_ignore_ascii_case("true");
+                    let rolconnlimit = row[6].parse::<i32>().unwrap_or(-1);
+                    let member_of = if row[7].is_empty() {
+                        Vec::new()
+                    } else {
+                        row[7]
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    };
 
-                Some(PgRole {
-                    rolname,
-                    rolcanlogin,
-                    rolcreatedb,
-                    rolcreaterole,
-                    rolreplication,
-                    rolsuper,
-                    rolconnlimit,
-                    member_of,
-                })
-            } else {
-                None
-            }
-        }).collect();
+                    Some(PgRole {
+                        rolname,
+                        rolcanlogin,
+                        rolcreatedb,
+                        rolcreaterole,
+                        rolreplication,
+                        rolsuper,
+                        rolconnlimit,
+                        member_of,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         Ok(roles)
     }
@@ -652,24 +677,29 @@ impl UserService for SqlUserService {
         );
 
         let res = self.sql_executor.execute(&sql, 200).await?;
-        let privs = res.rows.into_iter().filter_map(|row| {
-            if row.len() >= 8 {
-                let parse_bool = |s: &str| s.eq_ignore_ascii_case("t") || s.eq_ignore_ascii_case("true");
-                Some(TablePrivilege {
-                    table_name: row[0].clone(),
-                    schema: "public".into(),
-                    select: parse_bool(&row[1]),
-                    insert: parse_bool(&row[2]),
-                    update: parse_bool(&row[3]),
-                    delete: parse_bool(&row[4]),
-                    truncate: parse_bool(&row[5]),
-                    references: parse_bool(&row[6]),
-                    trigger: parse_bool(&row[7]),
-                })
-            } else {
-                None
-            }
-        }).collect();
+        let privs = res
+            .rows
+            .into_iter()
+            .filter_map(|row| {
+                if row.len() >= 8 {
+                    let parse_bool =
+                        |s: &str| s.eq_ignore_ascii_case("t") || s.eq_ignore_ascii_case("true");
+                    Some(TablePrivilege {
+                        table_name: row[0].clone(),
+                        schema: "public".into(),
+                        select: parse_bool(&row[1]),
+                        insert: parse_bool(&row[2]),
+                        update: parse_bool(&row[3]),
+                        delete: parse_bool(&row[4]),
+                        truncate: parse_bool(&row[5]),
+                        references: parse_bool(&row[6]),
+                        trigger: parse_bool(&row[7]),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         Ok(privs)
     }
@@ -680,9 +710,21 @@ impl UserService for SqlUserService {
             "CREATE ROLE \"{}\" WITH {} {} {} {} CONNECTION LIMIT {}",
             req.name,
             if req.login { "LOGIN" } else { "NOLOGIN" },
-            if req.createdb { "CREATEDB" } else { "NOCREATEDB" },
-            if req.createrole { "CREATEROLE" } else { "NOCREATEROLE" },
-            if req.replication { "REPLICATION" } else { "NOREPLICATION" },
+            if req.createdb {
+                "CREATEDB"
+            } else {
+                "NOCREATEDB"
+            },
+            if req.createrole {
+                "CREATEROLE"
+            } else {
+                "NOCREATEROLE"
+            },
+            if req.replication {
+                "REPLICATION"
+            } else {
+                "NOREPLICATION"
+            },
             req.connection_limit
         );
 
@@ -713,10 +755,18 @@ impl UserService for SqlUserService {
             clauses.push(if createdb { "CREATEDB" } else { "NOCREATEDB" });
         }
         if let Some(createrole) = req.createrole {
-            clauses.push(if createrole { "CREATEROLE" } else { "NOCREATEROLE" });
+            clauses.push(if createrole {
+                "CREATEROLE"
+            } else {
+                "NOCREATEROLE"
+            });
         }
         if let Some(replication) = req.replication {
-            clauses.push(if replication { "REPLICATION" } else { "NOREPLICATION" });
+            clauses.push(if replication {
+                "REPLICATION"
+            } else {
+                "NOREPLICATION"
+            });
         }
         let limit_str;
         if let Some(conn_limit) = req.connection_limit {
@@ -754,7 +804,11 @@ impl UserService for SqlUserService {
         self.sql_executor.execute(&ddl, 1).await.map(|_| ())
     }
 
-    async fn set_table_privilege(&self, role: &str, req: &TablePrivilegeRequest) -> Result<(), String> {
+    async fn set_table_privilege(
+        &self,
+        role: &str,
+        req: &TablePrivilegeRequest,
+    ) -> Result<(), String> {
         Self::validate_identifier(role)?;
         Self::validate_identifier(&req.table_name)?;
         let schema = req.schema.as_deref().unwrap_or("public");
@@ -784,6 +838,7 @@ pub struct DashboardState {
     pub backup_service: Arc<dyn BackupService>,
     pub cluster_service: Arc<dyn ClusterService>,
     pub user_service: Arc<dyn UserService>,
+    pub audit_log: Arc<AuditLog>,
     pub admin_token: Option<String>,
 }
 
@@ -841,6 +896,7 @@ impl DashboardState {
             backup_service: Arc::new(StandaloneBackupService::new()),
             cluster_service: Arc::new(StandaloneClusterService::new(overview_arc)),
             user_service: Arc::new(StandaloneUserService::new()),
+            audit_log: Arc::new(AuditLog::new(cluster_id, None, 2000)),
             admin_token,
         }
     }
@@ -1692,6 +1748,20 @@ pub async fn api_create_user(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
+    state
+        .audit_log
+        .append(
+            AuditEventKind::UserPermission,
+            None,
+            None,
+            format!(
+                "Database role '{}' created (login={}, createdb={}, createrole={})",
+                req.name, req.login, req.createdb, req.createrole
+            ),
+            None,
+        )
+        .await;
+
     Ok(Json(serde_json::json!({
         "status": "ok",
         "message": format!("Role '{}' created successfully", req.name)
@@ -1714,6 +1784,17 @@ pub async fn api_drop_user(
         .drop_role(&role)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+
+    state
+        .audit_log
+        .append(
+            AuditEventKind::UserPermission,
+            None,
+            None,
+            format!("Database role '{}' dropped", role),
+            None,
+        )
+        .await;
 
     Ok(Json(serde_json::json!({
         "status": "ok",
@@ -1739,6 +1820,17 @@ pub async fn api_alter_user(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
+    state
+        .audit_log
+        .append(
+            AuditEventKind::UserPermission,
+            None,
+            None,
+            format!("Database role '{}' attributes altered", role),
+            None,
+        )
+        .await;
+
     Ok(Json(serde_json::json!({
         "status": "ok",
         "message": format!("Role '{}' updated successfully", role)
@@ -1763,6 +1855,17 @@ pub async fn api_grant_membership(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
+    state
+        .audit_log
+        .append(
+            AuditEventKind::UserPermission,
+            None,
+            None,
+            format!("Granted group '{}' to role '{}'", req.group_role, role),
+            None,
+        )
+        .await;
+
     Ok(Json(serde_json::json!({
         "status": "ok",
         "message": format!("Granted group '{}' to role '{}'", req.group_role, role)
@@ -1785,6 +1888,17 @@ pub async fn api_revoke_membership(
         .revoke_membership(&role, &group)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+
+    state
+        .audit_log
+        .append(
+            AuditEventKind::UserPermission,
+            None,
+            None,
+            format!("Revoked group '{}' from role '{}'", group, role),
+            None,
+        )
+        .await;
 
     Ok(Json(serde_json::json!({
         "status": "ok",
@@ -1834,6 +1948,24 @@ pub async fn api_set_privilege(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
+    state
+        .audit_log
+        .append(
+            AuditEventKind::UserPermission,
+            None,
+            None,
+            format!(
+                "{} table privilege {} on '{}' {} role '{}'",
+                if req.grant { "Granted" } else { "Revoked" },
+                req.privilege.as_sql_str(),
+                req.table_name,
+                if req.grant { "to" } else { "from" },
+                role
+            ),
+            None,
+        )
+        .await;
+
     Ok(Json(serde_json::json!({
         "status": "ok",
         "message": format!(
@@ -1847,3 +1979,121 @@ pub async fn api_set_privilege(
     })))
 }
 
+/// Query parameters for listing and searching audit events.
+#[derive(Deserialize, Default)]
+pub struct AuditQuery {
+    pub kind: Option<String>,
+    pub q: Option<String>,
+    pub page: Option<usize>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+/// GET /audit-logs -> Renders Audit Logs HTML dashboard page
+pub async fn get_audit_logs_page(
+    State(state): State<Arc<DashboardState>>,
+    Query(query): Query<AuditQuery>,
+) -> Result<Html<String>, StatusCode> {
+    let page = query.page.unwrap_or(1).max(1);
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = (page - 1) * limit;
+
+    let target_kind = query
+        .kind
+        .as_deref()
+        .and_then(AuditEventKind::from_snake_case);
+    let (events, total) = state
+        .audit_log
+        .list(limit, offset, target_kind, query.q.as_deref())
+        .await;
+
+    let total_pages = if total == 0 {
+        1
+    } else {
+        (total + limit - 1) / limit
+    };
+
+    let (total_events, dangerous_sql_count, latest_pitr_target) = state.audit_log.stats().await;
+    let stats = AuditOverviewStats {
+        total_events,
+        dangerous_sql_count,
+        latest_pitr_target,
+    };
+
+    let views: Vec<AuditEventView> = events
+        .into_iter()
+        .map(|e| AuditEventView {
+            id: e.id,
+            occurred_at: e.occurred_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+            kind: e.kind.as_str().to_string(),
+            kind_display: e.kind.display_name().to_string(),
+            node_id: e.node_id,
+            node_address: e.node_address,
+            detail: e.detail,
+            pitr_target: e.pitr_target,
+        })
+        .collect();
+
+    let template = AuditTemplate {
+        events: &views,
+        stats: &stats,
+        active_kind: query.kind.as_deref(),
+        search_query: query.q.as_deref(),
+        page,
+        limit,
+        total_pages,
+        total_events: total,
+        auth_enabled: state.admin_token.is_some(),
+    };
+
+    template
+        .render()
+        .map(Html)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// GET /api/audit-logs -> Returns paginated JSON audit events for monitoring and automated verification
+pub async fn api_list_audit_logs(
+    State(state): State<Arc<DashboardState>>,
+    Query(query): Query<AuditQuery>,
+) -> Json<AuditListResponse> {
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or_else(|| {
+        let p = query.page.unwrap_or(1).max(1);
+        (p - 1) * limit
+    });
+
+    let target_kind = query
+        .kind
+        .as_deref()
+        .and_then(AuditEventKind::from_snake_case);
+    let (events, total) = state
+        .audit_log
+        .list(limit, offset, target_kind, query.q.as_deref())
+        .await;
+
+    let (_total_events, dangerous_sql_count, latest_pitr_target) = state.audit_log.stats().await;
+
+    let views: Vec<AuditEventView> = events
+        .into_iter()
+        .map(|e| AuditEventView {
+            id: e.id,
+            occurred_at: e.occurred_at.to_rfc3339(),
+            kind: e.kind.as_str().to_string(),
+            kind_display: e.kind.display_name().to_string(),
+            node_id: e.node_id,
+            node_address: e.node_address,
+            detail: e.detail,
+            pitr_target: e.pitr_target,
+        })
+        .collect();
+
+    Json(AuditListResponse {
+        events: views,
+        total,
+        limit,
+        offset,
+        dangerous_sql_count,
+        latest_pitr_target,
+    })
+}

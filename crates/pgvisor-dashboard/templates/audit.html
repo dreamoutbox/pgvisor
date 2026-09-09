@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+
+{% block title %}Audit Logs - PgVisor{% endblock %}
+{% block nav_audit %}active{% endblock %}
+
+{% block content %}
+<style>
+    .row-dangerous {
+        background: rgba(250, 204, 21, 0.04);
+    }
+
+    .row-down {
+        background: rgba(248, 113, 113, 0.04);
+    }
+
+    .val-warn {
+        color: var(--warning);
+    }
+
+    .val-ok {
+        color: var(--success);
+    }
+</style>
+<div style="display: flex; flex-direction: column; gap: 24px;">
+    <header style="margin-bottom: 0;">
+        <div>
+            <h1>Cluster Audit Logs</h1>
+            <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 4px;">
+                Historical record of node availability, failovers, backups, cluster topology changes, and dangerous SQL
+                statements for PITR disaster recovery.
+            </p>
+        </div>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <button onclick="window.location.reload()"
+                style="background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border); padding: 8px 16px; border-radius: 6px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path
+                        d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                </svg>
+                Refresh
+            </button>
+        </div>
+    </header>
+
+    <!-- Top KPI Summary Cards -->
+    <div class="grid">
+        <div class="card">
+            <h3>TOTAL AUDIT EVENTS</h3>
+            <div class="value" style="color: var(--primary);">{{ stats.total_events }}</div>
+            <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 4px;">Persisted to S3 Object Storage
+            </div>
+        </div>
+        <div class="card">
+            <h3>DANGEROUS SQL DETECTED</h3>
+            {% if stats.dangerous_sql_count > 0 %}
+            <div class="value val-warn">{{ stats.dangerous_sql_count }}</div>
+            {% else %}
+            <div class="value val-ok">{{ stats.dangerous_sql_count }}</div>
+            {% endif %}
+            <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 4px;">DROP TABLE, TRUNCATE, DELETE
+            </div>
+        </div>
+        <div class="card">
+            <h3>LATEST PITR CANDIDATE</h3>
+            <div class="value"
+                style="font-size: 1.1rem; margin-top: 6px; font-family: monospace; color: var(--accent);">
+                {% if let Some(target) = stats.latest_pitr_target %}
+                {{ target }}
+                {% else %}
+                None Recorded
+                {% endif %}
+            </div>
+            <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 4px;">Target for Point-in-Time Recovery
+            </div>
+        </div>
+    </div>
+
+    <!-- Filter and Search Toolbar -->
+    <div class="card" style="padding: 16px 20px;">
+        <form method="GET" action="/audit-logs" style="display: flex; gap: 16px; align-items: center; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <label for="filter-kind" style="font-size: 0.85rem; color: var(--text-muted); font-weight: 500;">Filter
+                    Event:</label>
+                <select id="filter-kind" name="kind" onchange="this.form.submit()"
+                    style="background: var(--bg-main); color: var(--text-main); border: 1px solid var(--border); padding: 8px 12px; border-radius: 6px; font-size: 0.85rem; cursor: pointer;">
+                    <option value="" {% if active_kind.is_none() %}selected{% endif %}>All Event Types</option>
+                    <option value="dangerous_sql" {% if active_kind==Some("dangerous_sql") %}selected{% endif %}>
+                        Dangerous SQL (DROP/TRUNCATE/DELETE)</option>
+                    <option value="node_up" {% if active_kind==Some("node_up") %}selected{% endif %}>Node Online (Up)
+                    </option>
+                    <option value="node_down" {% if active_kind==Some("node_down") %}selected{% endif %}>Node Offline
+                        (Down)</option>
+                    <option value="backup_created" {% if active_kind==Some("backup_created") %}selected{% endif %}>
+                        Backup Created</option>
+                    <option value="backup_restored" {% if active_kind==Some("backup_restored") %}selected{% endif %}>
+                        Backup Restored</option>
+                    <option value="election_result" {% if active_kind==Some("election_result") %}selected{% endif %}>
+                        Election Result &amp; Consensus</option>
+                    <option value="node_joined" {% if active_kind==Some("node_joined") %}selected{% endif %}>Worker
+                        Joined</option>
+                    <option value="node_left" {% if active_kind==Some("node_left") %}selected{% endif %}>Worker Left
+                    </option>
+                    <option value="user_permission" {% if active_kind==Some("user_permission") %}selected{% endif %}>User &amp; Permission Management
+                    </option>
+                </select>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 260px;">
+                <input type="text" name="q" placeholder="Search event details, node address, SQL snippet..."
+                    value="{% if let Some(q) = search_query %}{{ q }}{% endif %}"
+                    style="flex: 1; background: var(--bg-main); color: var(--text-main); border: 1px solid var(--border); padding: 8px 12px; border-radius: 6px; font-size: 0.85rem;" />
+                <button type="submit"
+                    style="background: var(--primary); color: #0f172a; border: none; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 0.85rem;">
+                    Search
+                </button>
+                {% if active_kind.is_some() || search_query.is_some() %}
+                <a href="/audit-logs"
+                    style="color: var(--text-muted); text-decoration: none; font-size: 0.85rem; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card-hover);">
+                    Clear Filters
+                </a>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+
+    <!-- Audit Events Table -->
+    <div style="border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg-card);">
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 170px;">Timestamp (UTC)</th>
+                    <th style="width: 220px; min-width: 200px;">Event Kind</th>
+                    <th style="width: 170px;">Node</th>
+                    <th>Detail &amp; Disaster Recovery PITR Target</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if events.is_empty() %}
+                <tr>
+                    <td colspan="4" style="text-align: center; padding: 48px; color: var(--text-muted);">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="1.5" style="margin-bottom: 8px; opacity: 0.5;">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                            <polyline points="14 2 14 8 20 8" />
+                            <line x1="16" y1="13" x2="8" y2="13" />
+                            <line x1="16" y1="17" x2="8" y2="17" />
+                            <polyline points="10 9 9 9 8 9" />
+                        </svg>
+                        <div>No audit log events match the selected criteria.</div>
+                    </td>
+                </tr>
+                {% else %}
+                {% for event in events %}
+                <tr class="{% if event.kind == " dangerous_sql" %}row-dangerous{% else if event.kind=="node_down"
+                    %}row-down{% endif %}">
+                    <td
+                        style="font-family: monospace; font-size: 0.82rem; color: var(--text-muted); white-space: nowrap;">
+                        {{ event.occurred_at }}
+                    </td>
+                    <td style="white-space: nowrap;">
+                        {% if event.kind == "dangerous_sql" %}
+                        <span class="badge"
+                            style="background: rgba(250, 204, 21, 0.2); color: var(--warning); border: 1px solid rgba(250, 204, 21, 0.3);">
+                            {{ event.kind_display }}
+                        </span>
+                        {% else if event.kind == "node_up" %}
+                        <span class="badge badge-healthy">
+                            {{ event.kind_display }}
+                        </span>
+                        {% else if event.kind == "node_down" %}
+                        <span class="badge badge-offline">
+                            {{ event.kind_display }}
+                        </span>
+                        {% else if event.kind == "backup_created" || event.kind == "backup_restored" %}
+                        <span class="badge" style="background: rgba(56, 189, 248, 0.2); color: var(--primary);">
+                            {{ event.kind_display }}
+                        </span>
+                        {% else if event.kind == "election_result" %}
+                        <span class="badge" style="background: rgba(129, 140, 248, 0.2); color: var(--accent);">
+                            {{ event.kind_display }}
+                        </span>
+                        {% else if event.kind == "user_permission" %}
+                        <span class="badge" style="background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3);">
+                            {{ event.kind_display }}
+                        </span>
+                        {% else %}
+                        <span class="badge" style="background: rgba(148, 163, 184, 0.2); color: var(--text-muted);">
+                            {{ event.kind_display }}
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td style="font-size: 0.85rem;">
+                        {% if let Some(addr) = event.node_address.as_ref() %}
+                        <span style="font-family: monospace; color: var(--text-main);">
+                            {% if let Some(nid) = event.node_id %}Node #{{ nid }} &middot; {% endif %}{{ addr }}
+                        </span>
+                        {% else if let Some(nid) = event.node_id %}
+                        <span style="color: var(--text-muted);">Node #{{ nid }}</span>
+                        {% else %}
+                        <span style="color: var(--text-muted);">Proxy / Cluster</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div style="font-size: 0.9rem; line-height: 1.4; word-break: break-word;">
+                            {{ event.detail }}
+                        </div>
+                        {% if let Some(pitr) = event.pitr_target.as_ref() %}
+                        <div
+                            style="margin-top: 6px; padding: 6px 10px; background: rgba(0, 0, 0, 0.3); border-left: 3px solid var(--warning); border-radius: 4px; display: inline-flex; align-items: center; gap: 10px; font-size: 0.82rem;">
+                            <span style="color: var(--warning); font-weight: 600;">PITR Restore Target:</span>
+                            <code style="font-family: monospace; color: var(--text-main);">{{ pitr }}</code>
+                            <button
+                                onclick="navigator.clipboard.writeText('{{ pitr }}'); alert('Copied PITR target timestamp to clipboard: {{ pitr }}');"
+                                style="background: transparent; border: 1px solid var(--border); color: var(--text-muted); border-radius: 4px; padding: 2px 6px; font-size: 0.75rem; cursor: pointer;">
+                                Copy
+                            </button>
+                            <a href="/backups"
+                                style="color: var(--primary); text-decoration: underline; font-size: 0.78rem;">
+                                Restore Snapshot &rarr;
+                            </a>
+                        </div>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                {% endif %}
+            </tbody>
+        </table>
+
+        <!-- Pagination Controls -->
+        {% if total_pages > 1 %}
+        <div
+            style="display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; border-top: 1px solid var(--border); background: var(--bg-card);">
+            <div style="font-size: 0.85rem; color: var(--text-muted);">
+                Showing page {{ page }} of {{ total_pages }} ({{ total_events }} matching events)
+            </div>
+            <div style="display: flex; gap: 8px;">
+                {% if page > 1 %}
+                <a href="/audit-logs?page={{ page - 1 }}&limit={{ limit }}{% if let Some(k) = active_kind %}&kind={{ k }}{% endif %}{% if let Some(q) = search_query %}&q={{ q }}{% endif %}"
+                    style="color: var(--text-main); text-decoration: none; padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem; background: var(--bg-card-hover);">
+                    &larr; Previous
+                </a>
+                {% endif %}
+                {% if page < total_pages %} <a
+                    href="/audit-logs?page={{ page + 1 }}&limit={{ limit }}{% if let Some(k) = active_kind %}&kind={{ k }}{% endif %}{% if let Some(q) = search_query %}&q={{ q }}{% endif %}"
+                    style="color: var(--text-main); text-decoration: none; padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem; background: var(--bg-card-hover);">
+                    Next &rarr;
+                    </a>
+                    {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+    // Optional auto-refresh every 30 seconds if page is idle
+    setTimeout(() => {
+        // Only reload if user hasn't focused on search input
+        const searchInput = document.querySelector('input[name="q"]');
+        if (searchInput !== document.activeElement) {
+            window.location.reload();
+        }
+    }, 30000);
+</script>
+{% endblock %}

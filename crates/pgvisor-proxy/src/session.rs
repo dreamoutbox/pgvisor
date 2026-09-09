@@ -1,8 +1,10 @@
 use bytes::BytesMut;
+use pgvisor_core::audit::{AuditEventKind, AuditLog};
 use pgvisor_core::protocol::message::{
     BackendMessage, FrontendMessage, InitialClientMessage, StartupMessage, TransactionStatus,
 };
 use pgvisor_core::protocol::tracker::TransactionTracker;
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -30,6 +32,7 @@ pub struct ClientSession {
     active_backend: Option<PooledConnection>,
     startup_params: Option<StartupMessage>,
     failover_config: FailoverConfig,
+    audit_log: Option<Arc<AuditLog>>,
 }
 
 impl ClientSession {
@@ -41,7 +44,14 @@ impl ClientSession {
             active_backend: None,
             startup_params: None,
             failover_config: FailoverConfig::default(),
+            audit_log: None,
         }
+    }
+
+    /// Sets the central audit log store for recording client operations.
+    pub fn with_audit_log(mut self, audit_log: Arc<AuditLog>) -> Self {
+        self.audit_log = Some(audit_log);
+        self
     }
 
     /// Sets custom failover buffering parameters.
@@ -187,6 +197,85 @@ impl ClientSession {
 
         let user = self.startup_params.as_ref().and_then(|s| s.user());
         let database = self.startup_params.as_ref().and_then(|s| s.database());
+
+        // Audit dangerous SQL statements (DROP TABLE, TRUNCATE, and DELETE)
+        if let Some(audit) = self.audit_log.as_ref() {
+            let clean = sql
+                .lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.starts_with("--") && !l.starts_with("/*"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let upper = clean.trim().to_uppercase();
+
+            let is_drop = upper.starts_with("DROP TABLE")
+                || upper.starts_with("DROP DATABASE")
+                || upper.starts_with("DROP SCHEMA");
+            let is_truncate = upper.starts_with("TRUNCATE");
+            let is_delete = if upper.starts_with("DELETE") {
+                if std::env::var("PGVISOR_AUDIT_DELETE").is_ok() {
+                    true
+                } else {
+                    !upper.contains("WHERE")
+                }
+            } else {
+                false
+            };
+
+            if is_drop || is_truncate || is_delete {
+                let now = chrono::Utc::now();
+                let pitr_candidate = (now - chrono::Duration::seconds(1))
+                    .format("%Y-%m-%d %H:%M:%S UTC")
+                    .to_string();
+                let u = user.unwrap_or("unknown");
+                let db = database.unwrap_or("unknown");
+                let snippet = if sql.len() > 300 {
+                    format!("{}...", &sql[..300])
+                } else {
+                    sql.to_string()
+                };
+                let detail = format!("Dangerous SQL executed by '{}' on '{}': {}", u, db, snippet);
+
+                audit
+                    .append(
+                        AuditEventKind::DangerousSql,
+                        None,
+                        None,
+                        detail,
+                        Some(pitr_candidate),
+                    )
+                    .await;
+            }
+
+            let is_user_permission = upper.starts_with("CREATE ROLE")
+                || upper.starts_with("CREATE USER")
+                || upper.starts_with("DROP ROLE")
+                || upper.starts_with("DROP USER")
+                || upper.starts_with("ALTER ROLE")
+                || upper.starts_with("ALTER USER")
+                || upper.starts_with("GRANT ")
+                || upper.starts_with("REVOKE ");
+
+            if is_user_permission {
+                let u = user.unwrap_or("unknown");
+                let db = database.unwrap_or("unknown");
+                let snippet = if sql.len() > 300 {
+                    format!("{}...", &sql[..300])
+                } else {
+                    sql.to_string()
+                };
+                let detail = format!("User/permission SQL executed by '{}' on '{}': {}", u, db, snippet);
+                audit
+                    .append(
+                        AuditEventKind::UserPermission,
+                        None,
+                        None,
+                        detail,
+                        None,
+                    )
+                    .await;
+            }
+        }
 
         // If no backend is held, acquire one from pool with failover buffering
         if self.active_backend.is_none() {
