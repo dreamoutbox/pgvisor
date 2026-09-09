@@ -96,7 +96,7 @@
 
 - [ ] web dashboard chart & graph for useful data
 
-- [ ] add README.md
+- [x] add README.md
 
 - [ ] add github workflow to run tests. build docker image and publish to docker hub. 
 
