@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 ## Path lookup cache
 
 Before searching the codebase for where something lives, check `.agent/path-lookup/*.md` first for a matching entry (format: "if you want to change X, files to check:" + bulleted paths with one-line reasons). Verify each listed path still exists before trusting it — one cheap read, not a full search. If a path is stale, search normally, then fix that entry in place.
