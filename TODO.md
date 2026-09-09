@@ -66,7 +66,7 @@
 
 - [x] add page for manage databaser users and permissions.
 
-- [ ] add transaction SQL test
+- [x] add transaction SQL test
 
 - [ ] assert write query always go to leader and read only go to replica.
 
@@ -88,11 +88,11 @@
       - assert node2 rejoin as standby.
       - assert database cluster is working, data is ok and have leader.
 
+- [ ] testing two proxy. 3 nodes. then stop proxy1 and assert still access DB with proxy2.
+
 - [ ] add README.md
 
 - [ ] add github workflow to run tests. build docker image and publish to docker hub. 
-
-- [ ] testing two proxy. 3 nodes. then stop proxy1 and assert still access DB with proxy2.
 
 - [ ] move rust tests to tests directory.
 

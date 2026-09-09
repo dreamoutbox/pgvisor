@@ -30,6 +30,7 @@ PROFILES = [
     ("add-node", "add-node", 6132, 8780, 9700, 9701),
     ("switchover", "switchover", 6232, 8880, 9800, 9801),
     ("users-permissions", "users-permissions", 6332, 8980, 9900, 9901),
+    ("transaction", "transaction", 6432, 9080, 10000, 10001),
 ]
 
 
