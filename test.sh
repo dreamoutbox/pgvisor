@@ -65,6 +65,7 @@ TEST_SCRIPTS=(
     "test-switchover.sh"
     "test-users-permissions.sh"
     "test-transaction.sh"
+    "test-routing.sh"
 )
 
 TOTAL_TESTS="${#TEST_SCRIPTS[@]}"

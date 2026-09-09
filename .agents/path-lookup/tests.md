@@ -5,7 +5,7 @@
 - `docker-compose.yml` = canonical base compose template and single source of truth.
 - `scripts/generate_test_composes.py` = generates isolated test compose files with port offsets, project scoping, and 1GB RAM limits on postgres nodes.
 - `scripts/generate-test-composes.sh` = bash wrapper to run the python generator.
-- `composes/docker-compose.*.yml` = generated per-test isolated compose files (`crud`, `backup-restore`, `pitr`, `failover`, `auto-rejoin`, `rejoin-fenced`, `add-node`, `add-node4`, `switchover`, `users-permissions`, `transaction`).
+- `composes/docker-compose.*.yml` = generated per-test isolated compose files (`crud`, `backup-restore`, `pitr`, `failover`, `auto-rejoin`, `rejoin-fenced`, `add-node`, `add-node4`, `switchover`, `users-permissions`, `transaction`, `routing`).
 - `test.sh` = master test suite orchestrator supporting sequential and parallel (`-j N`) execution across all test profiles.
 - `tests/test-cluster-crud.sh` = self-contained demo CRUD test (port 5532).
 - `tests/test-backup-restore.sh` = self-contained basebackup & restore test (port 5632).
@@ -18,6 +18,7 @@
 - `tests/test-users-permissions.sh` = self-contained user CRUD, role membership, and table privilege matrix test (port 6332).
 - `tests/test-transaction.sh` = self-contained BEGIN/COMMIT, BEGIN/ROLLBACK, and error-mid-tx+ROLLBACK verification test (port 6432).
 - `scripts/test-transaction.sql` = SQL fixture run inside test-transaction.sh; exercises all 3 transaction scenarios.
+- `tests/test-routing.sh` = self-contained read/write routing assertion test (port 6532; plain SELECT to replica, DDL/DML to leader, in-txn SELECT pinned to leader).
 - `reset-docker-compose.sh` = developer cluster reset script; builds images by default, supports `--no-build` and `-s`/`--silent`.
 
 ### If you want to add a new integration test (new test script + compose profile), then check:
