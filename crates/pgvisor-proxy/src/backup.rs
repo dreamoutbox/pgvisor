@@ -118,7 +118,10 @@ impl BackupService for ProxyBackupService {
                     let bytes = fs::read(&base_tar)
                         .await
                         .map_err(|e| format!("Failed to read base.tar.gz: {}", e))?;
-                    info!(bytes = bytes.len(), "Captured physical basebackup from leader");
+                    info!(
+                        bytes = bytes.len(),
+                        "Captured physical basebackup from leader"
+                    );
                     (
                         bytes,
                         "000000010000000000000001".to_string(),
@@ -134,7 +137,10 @@ impl BackupService for ProxyBackupService {
                 }
             }
             Ok(status) => {
-                warn!(?status, "pg_basebackup exited non-zero, creating simulated dev snapshot");
+                warn!(
+                    ?status,
+                    "pg_basebackup exited non-zero, creating simulated dev snapshot"
+                );
                 (
                     vec![0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff],
                     "000000010000000000000001".to_string(),
@@ -194,7 +200,11 @@ impl BackupService for ProxyBackupService {
         snapshot_id: &str,
         target_time: Option<String>,
     ) -> Result<String, String> {
-        info!(snapshot_id, ?target_time, "Executing cluster restore request");
+        info!(
+            snapshot_id,
+            ?target_time,
+            "Executing cluster restore request"
+        );
 
         // 1. Determine leader host
         let leader = self.leader_addr.read().await.clone();
@@ -326,6 +336,10 @@ impl BackupService for ProxyBackupService {
     }
 
     fn storage_info(&self) -> (String, String, u32) {
-        (self.endpoint.clone(), self.bucket.clone(), self.retention_days)
+        (
+            self.endpoint.clone(),
+            self.bucket.clone(),
+            self.retention_days,
+        )
     }
 }

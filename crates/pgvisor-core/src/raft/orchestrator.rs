@@ -72,7 +72,10 @@ impl FailoverOrchestrator {
     pub fn on_leader_elected(&mut self, leader_id: u64, now: Instant) -> OrchestratorAction {
         if leader_id == self.node_id {
             if self.current_role != NodeRole::Leader {
-                info!(node_id = self.node_id, "Elected Raft Leader: initiating Postgres promotion");
+                info!(
+                    node_id = self.node_id,
+                    "Elected Raft Leader: initiating Postgres promotion"
+                );
                 self.current_role = NodeRole::Leader;
                 self.lease.renew(now);
                 return OrchestratorAction::PromoteToLeader;
@@ -118,7 +121,10 @@ impl FailoverOrchestrator {
 
     /// Recovers a fenced or restarted node into standby mode.
     pub fn recover_to_standby(&mut self, primary_node_id: u64) -> OrchestratorAction {
-        info!(node_id = self.node_id, primary_node_id, "Recovering node into standby replica mode");
+        info!(
+            node_id = self.node_id,
+            primary_node_id, "Recovering node into standby replica mode"
+        );
         self.current_role = NodeRole::Standby;
         OrchestratorAction::DemoteToStandby { primary_node_id }
     }
@@ -166,7 +172,10 @@ mod tests {
 
         // Recovery
         let act = orch.recover_to_standby(2);
-        assert_eq!(act, OrchestratorAction::DemoteToStandby { primary_node_id: 2 });
+        assert_eq!(
+            act,
+            OrchestratorAction::DemoteToStandby { primary_node_id: 2 }
+        );
         assert_eq!(orch.current_role(), NodeRole::Standby);
     }
 }

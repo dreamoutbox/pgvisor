@@ -264,15 +264,12 @@ impl ClientSession {
                 } else {
                     sql.to_string()
                 };
-                let detail = format!("User/permission SQL executed by '{}' on '{}': {}", u, db, snippet);
+                let detail = format!(
+                    "User/permission SQL executed by '{}' on '{}': {}",
+                    u, db, snippet
+                );
                 audit
-                    .append(
-                        AuditEventKind::UserPermission,
-                        None,
-                        None,
-                        detail,
-                        None,
-                    )
+                    .append(AuditEventKind::UserPermission, None, None, detail, None)
                     .await;
             }
         }

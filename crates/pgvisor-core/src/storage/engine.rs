@@ -110,17 +110,21 @@ impl RaftLogReader<TypeConfig> for LogReader {
         let start = match range.start_bound() {
             std::ops::Bound::Included(&n) => n,
             std::ops::Bound::Excluded(&n) => n + 1,
-            std::ops::Bound::Unbounded => {
-                inner.meta.last_purged_log_id.map(|l| l.index + 1).unwrap_or(0)
-            }
+            std::ops::Bound::Unbounded => inner
+                .meta
+                .last_purged_log_id
+                .map(|l| l.index + 1)
+                .unwrap_or(0),
         };
 
         let end = match range.end_bound() {
             std::ops::Bound::Included(&n) => n + 1,
             std::ops::Bound::Excluded(&n) => n,
-            std::ops::Bound::Unbounded => {
-                inner.wal.last_log_id().map(|l| l.index + 1).unwrap_or(start)
-            }
+            std::ops::Bound::Unbounded => inner
+                .wal
+                .last_log_id()
+                .map(|l| l.index + 1)
+                .unwrap_or(start),
         };
 
         let entries = inner.wal.read_range(start, end).map_err(|err| {
@@ -194,12 +198,10 @@ impl RaftLogStorage<TypeConfig> for LogStore {
             Err(err) => {
                 let io_err = std::io::Error::new(std::io::ErrorKind::Other, err.to_string());
                 callback.log_io_completed(Err(io_err));
-                Err(StorageIOError::new(
-                    ErrorSubject::Logs,
-                    ErrorVerb::Write,
-                    AnyError::new(&err),
+                Err(
+                    StorageIOError::new(ErrorSubject::Logs, ErrorVerb::Write, AnyError::new(&err))
+                        .into(),
                 )
-                .into())
             }
         }
     }

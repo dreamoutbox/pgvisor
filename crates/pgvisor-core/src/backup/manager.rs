@@ -440,7 +440,11 @@ mod tests {
         // Test restore_to_directory
         let restore_dest = tempdir().unwrap();
         let restored_meta = manager
-            .restore_to_directory("snap-2", restore_dest.path(), Some("2026-09-05 05:00:00 UTC"))
+            .restore_to_directory(
+                "snap-2",
+                restore_dest.path(),
+                Some("2026-09-05 05:00:00 UTC"),
+            )
             .await
             .unwrap();
         assert_eq!(restored_meta.snapshot_id, "snap-2");
@@ -458,7 +462,7 @@ mod tests {
         assert_eq!(config.minio_endpoint, "http://127.0.0.1:9000");
         assert_eq!(config.minio_bucket, "pgvisor-backups");
         assert_eq!(config.incremental_interval_secs, 3600); // 1 hour
-        assert_eq!(config.full_backup_hour_utc, 1);          // 01:00 UTC (after midnight)
+        assert_eq!(config.full_backup_hour_utc, 1); // 01:00 UTC (after midnight)
 
         let op = config.build_operator();
         assert!(op.is_ok());

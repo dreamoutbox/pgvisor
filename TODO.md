@@ -96,7 +96,7 @@
 
 - [ ] testing two proxy. 3 nodes. then stop proxy1 and assert still access DB with proxy2.
 
-- [ ] make node 3 accept read, not standby when node 2 down.
+- [x] make node 3 accept read, not standby when node 2 down.
 
 - [ ] web dashboard chart & graph for useful data
 

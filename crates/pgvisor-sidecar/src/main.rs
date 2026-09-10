@@ -249,7 +249,10 @@ async fn handle_repoint(
     state
         .record_event(
             "node_joined",
-            format!("Node {} re-pointed to {}", state.node_id, payload.primary_conninfo),
+            format!(
+                "Node {} re-pointed to {}",
+                state.node_id, payload.primary_conninfo
+            ),
         )
         .await;
 
@@ -499,11 +502,8 @@ async fn main() -> Result<()> {
     ) -> Json<Vec<SidecarEventRecord>> {
         let since_id = query.since_id.unwrap_or(0);
         let q = state.events.read().await;
-        let records: Vec<SidecarEventRecord> = q
-            .iter()
-            .filter(|e| e.id > since_id)
-            .cloned()
-            .collect();
+        let records: Vec<SidecarEventRecord> =
+            q.iter().filter(|e| e.id > since_id).cloned().collect();
         Json(records)
     }
 

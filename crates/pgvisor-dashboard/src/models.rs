@@ -308,4 +308,3 @@ pub struct AuditOverviewStats {
     pub dangerous_sql_count: usize,
     pub latest_pitr_target: Option<String>,
 }
-

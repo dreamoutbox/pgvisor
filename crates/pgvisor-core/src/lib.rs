@@ -5,7 +5,7 @@ pub mod protocol;
 pub mod raft;
 pub mod storage;
 
-pub use audit::{AuditEvent, AuditEventKind, AuditLog, AuditError};
+pub use audit::{AuditError, AuditEvent, AuditEventKind, AuditLog};
 pub use backup::{BackupError, BackupManager, BasebackupMeta};
 pub use error::StorageError;
 pub use protocol::{

@@ -42,7 +42,10 @@ pub struct ConfigGenerator;
 
 impl ConfigGenerator {
     /// Writes customized `postgresql.conf` and `pg_hba.conf` into data directory.
-    pub fn write_configs(data_dir: impl AsRef<Path>, config: &PostgresConfig) -> Result<(), ConfigError> {
+    pub fn write_configs(
+        data_dir: impl AsRef<Path>,
+        config: &PostgresConfig,
+    ) -> Result<(), ConfigError> {
         let dir = data_dir.as_ref();
         if !dir.exists() {
             fs::create_dir_all(dir)?;
@@ -74,9 +77,7 @@ impl ConfigGenerator {
         }
 
         if let Some(primary_info) = &config.primary_conninfo {
-            conf_content.push_str(&format!(
-                "primary_conninfo = '{primary_info}'\n"
-            ));
+            conf_content.push_str(&format!("primary_conninfo = '{primary_info}'\n"));
             // Standby indicator file
             let standby_signal = dir.join("standby.signal");
             File::create(standby_signal)?;

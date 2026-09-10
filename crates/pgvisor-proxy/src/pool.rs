@@ -138,8 +138,9 @@ pub struct ConnectionPool {
 struct PoolInner {
     leader_addr: Option<String>,
     standby_addrs: Vec<String>,
+    standby_rr_index: usize,
     idle_leaders: VecDeque<PooledConnection>,
-    idle_standbys: VecDeque<PooledConnection>,
+    idle_standbys: HashMap<String, VecDeque<PooledConnection>>,
     max_idle_per_node: usize,
     version: u64,
 }
@@ -151,8 +152,9 @@ impl ConnectionPool {
             inner: Arc::new(Mutex::new(PoolInner {
                 leader_addr: None,
                 standby_addrs: Vec::new(),
+                standby_rr_index: 0,
                 idle_leaders: VecDeque::new(),
-                idle_standbys: VecDeque::new(),
+                idle_standbys: HashMap::new(),
                 max_idle_per_node,
                 version: 0,
             })),
@@ -171,7 +173,13 @@ impl ConnectionPool {
             inner.leader_addr = leader;
         }
 
+        // Retain only idle connections for standbys that remain in the updated topology
+        inner
+            .idle_standbys
+            .retain(|addr, _| standbys.contains(addr));
+
         inner.standby_addrs = standbys;
+        inner.standby_rr_index = 0;
         inner.version = inner.version.wrapping_add(1);
         let _ = self.topology_notifier.send(inner.version);
     }
@@ -208,11 +216,18 @@ impl ConnectionPool {
                     (conn, addr)
                 }
                 BackendRole::Standby => {
-                    if let Some(conn) = inner.idle_standbys.pop_front() {
-                        let addr = conn.addr.clone();
-                        (Some(conn), addr)
-                    } else if let Some(addr) = inner.standby_addrs.first().cloned() {
-                        (None, addr)
+                    if !inner.standby_addrs.is_empty() {
+                        let num_standbys = inner.standby_addrs.len();
+                        let target_idx = inner.standby_rr_index % num_standbys;
+                        inner.standby_rr_index = inner.standby_rr_index.wrapping_add(1);
+                        let addr = inner.standby_addrs[target_idx].clone();
+
+                        let conn = inner
+                            .idle_standbys
+                            .get_mut(&addr)
+                            .and_then(|q| q.pop_front());
+
+                        (conn, addr)
                     } else if let Some(addr) = inner.leader_addr.clone() {
                         // Fallback to leader if no standby is currently registered
                         (inner.idle_leaders.pop_front(), addr)
@@ -301,8 +316,12 @@ impl ConnectionPool {
                 }
             }
             BackendRole::Standby => {
-                if inner.idle_standbys.len() < inner.max_idle_per_node {
-                    inner.idle_standbys.push_back(conn);
+                let max_idle = inner.max_idle_per_node;
+                if inner.standby_addrs.contains(&conn.addr) {
+                    let queue = inner.idle_standbys.entry(conn.addr.clone()).or_default();
+                    if queue.len() < max_idle {
+                        queue.push_back(conn);
+                    }
                 }
             }
         }
@@ -311,7 +330,8 @@ impl ConnectionPool {
     /// Returns the number of idle connections across leader and standbys.
     pub async fn idle_count(&self) -> (usize, usize) {
         let inner = self.inner.lock().await;
-        (inner.idle_leaders.len(), inner.idle_standbys.len())
+        let standbys = inner.idle_standbys.values().map(|q| q.len()).sum();
+        (inner.idle_leaders.len(), standbys)
     }
 }
 
@@ -335,6 +355,63 @@ mod tests {
         let inner = pool.inner.lock().await;
         assert_eq!(inner.leader_addr, Some("127.0.0.1:5434".into()));
         assert!(inner.idle_leaders.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_standby_round_robin_selection() {
+        let port1 = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let port2 = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+
+        let pool = ConnectionPool::new(5);
+        pool.update_topology(
+            Some("127.0.0.1:5432".into()),
+            vec![
+                format!("127.0.0.1:{}", port1),
+                format!("127.0.0.1:{}", port2),
+            ],
+        )
+        .await;
+
+        // Verify round-robin targeting across multiple standbys
+        let err1 = pool.acquire_for(BackendRole::Standby, None, None).await;
+        assert!(err1.is_err());
+        {
+            let inner = pool.inner.lock().await;
+            assert_eq!(inner.standby_rr_index, 1);
+        }
+
+        let err2 = pool.acquire_for(BackendRole::Standby, None, None).await;
+        assert!(err2.is_err());
+        {
+            let inner = pool.inner.lock().await;
+            assert_eq!(inner.standby_rr_index, 2);
+        }
+
+        // When node 2 is down and removed from topology, remaining node 3 accepts reads
+        pool.update_topology(
+            Some("127.0.0.1:5432".into()),
+            vec![format!("127.0.0.1:{}", port2)],
+        )
+        .await;
+
+        {
+            let inner = pool.inner.lock().await;
+            assert_eq!(inner.standby_addrs.len(), 1);
+            assert_eq!(inner.standby_rr_index, 0);
+        }
+
+        let err3 = pool.acquire_for(BackendRole::Standby, None, None).await;
+        assert!(err3.is_err());
+        {
+            let inner = pool.inner.lock().await;
+            assert_eq!(inner.standby_rr_index, 1);
+        }
     }
 
     #[tokio::test]

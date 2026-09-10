@@ -249,11 +249,7 @@ impl Wal {
 
     /// Purges index entries strictly before `upto_index`.
     pub fn purge_upto(&mut self, upto_index: u64) {
-        let keys_to_remove: Vec<u64> = self
-            .index
-            .range(..=upto_index)
-            .map(|(&k, _)| k)
-            .collect();
+        let keys_to_remove: Vec<u64> = self.index.range(..=upto_index).map(|(&k, _)| k).collect();
 
         for k in keys_to_remove {
             self.index.remove(&k);
