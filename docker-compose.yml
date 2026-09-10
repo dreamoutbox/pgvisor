@@ -9,6 +9,8 @@ services:
     image: minio/minio:latest
     container_name: pgvisor-minio
     restart: unless-stopped
+    cpus: 1
+    mem_limit: 1g
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -27,6 +29,8 @@ services:
   minio-init:
     image: minio/mc:latest
     container_name: pgvisor-minio-init
+    cpus: 1
+    mem_limit: 1g
     depends_on:
       minio:
         condition: service_healthy
@@ -39,6 +43,8 @@ services:
       dockerfile: Dockerfile
     container_name: pgvisor-node1
     restart: unless-stopped
+    cpus: 1
+    mem_limit: 1g
     environment:
       POSTGRES_USER: postgres
       PGPORT: 5432
@@ -69,6 +75,8 @@ services:
       dockerfile: Dockerfile
     container_name: pgvisor-node2
     restart: unless-stopped
+    cpus: 1
+    mem_limit: 1g
     environment:
       POSTGRES_USER: postgres
       PGPORT: 5432
@@ -100,6 +108,8 @@ services:
       dockerfile: Dockerfile
     container_name: pgvisor-node3
     restart: unless-stopped
+    cpus: 1
+    mem_limit: 1g
     environment:
       POSTGRES_USER: postgres
       PGPORT: 5432
@@ -132,6 +142,8 @@ services:
     container_name: pgvisor-proxy
     entrypoint: [ "pgvisor-proxy" ]
     restart: unless-stopped
+    cpus: 1
+    mem_limit: 1g
     ports:
       - "5432:5432"
       - "8080:8080"

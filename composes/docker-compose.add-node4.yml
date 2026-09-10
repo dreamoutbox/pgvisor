@@ -9,6 +9,7 @@ services:
       dockerfile: Dockerfile
     image: pgvisor-test-node:latest
     container_name: pgvisor-add-node-node4
+    cpus: 1
     mem_limit: 1g
     restart: "no"
     environment:

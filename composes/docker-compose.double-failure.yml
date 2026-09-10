@@ -1,4 +1,4 @@
-# Auto-generated test compose file for backup-restore profile
+# Auto-generated test compose file for double-failure profile
 # Generated from docker-compose.yml by scripts/generate_test_composes.py
 volumes:
   minio_data:
@@ -9,13 +9,13 @@ volumes:
 services:
   minio:
     image: minio/minio:latest
-    container_name: pgvisor-backup-restore-minio
+    container_name: pgvisor-double-failure-minio
     restart: unless-stopped
     cpus: 1
     mem_limit: 1g
     ports:
-      - "9200:9000"
-      - "9201:9001"
+      - "10300:9000"
+      - "10301:9001"
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
@@ -30,7 +30,7 @@ services:
 
   minio-init:
     image: minio/mc:latest
-    container_name: pgvisor-backup-restore-minio-init
+    container_name: pgvisor-double-failure-minio-init
     cpus: 1
     mem_limit: 1g
     depends_on:
@@ -44,7 +44,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     image: pgvisor-test-node:latest
-    container_name: pgvisor-backup-restore-node1
+    container_name: pgvisor-double-failure-node1
     restart: unless-stopped
     cpus: 1
     mem_limit: 1g
@@ -77,7 +77,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     image: pgvisor-test-node:latest
-    container_name: pgvisor-backup-restore-node2
+    container_name: pgvisor-double-failure-node2
     restart: unless-stopped
     cpus: 1
     mem_limit: 1g
@@ -111,7 +111,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     image: pgvisor-test-node:latest
-    container_name: pgvisor-backup-restore-node3
+    container_name: pgvisor-double-failure-node3
     restart: unless-stopped
     cpus: 1
     mem_limit: 1g
@@ -145,14 +145,14 @@ services:
       context: ..
       dockerfile: Dockerfile
     image: pgvisor-test-proxy:latest
-    container_name: pgvisor-backup-restore-proxy
+    container_name: pgvisor-double-failure-proxy
     entrypoint: [ "pgvisor-proxy" ]
     restart: unless-stopped
     cpus: 1
     mem_limit: 1g
     ports:
-      - "5632:5432"
-      - "8280:8080"
+      - "6732:5432"
+      - "9380:8080"
     environment:
       PGVISOR_PROXY_LISTEN: 0.0.0.0:5432
       PGVISOR_DASHBOARD_LISTEN: 0.0.0.0:8080

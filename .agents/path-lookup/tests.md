@@ -3,7 +3,7 @@
 ### If you want to change test compose profiles, test port mappings, or concurrent test execution, then check:
 
 - `docker-compose.yml` = canonical base compose template and single source of truth.
-- `scripts/generate_test_composes.py` = generates isolated test compose files with port offsets, project scoping, and 1GB RAM limits on postgres nodes.
+- `scripts/generate_test_composes.py` = generates isolated test compose files with port offsets, project scoping, and 1 CPU + 1GB RAM limits on containers.
 - `scripts/generate-test-composes.sh` = bash wrapper to run the python generator.
 - `composes/docker-compose.*.yml` = generated per-test isolated compose files (`crud`, `backup-restore`, `pitr`, `failover`, `auto-rejoin`, `rejoin-fenced`, `add-node`, `add-node4`, `switchover`, `users-permissions`, `transaction`, `routing`).
 - `test.sh` = master test suite orchestrator supporting sequential and parallel (`-j N`) execution across all test profiles.
@@ -20,6 +20,7 @@
 - `scripts/test-transaction.sql` = SQL fixture run inside test-transaction.sh; exercises all 3 transaction scenarios.
 - `tests/test-routing.sh` = self-contained read/write routing assertion test (port 6532; plain SELECT to replica, DDL/DML to leader, in-txn SELECT pinned to leader).
 - `tests/test-audit-logs.sh` = self-contained audit logs verification test (port 6632; node up/down, dangerous SQL with PITR, backups, elections, user/role management, S3 storage).
+- `tests/test-double-failure.sh` = self-contained double-failure disaster recovery test (port 6732; 2 nodes down, quorum loss prevents writes, sequential restart with standby rejoin, data integrity & WAL streaming).
 - `reset-docker-compose.sh` = developer cluster reset script; builds images by default, supports `--no-build` and `-s`/`--silent`.
 
 ### If you want to add a new integration test (new test script + compose profile), then check:
@@ -35,3 +36,9 @@
 - `tests/lib/cluster.sh` = shared library for `cluster_up` (`--progress quiet`), `cluster_down`, `wait_and_remove_minio_init`, `wait_for_healthy` (with fail-fast crash detection), and `wait_for_proxy_ready`.
 - `reset-docker-compose.sh` = developer cluster reset script with `pgvisor-minio-init` wait & removal and container healthcheck polling with timeout.
 - `tests/test-*.sh` = integration test scripts that invoke `cluster_up`, `wait_for_healthy`, and `cluster_down`.
+
+### If you want to fix flaky post-restore assertions (wrong row counts after snapshot restore), then check:
+
+- `tests/test-incremental-pitr.sh` = PITR test; after `restore_cluster_node` increase the initial `sleep` (settle time) and widen the retry loop (`seq 1 20` × `sleep 3` = 60s budget) to absorb full cluster re-initialization + standby re-clone + proxy pool reconnect lag.
+- `tests/test-backup-restore.sh` = similar restore+verify pattern; apply the same retry budget if it shows similar flakiness.
+- `tests/lib/cluster.sh` = `wait_for_proxy_ready` and `wait_for_healthy`; if restore takes longer, the settle period may need to call these helpers instead of a bare `sleep`.

@@ -80,7 +80,7 @@
       - log worker join, leave event.
       - user create/delete/grant permission
 
-- [ ] very bad disaster testing: 3 nodes setup. 2 nodes down.
+- [x] very bad disaster testing: 3 nodes setup. 2 nodes down.
       - start as 3 nodes 
       - down node1, node2
       - assert only node3 left.
@@ -92,7 +92,11 @@
       - assert node2 rejoin as standby.
       - assert database cluster is working, data is ok and have leader.
 
+- [x] chore: limit CPU and RAM in test docker composes
+
 - [ ] testing two proxy. 3 nodes. then stop proxy1 and assert still access DB with proxy2.
+
+- [ ] make node 3 accept read, not standby when node 2 down.
 
 - [ ] web dashboard chart & graph for useful data
 

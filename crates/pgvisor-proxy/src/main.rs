@@ -95,8 +95,7 @@ async fn main() -> Result<()> {
     let admin_token = env::var("PGVISOR_ADMIN_TOKEN").ok();
 
     // S3 configuration for physical backups and persistent audit logs
-    let s3_endpoint =
-        env::var("S3_ENDPOINT").unwrap_or_else(|_| "http://minio:9000".to_string());
+    let s3_endpoint = env::var("S3_ENDPOINT").unwrap_or_else(|_| "http://minio:9000".to_string());
     let s3_bucket = env::var("S3_BUCKET").unwrap_or_else(|_| "pgvisor-backups".to_string());
     let s3_access_key = env::var("S3_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".to_string());
     let s3_secret_key = env::var("S3_SECRET_KEY").unwrap_or_else(|_| "minioadmin".to_string());
@@ -117,7 +116,10 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         match audit_loader.load_from_storage().await {
             Ok(count) => {
-                info!(count, "Restored historical audit log events from S3 storage");
+                info!(
+                    count,
+                    "Restored historical audit log events from S3 storage"
+                );
             }
             Err(e) => {
                 warn!(?e, "Could not restore audit logs from S3");
@@ -285,7 +287,10 @@ async fn main() -> Result<()> {
                                     AuditEventKind::NodeJoined,
                                     None,
                                     Some(&pg_addr),
-                                    format!("Dynamic standby node {} joined streaming replication", pg_addr),
+                                    format!(
+                                        "Dynamic standby node {} joined streaming replication",
+                                        pg_addr
+                                    ),
                                     None,
                                 )
                                 .await;
@@ -361,33 +366,48 @@ async fn main() -> Result<()> {
                             prev_health_states.insert(target.pg_addr.clone(), state);
 
                             if let Some(p) = prev {
-                                if p != NodeHealthState::Healthy && state == NodeHealthState::Healthy {
+                                if p != NodeHealthState::Healthy
+                                    && state == NodeHealthState::Healthy
+                                {
                                     audit_monitor
                                         .append(
                                             AuditEventKind::NodeUp,
                                             Some(st.node_id),
                                             Some(&target.pg_addr),
-                                            format!("Node #{} ({}) is online and healthy", st.node_id, target.pg_addr),
+                                            format!(
+                                                "Node #{} ({}) is online and healthy",
+                                                st.node_id, target.pg_addr
+                                            ),
                                             None,
                                         )
                                         .await;
-                                } else if p == NodeHealthState::Healthy && state == NodeHealthState::Offline {
+                                } else if p == NodeHealthState::Healthy
+                                    && state == NodeHealthState::Offline
+                                {
                                     audit_monitor
                                         .append(
                                             AuditEventKind::NodeDown,
                                             Some(st.node_id),
                                             Some(&target.pg_addr),
-                                            format!("Node #{} ({}) became offline or unreachable", st.node_id, target.pg_addr),
+                                            format!(
+                                                "Node #{} ({}) became offline or unreachable",
+                                                st.node_id, target.pg_addr
+                                            ),
                                             None,
                                         )
                                         .await;
-                                } else if p == NodeHealthState::Healthy && state == NodeHealthState::Fenced {
+                                } else if p == NodeHealthState::Healthy
+                                    && state == NodeHealthState::Fenced
+                                {
                                     audit_monitor
                                         .append(
                                             AuditEventKind::NodeDown,
                                             Some(st.node_id),
                                             Some(&target.pg_addr),
-                                            format!("Node #{} ({}) was fenced (quorum lost)", st.node_id, target.pg_addr),
+                                            format!(
+                                                "Node #{} ({}) was fenced (quorum lost)",
+                                                st.node_id, target.pg_addr
+                                            ),
                                             None,
                                         )
                                         .await;
@@ -398,7 +418,10 @@ async fn main() -> Result<()> {
                                         AuditEventKind::NodeUp,
                                         Some(st.node_id),
                                         Some(&target.pg_addr),
-                                        format!("Node #{} ({}) registered online and healthy", st.node_id, target.pg_addr),
+                                        format!(
+                                            "Node #{} ({}) registered online and healthy",
+                                            st.node_id, target.pg_addr
+                                        ),
                                         None,
                                     )
                                     .await;
@@ -412,10 +435,18 @@ async fn main() -> Result<()> {
                                 detail: String,
                             }
 
-                            let last_id = last_seen_event_ids.get(&target.control_url).copied().unwrap_or(0);
-                            let events_url = format!("{}/control/events?since_id={}", target.control_url.trim_end_matches('/'), last_id);
+                            let last_id = last_seen_event_ids
+                                .get(&target.control_url)
+                                .copied()
+                                .unwrap_or(0);
+                            let events_url = format!(
+                                "{}/control/events?since_id={}",
+                                target.control_url.trim_end_matches('/'),
+                                last_id
+                            );
                             if let Ok(ev_resp) = client.get(&events_url).send().await {
-                                if let Ok(records) = ev_resp.json::<Vec<SidecarEventRecord>>().await {
+                                if let Ok(records) = ev_resp.json::<Vec<SidecarEventRecord>>().await
+                                {
                                     let mut max_id = last_id;
                                     for rec in records {
                                         if rec.id > max_id {
@@ -461,14 +492,18 @@ async fn main() -> Result<()> {
                             }
 
                             let prev = prev_health_states.get(&target.pg_addr).copied();
-                            prev_health_states.insert(target.pg_addr.clone(), NodeHealthState::Offline);
+                            prev_health_states
+                                .insert(target.pg_addr.clone(), NodeHealthState::Offline);
                             if let Some(NodeHealthState::Healthy) = prev {
                                 audit_monitor
                                     .append(
                                         AuditEventKind::NodeDown,
                                         None,
                                         Some(&target.pg_addr),
-                                        format!("Node ({}) became offline or unreachable", target.pg_addr),
+                                        format!(
+                                            "Node ({}) became offline or unreachable",
+                                            target.pg_addr
+                                        ),
                                         None,
                                     )
                                     .await;
@@ -502,7 +537,10 @@ async fn main() -> Result<()> {
                                     AuditEventKind::NodeDown,
                                     None,
                                     Some(&target.pg_addr),
-                                    format!("Node ({}) became offline or unreachable", target.pg_addr),
+                                    format!(
+                                        "Node ({}) became offline or unreachable",
+                                        target.pg_addr
+                                    ),
                                     None,
                                 )
                                 .await;
@@ -546,8 +584,7 @@ async fn main() -> Result<()> {
                 r.clone()
             };
 
-            let leader_changed =
-                discovered_leader.is_some() && (discovered_leader != current_leader);
+            let leader_changed = discovered_leader != current_leader;
             let standbys_changed = discovered_standbys != current_standbys;
 
             if leader_changed || standbys_changed {

@@ -11,6 +11,8 @@ services:
     image: minio/minio:latest
     container_name: pgvisor-pitr-minio
     restart: unless-stopped
+    cpus: 1
+    mem_limit: 1g
     ports:
       - "9300:9000"
       - "9301:9001"
@@ -29,6 +31,8 @@ services:
   minio-init:
     image: minio/mc:latest
     container_name: pgvisor-pitr-minio-init
+    cpus: 1
+    mem_limit: 1g
     depends_on:
       minio:
         condition: service_healthy
@@ -41,8 +45,9 @@ services:
       dockerfile: Dockerfile
     image: pgvisor-test-node:latest
     container_name: pgvisor-pitr-node1
-    mem_limit: 1g
     restart: unless-stopped
+    cpus: 1
+    mem_limit: 1g
     environment:
       POSTGRES_USER: postgres
       PGPORT: 5432
@@ -73,8 +78,9 @@ services:
       dockerfile: Dockerfile
     image: pgvisor-test-node:latest
     container_name: pgvisor-pitr-node2
-    mem_limit: 1g
     restart: unless-stopped
+    cpus: 1
+    mem_limit: 1g
     environment:
       POSTGRES_USER: postgres
       PGPORT: 5432
@@ -106,8 +112,9 @@ services:
       dockerfile: Dockerfile
     image: pgvisor-test-node:latest
     container_name: pgvisor-pitr-node3
-    mem_limit: 1g
     restart: unless-stopped
+    cpus: 1
+    mem_limit: 1g
     environment:
       POSTGRES_USER: postgres
       PGPORT: 5432
@@ -141,6 +148,8 @@ services:
     container_name: pgvisor-pitr-proxy
     entrypoint: [ "pgvisor-proxy" ]
     restart: unless-stopped
+    cpus: 1
+    mem_limit: 1g
     ports:
       - "5732:5432"
       - "8380:8080"

@@ -4,7 +4,7 @@ PgVisor: Test Docker Compose Profiles Generator
 
 Reads root docker-compose.yml as canonical template and generates isolated,
 port-offset Compose files in composes/ for concurrent test execution.
-Enforces 1GB RAM limit on all PostgreSQL services.
+Enforces 1GB RAM and 1 CPU limit on all containers.
 Uses shared image tags (pgvisor-test-node:latest, pgvisor-test-proxy:latest)
 so images are built once and reused across all concurrent test stacks.
 """
@@ -33,6 +33,7 @@ PROFILES = [
     ("transaction", "transaction", 6432, 9080, 10000, 10001),
     ("routing", "routing", 6532, 9180, 10100, 10101),
     ("audit-logs", "audit-logs", 6632, 9280, 10200, 10201),
+    ("double-failure", "double-failure", 6732, 9380, 10300, 10301),
 ]
 
 
@@ -53,14 +54,11 @@ def generate_profiles():
         content = re.sub(r'context:\s*\.', 'context: ..', content)
         content = re.sub(r'-\s*\./scripts:', '- ../scripts:', content)
 
-        # Replace container names with test-scoped names & inject 1GB RAM limit on postgres nodes
+        # Replace container names with test-scoped names
         def replace_container_name(match):
             cname = match.group(1)
             scoped = f"pgvisor-{proj}-{cname.replace('pgvisor-', '')}"
-            res = f"container_name: {scoped}"
-            if "node" in cname:
-                res += "\n    mem_limit: 1g"
-            return res
+            return f"container_name: {scoped}"
 
         content = re.sub(r'container_name:\s*(pgvisor-[a-zA-Z0-9_-]+)', replace_container_name, content)
 
@@ -90,7 +88,7 @@ def generate_profiles():
             f.write(f"# Generated from {TEMPLATE_FILE.name} by scripts/generate_test_composes.py\n")
             f.write(content)
 
-        print(f"Generated {out_file.name} (proxy:{proxy_p}, dashboard:{dash_p}, minio:{minio_p}, mem_limit: 1g)")
+        print(f"Generated {out_file.name} (proxy:{proxy_p}, dashboard:{dash_p}, minio:{minio_p}, limits: 1 CPU, 1GB RAM)")
 
     # Overlay for node4 dynamic scale-out testing
     add_node4_content = """# Auto-generated overlay for pgvisor-add-node testing
@@ -104,6 +102,7 @@ services:
       dockerfile: Dockerfile
     image: pgvisor-test-node:latest
     container_name: pgvisor-add-node-node4
+    cpus: 1
     mem_limit: 1g
     restart: "no"
     environment:
@@ -131,7 +130,7 @@ services:
     node4_file = OUTPUT_DIR / "docker-compose.add-node4.yml"
     with open(node4_file, "w", encoding="utf-8") as f:
         f.write(add_node4_content)
-    print(f"Generated {node4_file.name} (overlay for 4th node scale-out, mem_limit: 1g)")
+    print(f"Generated {node4_file.name} (overlay for 4th node scale-out, limits: 1 CPU, 1GB RAM)")
 
 
 if __name__ == "__main__":

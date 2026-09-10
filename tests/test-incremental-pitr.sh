@@ -204,16 +204,19 @@ echo "✓ Snapshot T2 archive verified ($(wc -c < "${TMP_ARCHIVE_T2}") bytes)."
 echo ""
 echo "[6/8] Restoring from snapshot T0 (${SNAP_T0})..."
 restore_cluster_node "${SNAP_T0}"
-sleep 2
+# After a full restore the sidecar reinitializes Postgres, standbys re-clone via
+# pg_basebackup, and the proxy pool reconnects. Give the cluster time to settle
+# before starting to poll, then poll generously to absorb replication lag.
+sleep 5
 
 COUNT_RESTORE_T0=""
-for attempt in 1 2 3 4 5; do
+for attempt in $(seq 1 20); do
     if COUNT_RESTORE_T0=$(run_sql "SELECT COUNT(*) FROM t_pitr;" 2> /dev/null); then
         if [ "${COUNT_RESTORE_T0}" = "1" ]; then
             break
         fi
     fi
-    sleep 1
+    sleep 3
 done
 
 if [ "${COUNT_RESTORE_T0}" != "1" ]; then
@@ -236,16 +239,17 @@ echo "✓ Snapshot T0 verified: exactly 1 row ('alpha' present, 'beta' absent)."
 echo ""
 echo "[7/8] Restoring from snapshot T2 (${SNAP_T2})..."
 restore_cluster_node "${SNAP_T2}"
-sleep 2
+# Same rationale as above: full cluster restore needs time to converge.
+sleep 5
 
 COUNT_RESTORE_T2=""
-for attempt in 1 2 3 4 5; do
+for attempt in $(seq 1 20); do
     if COUNT_RESTORE_T2=$(run_sql "SELECT COUNT(*) FROM t_pitr;" 2> /dev/null); then
         if [ "${COUNT_RESTORE_T2}" = "2" ]; then
             break
         fi
     fi
-    sleep 1
+    sleep 3
 done
 
 if [ "${COUNT_RESTORE_T2}" != "2" ]; then

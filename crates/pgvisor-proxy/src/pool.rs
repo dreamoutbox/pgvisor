@@ -247,6 +247,8 @@ impl ConnectionPool {
         database: Option<&str>,
     ) -> Result<PooledConnection, PoolError> {
         let start = Instant::now();
+        let mut last_warn = Instant::now();
+        let mut first = true;
         let mut rx = self.subscribe_topology();
 
         loop {
@@ -262,12 +264,16 @@ impl ConnectionPool {
                         )));
                     }
 
-                    warn!(
-                        ?role,
-                        elapsed = ?start.elapsed(),
-                        timeout = ?config.failover_timeout,
-                        "Backend temporarily unavailable during failover; buffering client request"
-                    );
+                    if first || last_warn.elapsed() >= Duration::from_secs(2) {
+                        warn!(
+                            ?role,
+                            elapsed = ?start.elapsed(),
+                            timeout = ?config.failover_timeout,
+                            "Backend temporarily unavailable during failover; buffering client request"
+                        );
+                        last_warn = Instant::now();
+                        first = false;
+                    }
 
                     // Wait for either a topology change notification or retry interval tick
                     tokio::select! {
