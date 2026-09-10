@@ -11,3 +11,11 @@
 - `tests/test-auto-rejoin.sh` = Standby reconnection and automatic rejoin after partition
 - `tests/test-rejoin-fenced.sh` = Fenced leader rejoin as standby replica verification
 - `tests/test-add-node.sh` = Dynamic scale-out test adding node4 to 3-node cluster and verifying replication
+
+### If you want to modify GitHub Actions CI/CD workflows, automated testing, or Docker Hub publishing, then check:
+
+- `.github/workflows/ci.yml` = GitHub Actions workflow executing cargo check/test, test.sh integration suite, and Docker build/publish to Docker Hub.
+- `Dockerfile` = Multi-stage Docker build recipe for `pgvisor-sidecar`, `pgvisor-proxy`, and `pgvisor-dashboard`.
+- `test.sh` = Integration test orchestrator invoked by the CI test job.
+- `README.md` = Documentation for CI status badges, Docker Hub images, and required GitHub repository secrets (`DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`).
+- `TODO.md` = Roadmap and task completion tracking for CI/CD and release automation.

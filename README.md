@@ -1,5 +1,8 @@
 # PgVisor
 
+[![CI & Docker Publish](https://github.com/dreamoutbox/pgvisor/actions/workflows/ci.yml/badge.svg)](https://github.com/dreamoutbox/pgvisor/actions/workflows/ci.yml)
+[![Docker Image](https://img.shields.io/docker/v/dreamoutbox/pgvisor?sort=semver&label=docker%20image)](https://hub.docker.com/r/dreamoutbox/pgvisor)
+
 **PgVisor** is a lightweight, developer-friendly PostgreSQL High Availability cluster supervisor and proxy — built entirely in pure Rust. It replaces the operational sprawl of Patroni + PgBouncer + Etcd + pgBackRest with a single, unified binary architecture that just works.
 
 > Built for developers who want HA PostgreSQL without the complexity.
@@ -247,6 +250,28 @@ pgvisor/
 ├── ARCHITECTURE.md         # Full architecture specification
 └── Cargo.toml              # Workspace manifest
 ```
+
+---
+
+## Docker Image & Automated Releases
+
+Pre-built multi-binary images containing `pgvisor-sidecar`, `pgvisor-proxy`, and `pgvisor-dashboard` are published to Docker Hub:
+
+```bash
+docker pull dreamoutbox/pgvisor:latest
+```
+
+### GitHub Actions CI/CD Secrets
+
+The automated CI/CD pipeline runs Rust compilation checks, unit tests, and integration tests across 14 scenarios. On pushes to `master` and version tags (`v*`), it builds and publishes the production image to Docker Hub.
+
+To configure Docker Hub publishing in your repository, set the following secrets in **Settings > Secrets and variables > Actions**:
+
+| Secret / Variable | Type | Description |
+|---|---|---|
+| `DOCKERHUB_USERNAME` | Secret | Docker Hub account or organization username (e.g., `dreamoutbox`) |
+| `DOCKERHUB_TOKEN` | Secret | Docker Hub Personal Access Token (PAT) with Read/Write access |
+| `DOCKERHUB_REPO` | Variable (Optional) | Target repository name (defaults to `dreamoutbox/pgvisor`) |
 
 ---
 

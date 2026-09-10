@@ -100,9 +100,16 @@
 
 - [x] add README.md
 
-- [ ] add github workflow to run tests. build docker image and publish to docker hub. 
+- [x] add github workflow to build docker image, run tests, and publish to docker hub. 
 
 - [ ] web dashboard chart & graph for useful data
+      - all nodes uptime
+      - node read/write count
+      - node cpu/memory usage
+      - proxy read/write count
+      - backup size & throughput
+      - backup success/fail rate
+      - replication lag
 
 - [ ] move rust tests to tests directory.
 
