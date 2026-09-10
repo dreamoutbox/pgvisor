@@ -68,6 +68,7 @@ TEST_SCRIPTS=(
     "test-routing.sh"
     "test-audit-logs.sh"
     "test-double-failure.sh"
+    "test-proxy-failover.sh"
 )
 
 TOTAL_TESTS="${#TEST_SCRIPTS[@]}"

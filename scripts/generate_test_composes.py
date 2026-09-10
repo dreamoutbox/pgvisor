@@ -34,6 +34,7 @@ PROFILES = [
     ("routing", "routing", 6532, 9180, 10100, 10101),
     ("audit-logs", "audit-logs", 6632, 9280, 10200, 10201),
     ("double-failure", "double-failure", 6732, 9380, 10300, 10301),
+    ("proxy-failover", "proxy-failover", 6832, 9480, 10400, 10401),
 ]
 
 
@@ -131,6 +132,50 @@ services:
     with open(node4_file, "w", encoding="utf-8") as f:
         f.write(add_node4_content)
     print(f"Generated {node4_file.name} (overlay for 4th node scale-out, limits: 1 CPU, 1GB RAM)")
+
+    # Overlay for proxy2 failover testing
+    proxy2_content = """# Auto-generated overlay for pgvisor-proxy-failover testing
+services:
+  pgvisor-proxy2:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: pgvisor-test-proxy:latest
+    container_name: pgvisor-proxy-failover-proxy2
+    entrypoint: [ "pgvisor-proxy" ]
+    restart: unless-stopped
+    cpus: 1
+    mem_limit: 1g
+    ports:
+      - "6833:5432"
+      - "9481:8080"
+    environment:
+      PGVISOR_PROXY_LISTEN: 0.0.0.0:5432
+      PGVISOR_DASHBOARD_LISTEN: 0.0.0.0:8080
+      PGVISOR_LEADER_ADDR: pgvisor-node1:5432
+      PGVISOR_STANDBY_ADDRS: pgvisor-node2:5432,pgvisor-node3:5432
+      PGVISOR_CLUSTER_ID: pgvisor-cluster
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: pgvisor-backups
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      RUST_LOG: info
+      PGVISOR_ADMIN_TOKEN: postgres
+    volumes:
+      - ../scripts:/scripts:ro
+    depends_on:
+      pgvisor-node1:
+        condition: service_healthy
+      pgvisor-node2:
+        condition: service_healthy
+      pgvisor-node3:
+        condition: service_healthy
+"""
+    proxy2_file = OUTPUT_DIR / "docker-compose.proxy-failover-proxy2.yml"
+    with open(proxy2_file, "w", encoding="utf-8") as f:
+        f.write(proxy2_content)
+    print(f"Generated {proxy2_file.name} (overlay for second proxy, limits: 1 CPU, 1GB RAM)")
+
 
 
 if __name__ == "__main__":

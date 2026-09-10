@@ -21,6 +21,8 @@
 - `tests/test-routing.sh` = self-contained read/write routing assertion test (port 6532; plain SELECT to replica, DDL/DML to leader, in-txn SELECT pinned to leader, round-robin standby read load-balancing to node3, node2-down failover to node3).
 - `tests/test-audit-logs.sh` = self-contained audit logs verification test (port 6632; node up/down, dangerous SQL with PITR, backups, elections, user/role management, S3 storage).
 - `tests/test-double-failure.sh` = self-contained double-failure disaster recovery test (port 6732; 2 nodes down, quorum loss prevents writes, sequential restart with standby rejoin, data integrity & WAL streaming).
+- `tests/test-proxy-failover.sh` = self-contained dual-proxy redundancy test (proxy1: 6832, proxy2: 6833; stop proxy1 and assert continued DB access via proxy2, verify recovery).
+- `composes/docker-compose.proxy-failover-proxy2.yml` = compose overlay defining the second proxy (pgvisor-proxy2) on ports 6833/9481.
 - `reset-docker-compose.sh` = developer cluster reset script; builds images by default, supports `--no-build` and `-s`/`--silent`.
 
 ### If you want to add a new integration test (new test script + compose profile), then check:

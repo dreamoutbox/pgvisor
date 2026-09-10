@@ -79,7 +79,7 @@ cluster_up() {
     shift 2
 
     # --progress quiet must be passed as an option before 'up'
-    if ! docker compose --progress quiet -p "${project}" -f "${compose_file}" up -d "$@"; then
+    if ! docker compose --progress quiet -p "${project}" -f "${compose_file}" "$@" up -d; then
         echo "ERROR: Failed to start cluster ${project}" >&2
         return 1
     fi

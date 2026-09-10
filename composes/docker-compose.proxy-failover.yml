@@ -1,0 +1,176 @@
+# Auto-generated test compose file for proxy-failover profile
+# Generated from docker-compose.yml by scripts/generate_test_composes.py
+volumes:
+  minio_data:
+  node1_data:
+  node2_data:
+  node3_data:
+
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: pgvisor-proxy-failover-minio
+    restart: unless-stopped
+    cpus: 1
+    mem_limit: 1g
+    ports:
+      - "10400:9000"
+      - "10401:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: [ "CMD", "mc", "ready", "local" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: pgvisor-proxy-failover-minio-init
+    cpus: 1
+    mem_limit: 1g
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c " mc alias set local http://minio:9000 minioadmin minioadmin; mc mb --ignore-existing local/pgvisor-backups; exit 0; "
+
+  pgvisor-node1:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: pgvisor-test-node:latest
+    container_name: pgvisor-proxy-failover-node1
+    restart: unless-stopped
+    cpus: 1
+    mem_limit: 1g
+    environment:
+      POSTGRES_USER: postgres
+      PGPORT: 5432
+      PGDATA: /var/lib/postgresql/data/pgdata
+      PGVISOR_CLUSTER_ID: pgvisor-cluster
+      PGVISOR_NODE_ID: 1
+      PGVISOR_ROLE: leader
+      PGVISOR_PEERS: http://pgvisor-node1:8080,http://pgvisor-node2:8080,http://pgvisor-node3:8080
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: pgvisor-backups
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      RUST_LOG: info
+    volumes:
+      - node1_data:/var/lib/postgresql/data
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-U", "postgres", "-h", "127.0.0.1" ]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  pgvisor-node2:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: pgvisor-test-node:latest
+    container_name: pgvisor-proxy-failover-node2
+    restart: unless-stopped
+    cpus: 1
+    mem_limit: 1g
+    environment:
+      POSTGRES_USER: postgres
+      PGPORT: 5432
+      PGDATA: /var/lib/postgresql/data/pgdata
+      PRIMARY_CONNINFO: host=pgvisor-node1 port=5432 user=postgres
+      PGVISOR_CLUSTER_ID: pgvisor-cluster
+      PGVISOR_NODE_ID: 2
+      PGVISOR_ROLE: standby
+      PGVISOR_PEERS: http://pgvisor-node1:8080,http://pgvisor-node2:8080,http://pgvisor-node3:8080
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: pgvisor-backups
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      RUST_LOG: info
+    volumes:
+      - node2_data:/var/lib/postgresql/data
+    depends_on:
+      pgvisor-node1:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-U", "postgres", "-h", "127.0.0.1" ]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  pgvisor-node3:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: pgvisor-test-node:latest
+    container_name: pgvisor-proxy-failover-node3
+    restart: unless-stopped
+    cpus: 1
+    mem_limit: 1g
+    environment:
+      POSTGRES_USER: postgres
+      PGPORT: 5432
+      PGDATA: /var/lib/postgresql/data/pgdata
+      PRIMARY_CONNINFO: host=pgvisor-node1 port=5432 user=postgres
+      PGVISOR_CLUSTER_ID: pgvisor-cluster
+      PGVISOR_NODE_ID: 3
+      PGVISOR_ROLE: standby
+      PGVISOR_PEERS: http://pgvisor-node1:8080,http://pgvisor-node2:8080,http://pgvisor-node3:8080
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: pgvisor-backups
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      RUST_LOG: info
+    volumes:
+      - node3_data:/var/lib/postgresql/data
+    depends_on:
+      pgvisor-node1:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-U", "postgres", "-h", "127.0.0.1" ]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  pgvisor-proxy:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: pgvisor-test-proxy:latest
+    container_name: pgvisor-proxy-failover-proxy
+    entrypoint: [ "pgvisor-proxy" ]
+    restart: unless-stopped
+    cpus: 1
+    mem_limit: 1g
+    ports:
+      - "6832:5432"
+      - "9480:8080"
+    environment:
+      PGVISOR_PROXY_LISTEN: 0.0.0.0:5432
+      PGVISOR_DASHBOARD_LISTEN: 0.0.0.0:8080
+      PGVISOR_LEADER_ADDR: pgvisor-node1:5432
+      PGVISOR_STANDBY_ADDRS: pgvisor-node2:5432,pgvisor-node3:5432
+      PGVISOR_CLUSTER_ID: pgvisor-cluster
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: pgvisor-backups
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      RUST_LOG: info
+      PGVISOR_ADMIN_TOKEN: postgres
+    volumes:
+      - ../scripts:/scripts:ro
+    depends_on:
+      pgvisor-node1:
+        condition: service_healthy
+      pgvisor-node2:
+        condition: service_healthy
+      pgvisor-node3:
+        condition: service_healthy

@@ -94,15 +94,15 @@
 
 - [x] chore: limit CPU and RAM in test docker composes
 
-- [ ] testing two proxy. 3 nodes. then stop proxy1 and assert still access DB with proxy2.
+- [x] testing 2 proxy, 3 nodes setup. then stop proxy1 and assert still access DB with proxy2.
 
 - [x] make node 3 accept read, not standby when node 2 down.
-
-- [ ] web dashboard chart & graph for useful data
 
 - [x] add README.md
 
 - [ ] add github workflow to run tests. build docker image and publish to docker hub. 
+
+- [ ] web dashboard chart & graph for useful data
 
 - [ ] move rust tests to tests directory.
 
