@@ -20,12 +20,19 @@ jobs:
     name: Test Suite
     runs-on: ubuntu-latest
 
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Rust dependency cache
         uses: Swatinem/rust-cache@v2
@@ -48,6 +55,9 @@ jobs:
         run: |
           docker build -t pgvisor-test-node:latest -t pgvisor-test-proxy:latest .
 
+      - name: Ensure test log directory exists
+        run: mkdir -p tests/.logs
+
       - name: Run integration test suite
         run: ./test.sh -j 2
 
@@ -56,8 +66,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: integration-test-logs
-          path: tests/.logs/
-          if-no-files-found: ignore
+          path: ${{ github.workspace }}/tests/.logs/
+          if-no-files-found: warn
 
   # docker:
   #   name: Build & Publish Docker Image
