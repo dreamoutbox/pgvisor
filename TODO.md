@@ -111,6 +111,10 @@
       - backup success/fail rate
       - replication lag
 
+- [ ] start/stop/restart node from web dashboard.
+
+- [ ] manage database and execute backup/restore with cli
+
 - [ ] demo PgVisor.
     - [ ] setup.
     - [ ] adding new node.

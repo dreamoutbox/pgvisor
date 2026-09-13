@@ -18,3 +18,12 @@ INSERT INTO pgvisor_demo (name, status, counter) VALUES
 DROP TABLE pgvisor_demo;
 
 SELECT id, name, status, counter, created_at FROM pgvisor_demo ORDER BY id;
+
+INSERT INTO pgvisor_demo (name, status, counter) VALUES
+    ('echo', 'active', 50);
+
+INSERT INTO pgvisor_demo (name, status, counter) VALUES
+    ('foxtrot', 'pending', 60);
+
+INSERT INTO pgvisor_demo (name, status, counter) VALUES
+    ('golf', 'archived', 70);

@@ -24,6 +24,9 @@
 - `tests/test-proxy-failover.sh` = self-contained dual-proxy redundancy test (proxy1: 6832, proxy2: 6833; stop proxy1 and assert continued DB access via proxy2, verify recovery).
 - `composes/docker-compose.proxy-failover-proxy2.yml` = compose overlay defining the second proxy (pgvisor-proxy2) on ports 6833/9481.
 - `reset-docker-compose.sh` = developer cluster reset script; builds images by default, supports `--no-build` and `-s`/`--silent`.
+- `dev-dump-logs.sh` = developer helper script to dump logs from pgvisor nodes 1-3 into `logs/` directory, supporting timestamps, tail, and proxy/minio options.
+- `dev-setup-demo-data.sh` = developer helper script to seed demo schema and initial records, take full backup 'f1', execute delayed inserts (echo, foxtrot, golf), and trigger incremental backup 'incr2'.
+- `scripts/dev-setup-demo-data.sh` = symlink pointing to root `dev-setup-demo-data.sh`.
 
 ### If you want to add a new integration test (new test script + compose profile), then check:
 

@@ -21,7 +21,10 @@ pub struct PostgresConfig {
     pub shared_buffers: String,
     pub wal_keep_size: String,
     pub archive_command: Option<String>,
+    pub restore_command: Option<String>,
     pub primary_conninfo: Option<String>,
+    pub recovery_target_time: Option<String>,
+    pub recovery_target_action: Option<String>,
 }
 
 impl Default for PostgresConfig {
@@ -32,7 +35,10 @@ impl Default for PostgresConfig {
             shared_buffers: "128MB".to_string(),
             wal_keep_size: "1GB".to_string(),
             archive_command: None,
+            restore_command: None,
             primary_conninfo: None,
+            recovery_target_time: None,
+            recovery_target_action: None,
         }
     }
 }
@@ -74,6 +80,33 @@ impl ConfigGenerator {
                 "archive_mode = on\n\
                 archive_command = '{archive_cmd}'\n"
             ));
+        }
+
+        if let Some(restore_cmd) = &config.restore_command {
+            conf_content.push_str(&format!(
+                "restore_command = '{restore_cmd}'\n"
+            ));
+        }
+
+        if let Some(target_time) = &config.recovery_target_time {
+            conf_content.push_str(&format!(
+                "recovery_target_time = '{target_time}'\n"
+            ));
+        }
+
+        if let Some(target_action) = &config.recovery_target_action {
+            conf_content.push_str(&format!(
+                "recovery_target_action = '{target_action}'\n"
+            ));
+        }
+
+        // Targeted recovery indicator file
+        let recovery_signal = dir.join("recovery.signal");
+        if config.recovery_target_time.is_some() {
+            File::create(&recovery_signal)?;
+            info!("Created recovery.signal for targeted PITR recovery");
+        } else if recovery_signal.exists() {
+            let _ = fs::remove_file(&recovery_signal);
         }
 
         if let Some(primary_info) = &config.primary_conninfo {
@@ -133,6 +166,7 @@ mod tests {
         assert!(conf.contains("port = 5432"));
         assert!(conf.contains("archive_mode = on"));
         assert!(!dir.path().join("standby.signal").exists());
+        assert!(!dir.path().join("recovery.signal").exists());
     }
 
     #[test]
@@ -148,5 +182,26 @@ mod tests {
         let conf = fs::read_to_string(dir.path().join("postgresql.conf")).unwrap();
         assert!(conf.contains("primary_conninfo = 'host=127.0.0.1 port=5432 user=postgres'"));
         assert!(dir.path().join("standby.signal").exists());
+        assert!(!dir.path().join("recovery.signal").exists());
+    }
+
+    #[test]
+    fn test_write_pitr_recovery_config() {
+        let dir = tempdir().unwrap();
+        let config = PostgresConfig {
+            port: 5432,
+            restore_command: Some("pgvisor-sidecar restore %f %p".into()),
+            recovery_target_time: Some("2026-09-13 18:32:49".into()),
+            recovery_target_action: Some("promote".into()),
+            ..Default::default()
+        };
+
+        ConfigGenerator::write_configs(dir.path(), &config).unwrap();
+        let conf = fs::read_to_string(dir.path().join("postgresql.conf")).unwrap();
+        assert!(conf.contains("restore_command = 'pgvisor-sidecar restore %f %p'"));
+        assert!(conf.contains("recovery_target_time = '2026-09-13 18:32:49'"));
+        assert!(conf.contains("recovery_target_action = 'promote'"));
+        assert!(dir.path().join("recovery.signal").exists());
+        assert!(!dir.path().join("standby.signal").exists());
     }
 }
