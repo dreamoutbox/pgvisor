@@ -53,6 +53,7 @@ jobs:
 
       - name: Pre-build test Docker images
         run: |
+          docker pull rustfs/rustfs:latest
           docker build -t pgvisor-test-node:latest -t pgvisor-test-proxy:latest .
 
       - name: Ensure test log directory exists
@@ -67,6 +68,7 @@ jobs:
         with:
           name: integration-test-logs
           path: ${{ github.workspace }}/tests/.logs/
+          include-hidden-files: true
           if-no-files-found: warn
 
   # docker:
