@@ -36,6 +36,7 @@ PROFILES = [
     ("double-failure", "double-failure", 6732, 9380, 10300, 10301),
     ("proxy-failover", "proxy-failover", 6832, 9480, 10400, 10401),
     ("metrics", "metrics", 6932, 9580, 10500, 10501),
+    ("timeline-divergence", "timeline-divergence", 7032, 9680, 10600, 10601),
 ]
 
 

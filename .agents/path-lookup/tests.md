@@ -22,6 +22,7 @@
 - `tests/test-audit-logs.sh` = self-contained audit logs verification test (port 6632; node up/down, dangerous SQL with PITR, backups, elections, user/role management, S3 storage).
 - `tests/test-double-failure.sh` = self-contained double-failure disaster recovery test (port 6732; 2 nodes down, quorum loss prevents writes, sequential restart with standby rejoin, data integrity & WAL streaming).
 - `tests/test-proxy-failover.sh` = self-contained dual-proxy redundancy test (proxy1: 6832, proxy2: 6833; stop proxy1 and assert continued DB access via proxy2, verify recovery).
+- `tests/test-timeline-divergence.sh` = self-contained timeline divergence and recovery target overrun test (port 7032; PITR restore f1 -> incr2 -> re-restore f1, asserts no standby crash, no recovery overrun fatal, and fast /tables load).
 - `composes/docker-compose.proxy-failover-proxy2.yml` = compose overlay defining the second proxy (pgvisor-proxy2) on ports 6833/9481.
 - `reset-docker-compose.sh` = developer cluster reset script; builds images by default, supports `--no-build` and `-s`/`--silent`.
 - `dev-dump-logs.sh` = developer helper script to dump logs from pgvisor nodes 1-3 into `logs/` directory, supporting timestamps, tail, and proxy/minio options.
