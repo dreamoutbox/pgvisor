@@ -17,6 +17,7 @@ use crate::pool::ConnectionPool;
 pub struct ProxyBackupService {
     backup_manager: Arc<BackupManager>,
     leader_addr: Arc<RwLock<Option<String>>>,
+    configured_leader: Option<String>,
     standby_addrs: Arc<RwLock<Vec<String>>>,
     configured_standbys: Vec<String>,
     pool: Option<ConnectionPool>,
@@ -32,6 +33,7 @@ impl ProxyBackupService {
     pub fn new(
         backup_manager: Arc<BackupManager>,
         leader_addr: Arc<RwLock<Option<String>>>,
+        configured_leader: Option<String>,
         standby_addrs: Arc<RwLock<Vec<String>>>,
         configured_standbys: Vec<String>,
         pool: Option<ConnectionPool>,
@@ -40,9 +42,15 @@ impl ProxyBackupService {
         retention_days: u32,
         control_port: u16,
     ) -> Self {
+        let http_client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
         Self {
             backup_manager,
             leader_addr,
+            configured_leader,
             standby_addrs,
             configured_standbys,
             pool,
@@ -50,7 +58,7 @@ impl ProxyBackupService {
             bucket,
             retention_days,
             control_port,
-            http_client: reqwest::Client::new(),
+            http_client,
             audit_log: None,
         }
     }
@@ -81,7 +89,7 @@ impl BackupService for ProxyBackupService {
         label: Option<String>,
     ) -> Result<BasebackupMeta, String> {
         let leader = self.leader_addr.read().await.clone();
-        let (host, port) = if let Some(ref addr) = leader {
+        let (host, port) = if let Some(ref addr) = leader.as_ref().or(self.configured_leader.as_ref()) {
             let parts: Vec<&str> = addr.split(':').collect();
             let h = parts[0];
             let p = parts
@@ -214,8 +222,9 @@ impl BackupService for ProxyBackupService {
         let leader = self.leader_addr.read().await.clone();
         let leader_host = leader
             .as_deref()
+            .or(self.configured_leader.as_deref())
             .map(|addr| addr.split(':').next().unwrap_or("127.0.0.1"))
-            .unwrap_or("127.0.0.1")
+            .unwrap_or("pgvisor-node1")
             .to_string();
 
         let leader_restore_url = format!(

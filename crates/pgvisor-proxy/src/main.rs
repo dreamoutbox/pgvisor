@@ -155,6 +155,7 @@ async fn main() -> Result<()> {
                     ProxyBackupService::new(
                         bm,
                         leader_ref.clone(),
+                        leader_addr.clone(),
                         standby_ref.clone(),
                         standby_addrs.clone(),
                         Some(pool.clone()),

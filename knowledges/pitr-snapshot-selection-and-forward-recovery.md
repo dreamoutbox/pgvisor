@@ -94,7 +94,33 @@ LOG: database system is ready to accept connections
 
 ---
 
-## 4. Operator Quick Reference
+## 4. Multi-Timeline Branching & Why Standbys / Re-Restores Fail
+
+When performing repeated restores across different snapshots (e.g. PITR restore `f1`, then restore `incr2`, then PITR restore `f1` again):
+
+1. **Every PITR Restore Forks a New Timeline**:
+   - The first PITR restore branches from Timeline 1 to **Timeline 2** (saving `00000002.history` to MinIO).
+   - If `incr2` was taken earlier on Timeline 1 at a later LSN than the branch point, its checkpoint belongs to Timeline 1.
+2. **The Standby Timeline Divergence Trap**:
+   - If a standby has `restore_command` configured without `recovery_target_timeline = 'current'`, PostgreSQL defaults to `recovery_target_timeline = 'latest'`.
+   - The standby downloads `00000002.history` from the shared MinIO archive and attempts to switch to Timeline 2, which causes:
+     ```text
+     FATAL: requested timeline 2 is not a child of this server's history
+     DETAIL: Latest checkpoint in file "backup_label" is on timeline 1, but in the history of the requested timeline, the server forked off from that timeline at ...
+     ```
+   - **Fix**: Setting `recovery_target_timeline = 'current'` in standby `postgresql.conf` forces the standby to track only the timeline of its cloned primary.
+3. **The Target Overrun Trap (`recovery ended before configured recovery target was reached`)**:
+   - If `recovery_target_time` is even a fraction of a second later than the last transaction committed in the archived WAL stream, PostgreSQL reaches the end of the WAL and halts with `FATAL: recovery ended before configured recovery target was reached`.
+   - Furthermore, if `recovery_target_timeline` is not pinned to `'current'`, PostgreSQL may follow an earlier forked timeline (such as Timeline 2) whose WAL ended at an earlier point, missing transactions that existed on Timeline 1.
+   - **Fix**: Pinned `recovery_target_timeline = 'current'` during PITR so replay tracks the timeline of the basebackup being restored.
+4. **Proxy Leader Resolution & Fast Failover**:
+   - When all nodes are down (`healthy_nodes = 0`), the proxy's `leader_addr` becomes `None`.
+   - `ProxyBackupService` now falls back to `configured_leader` (instead of `127.0.0.1`) with non-redirecting HTTP client to ensure restore commands reach the node sidecar.
+   - `ProxySqlExecutor` enforces a 3-second failover timeout so web UI pages like `/tables` never hang indefinitely for 30 seconds when the cluster is recovering.
+
+---
+
+## 5. Operator Quick Reference
 
 | Goal | Selected Snapshot | Target Timestamp | Outcome |
 |---|---|---|---|
@@ -104,7 +130,7 @@ LOG: database system is ready to accept connections
 
 ---
 
-## 5. Architectural Safeguards & Future Improvements
+## 6. Architectural Safeguards & Future Improvements
 
 To prevent operator error when selecting snapshots for PITR:
 

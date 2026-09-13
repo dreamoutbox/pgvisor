@@ -48,7 +48,10 @@ impl ProxySqlExecutor {
     pub fn new(pool: ConnectionPool) -> Self {
         Self {
             pool,
-            failover_config: FailoverConfig::default(),
+            failover_config: FailoverConfig {
+                failover_timeout: std::time::Duration::from_secs(3),
+                retry_interval: std::time::Duration::from_millis(200),
+            },
         }
     }
 }
