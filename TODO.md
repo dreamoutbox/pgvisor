@@ -111,6 +111,20 @@
       - backup success/fail rate
       - replication lag
 
+- [ ] fix Failed Tests:
+      first test run:      
+            - test-failover.sh (38s)  
+            - test-auto-rejoin.sh (34s)  
+            - test-switchover.sh (43s) 
+            - test-timeline-divergence.sh (202s) 
+      second test run:
+            - test-failover.sh (30s)
+            - test-auto-rejoin.sh (30s)
+            - test-switchover.sh (39s)
+            - test-double-failure.sh (50s)
+      
+      * test-timeline-divergence.sh and test-double-failure.sh maybe flaky tests. we should fix it.
+
 - [ ] start/stop/restart node from web dashboard.
 
 - [ ] manage database and execute backup/restore with cli

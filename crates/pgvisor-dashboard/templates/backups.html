@@ -246,6 +246,37 @@
     </div>
 </div>
 
+<div class="card" style="margin-bottom: 24px; padding: 20px 24px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
+        <div style="flex: 1; min-width: 280px;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2">
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
+                </svg>
+                <h3 style="margin: 0; font-size: 1.1rem; font-weight: 600;">Quick Point-In-Time Restore (PITR)</h3>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0; line-height: 1.5;">
+                Enter a target recovery timestamp. PgVisor will automatically identify the closest basebackup created prior to the target and replay archived WAL forward to that second.
+            </p>
+        </div>
+        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+            <input type="text" id="quickTargetTime" class="form-control" style="width: 270px;"
+                placeholder="YYYY-MM-DD HH:MM:SS (UTC)" oninput="checkBestBackupDebounced()" />
+            <button class="btn btn-secondary btn-sm" onclick="fillNowUtc()" title="Set current UTC time">Now (UTC)</button>
+            <button id="btnQuickRestore" class="btn btn-danger" onclick="submitQuickRestore()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="1 4 1 10 7 10" />
+                    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                </svg>
+                Quick Restore
+            </button>
+        </div>
+    </div>
+    <div id="quickRestoreHint" style="display: none; margin-top: 14px; padding: 10px 14px; border-radius: 6px; font-size: 0.85rem;">
+    </div>
+</div>
+
 <table>
     <thead>
         <tr>
@@ -384,11 +415,6 @@
                 placeholder="YYYY-MM-DD HH:MM:SS (leave blank for latest in snapshot)">
         </div>
 
-        <div class="form-group">
-            <label for="confirmText">Type <strong style="color: var(--danger);">RESTORE</strong> to confirm</label>
-            <input type="text" id="confirmText" class="form-control" placeholder="RESTORE">
-        </div>
-
         <div class="modal-actions">
             <button class="btn btn-secondary" onclick="closeRestoreModal()">Cancel</button>
             <button id="btnSubmitRestore" class="btn btn-danger" onclick="submitRestore()">Execute Restore</button>
@@ -462,7 +488,6 @@
     function openRestoreModal(snapshotId) {
         currentRestoreSnapshot = snapshotId;
         document.getElementById('restoreSnapshotId').textContent = snapshotId;
-        document.getElementById('confirmText').value = '';
         document.getElementById('recoveryTime').value = '';
         document.getElementById('restoreModal').style.display = 'flex';
     }
@@ -473,12 +498,6 @@
     }
 
     async function submitRestore() {
-        const confirm = document.getElementById('confirmText').value.trim();
-        if (confirm !== 'RESTORE') {
-            showToast('Please type RESTORE to confirm', true);
-            return;
-        }
-
         const btn = document.getElementById('btnSubmitRestore');
         const recoveryTime = document.getElementById('recoveryTime').value.trim();
 
@@ -507,6 +526,97 @@
         } finally {
             btn.disabled = false;
             btn.textContent = 'Execute Restore';
+        }
+    }
+
+    function fillNowUtc() {
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        const formatted = now.getUTCFullYear() + '-' +
+            pad(now.getUTCMonth() + 1) + '-' +
+            pad(now.getUTCDate()) + ' ' +
+            pad(now.getUTCHours()) + ':' +
+            pad(now.getUTCMinutes()) + ':' +
+            pad(now.getUTCSeconds());
+        const input = document.getElementById('quickTargetTime');
+        input.value = formatted;
+        checkBestBackup();
+    }
+
+    let debounceTimer = null;
+    function checkBestBackupDebounced() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(checkBestBackup, 350);
+    }
+
+    async function checkBestBackup() {
+        const input = document.getElementById('quickTargetTime');
+        const hint = document.getElementById('quickRestoreHint');
+        const val = input.value.trim();
+        if (!val) {
+            hint.style.display = 'none';
+            return;
+        }
+
+        try {
+            const resp = await fetch(`/api/backups/best?target_time=${encodeURIComponent(val)}`);
+            if (resp.ok) {
+                const data = await resp.json();
+                hint.style.display = 'block';
+                hint.style.background = 'rgba(56, 189, 248, 0.1)';
+                hint.style.border = '1px solid rgba(56, 189, 248, 0.3)';
+                hint.style.color = 'var(--text-main)';
+                const labelText = data.label ? ` (label: "${data.label}")` : '';
+                hint.innerHTML = `<strong>Auto-Selected Basebackup:</strong> <code style="color: var(--primary);">${data.snapshot_id}</code>${labelText} &bull; Type: <strong>${data.backup_type}</strong> &bull; Created: ${data.created_at}`;
+            } else {
+                const err = await resp.text();
+                hint.style.display = 'block';
+                hint.style.background = 'rgba(248, 113, 113, 0.1)';
+                hint.style.border = '1px solid rgba(248, 113, 113, 0.3)';
+                hint.style.color = 'var(--danger)';
+                hint.textContent = err;
+            }
+        } catch (e) {
+            // Ignore network errors during debounce typing
+        }
+    }
+
+    async function submitQuickRestore() {
+        const timeInput = document.getElementById('quickTargetTime');
+        const targetTime = timeInput.value.trim();
+        if (!targetTime) {
+            showToast('Please enter a target recovery timestamp', true);
+            return;
+        }
+
+        if (!confirm(`Are you sure you want to perform Point-In-Time Restore to "${targetTime}"?`)) {
+            return;
+        }
+
+        const btn = document.getElementById('btnQuickRestore');
+        btn.disabled = true;
+        btn.textContent = 'Restoring Cluster...';
+
+        try {
+            const resp = await fetch('/api/backups/quick-restore', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ recovery_target_time: targetTime })
+            });
+
+            if (!resp.ok) {
+                const err = await resp.text();
+                throw new Error(err || 'Quick restore failed');
+            }
+
+            const res = await resp.json();
+            showToast(`Cluster restored successfully using snapshot ${res.snapshot_id}!`);
+            setTimeout(() => { window.location.reload(); }, 1500);
+        } catch (e) {
+            showToast(e.message, true);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg> Quick Restore`;
         }
     }
 

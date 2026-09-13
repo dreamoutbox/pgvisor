@@ -14,11 +14,11 @@ use tracing::{error, info, warn};
 
 use crate::models::{
     format_bytes, AlterRoleRequest, AuditEventView, AuditListResponse, AuditOverviewStats,
-    BackupItemView, BackupOverviewSummary, ClusterOverview, ColumnInfo, CreateBackupRequest,
-    CreateRoleRequest, NodeHealthState, NodeRole, NodeSummary, PgRole, RestoreBackupRequest,
-    RoleMembershipRequest, SqlQueryError, SqlQueryRequest, SqlQueryResult, SwitchoverRequest,
-    SwitchoverResponse, TableDataResponse, TablePrivilege, TablePrivilegeKind,
-    TablePrivilegeRequest, TableSummary,
+    BackupItemView, BackupOverviewSummary, BestBackupQuery, BestBackupResponse, ClusterOverview,
+    ColumnInfo, CreateBackupRequest, CreateRoleRequest, NodeHealthState, NodeRole, NodeSummary,
+    PgRole, QuickRestoreRequest, QuickRestoreResponse, RestoreBackupRequest, RoleMembershipRequest,
+    SqlQueryError, SqlQueryRequest, SqlQueryResult, SwitchoverRequest, SwitchoverResponse,
+    TableDataResponse, TablePrivilege, TablePrivilegeKind, TablePrivilegeRequest, TableSummary,
 };
 use crate::security::{SecurityError, SqlSecurityGuard};
 use crate::templates::{
@@ -185,6 +185,75 @@ impl SqlExecutor for StandaloneSqlExecutor {
     }
 }
 
+/// Helper to parse a target recovery timestamp flexibly.
+pub fn parse_target_timestamp(raw: &str) -> Result<chrono::DateTime<Utc>, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("Recovery target timestamp cannot be empty".to_string());
+    }
+
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(trimmed) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+
+    if let Ok(dt) = chrono::DateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S%z") {
+        return Ok(dt.with_timezone(&Utc));
+    }
+
+    let formats = [
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M",
+    ];
+
+    for fmt in &formats {
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(trimmed, fmt) {
+            return Ok(chrono::DateTime::<Utc>::from_naive_utc_and_offset(
+                naive, Utc,
+            ));
+        }
+    }
+
+    Err(format!(
+        "Invalid timestamp '{}'. Expected format: YYYY-MM-DD HH:MM:SS (UTC) or ISO-8601 (e.g. 2026-09-14 03:00:00)",
+        raw
+    ))
+}
+
+/// Helper to select the best basebackup snapshot for forward Point-In-Time-Recovery.
+/// In PostgreSQL PITR, physical basebackups cannot roll backward: only snapshots taken
+/// ON OR BEFORE the target timestamp can replay WAL forward to reach the target.
+pub fn find_best_backup_snapshot<'a>(
+    backups: &'a [BasebackupMeta],
+    target_time: chrono::DateTime<Utc>,
+) -> Result<&'a BasebackupMeta, String> {
+    if backups.is_empty() {
+        return Err("No basebackup snapshots found in storage".to_string());
+    }
+
+    let mut eligible: Vec<&BasebackupMeta> = backups
+        .iter()
+        .filter(|b| b.created_at <= target_time)
+        .collect();
+
+    if eligible.is_empty() {
+        let earliest = backups.iter().min_by_key(|b| b.created_at).unwrap();
+        return Err(format!(
+            "No basebackup snapshot found prior to target time {}. Earliest available snapshot was created at {} ({}). PostgreSQL forward recovery cannot roll backward.",
+            target_time.format("%Y-%m-%d %H:%M:%S UTC"),
+            earliest.created_at.format("%Y-%m-%d %H:%M:%S UTC"),
+            earliest.snapshot_id
+        ));
+    }
+
+    // Sort ascending, pick the latest snapshot before or at target time
+    eligible.sort_by_key(|b| b.created_at);
+    Ok(eligible.last().unwrap())
+}
+
 /// Abstraction for backup and restore operations across physical storage and Postgres nodes.
 #[async_trait::async_trait]
 pub trait BackupService: Send + Sync {
@@ -199,6 +268,15 @@ pub trait BackupService: Send + Sync {
         snapshot_id: &str,
         target_time: Option<String>,
     ) -> Result<String, String>;
+    async fn quick_restore(&self, target_time: &str) -> Result<(BasebackupMeta, String), String> {
+        let parsed_target = parse_target_timestamp(target_time)?;
+        let backups = self.list_backups().await?;
+        let best = find_best_backup_snapshot(&backups, parsed_target)?.clone();
+        let msg = self
+            .restore_backup(&best.snapshot_id, Some(target_time.to_string()))
+            .await?;
+        Ok((best, msg))
+    }
     async fn delete_backup(&self, snapshot_id: &str) -> Result<(), String>;
     async fn get_backup_archive(
         &self,
@@ -1440,6 +1518,54 @@ pub async fn api_restore_backup(
         "message": msg,
         "snapshot_id": snapshot_id
     })))
+}
+
+/// POST /api/backups/quick-restore -> Resolves best basebackup snapshot and restores to target time
+pub async fn api_quick_restore(
+    State(state): State<Arc<DashboardState>>,
+    Json(payload): Json<QuickRestoreRequest>,
+) -> Result<Json<QuickRestoreResponse>, (StatusCode, String)> {
+    let (best, msg) = state
+        .backup_service
+        .quick_restore(&payload.recovery_target_time)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+
+    Ok(Json(QuickRestoreResponse {
+        status: "success".to_string(),
+        message: msg,
+        snapshot_id: best.snapshot_id,
+        recovery_target_time: payload.recovery_target_time,
+        snapshot_created_at: best.created_at.to_rfc3339(),
+    }))
+}
+
+/// GET /api/backups/best?target_time=... -> Returns information on the best snapshot for a target time
+pub async fn api_find_best_backup(
+    State(state): State<Arc<DashboardState>>,
+    Query(query): Query<BestBackupQuery>,
+) -> Result<Json<BestBackupResponse>, (StatusCode, String)> {
+    let parsed_target =
+        parse_target_timestamp(&query.target_time).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let backups = state
+        .backup_service
+        .list_backups()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let best = find_best_backup_snapshot(&backups, parsed_target)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+
+    let backup_type = match best.backup_type {
+        BackupType::Full => "full".to_string(),
+        BackupType::Incremental => "incremental".to_string(),
+    };
+
+    Ok(Json(BestBackupResponse {
+        snapshot_id: best.snapshot_id.clone(),
+        created_at: best.created_at.to_rfc3339(),
+        backup_type,
+        label: best.label.clone(),
+    }))
 }
 
 /// DELETE /api/backups/:id -> Deletes basebackup snapshot from storage

@@ -14,12 +14,12 @@ use std::sync::Arc;
 
 use crate::handlers::{
     api_alter_user, api_create_backup, api_create_user, api_delete_backup, api_download_backup,
-    api_drop_user, api_execute_sql, api_get_privileges, api_get_user, api_grant_membership,
-    api_list_audit_logs, api_list_backups, api_list_tables, api_list_users, api_metrics_history,
-    api_metrics_snapshot, api_nodes, api_restore_backup, api_revoke_membership, api_set_privilege,
-    api_status, api_switchover, api_table_data, api_table_schema, get_audit_logs_page,
-    get_backups_page, get_login_page, get_logout, get_nodes, get_overview, get_sql_console,
-    get_tables_page, get_users_page, post_login, DashboardState,
+    api_drop_user, api_execute_sql, api_find_best_backup, api_get_privileges, api_get_user,
+    api_grant_membership, api_list_audit_logs, api_list_backups, api_list_tables, api_list_users,
+    api_metrics_history, api_metrics_snapshot, api_nodes, api_quick_restore, api_restore_backup,
+    api_revoke_membership, api_set_privilege, api_status, api_switchover, api_table_data,
+    api_table_schema, get_audit_logs_page, get_backups_page, get_login_page, get_logout, get_nodes,
+    get_overview, get_sql_console, get_tables_page, get_users_page, post_login, DashboardState,
 };
 use crate::security::SqlSecurityGuard;
 
@@ -88,6 +88,8 @@ pub fn create_router(state: Arc<DashboardState>) -> Router {
             "/api/backups",
             get(api_list_backups).post(api_create_backup),
         )
+        .route("/api/backups/quick-restore", post(api_quick_restore))
+        .route("/api/backups/best", get(api_find_best_backup))
         .route(
             "/api/backups/:snapshot_id/download",
             get(api_download_backup),
@@ -304,6 +306,43 @@ mod tests {
             .unwrap();
         let response = app.clone().oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+
+        // 14a. Test GET /api/backups/best
+        let now_str = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let uri = format!(
+            "/api/backups/best?target_time={}",
+            now_str.replace(' ', "%20")
+        );
+        let req = Request::builder()
+            .method("GET")
+            .uri(&uri)
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 14b. Test POST /api/backups/quick-restore
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/backups/quick-restore")
+            .header("Content-Type", "application/json")
+            .body(Body::from(format!(
+                r#"{{"recovery_target_time": "{}"}}"#,
+                now_str
+            )))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 14c. Test POST /api/backups/quick-restore with invalid time
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/backups/quick-restore")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"recovery_target_time": "invalid-time"}"#))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         // 15. Test GET /users page
         let response = app
@@ -645,45 +684,78 @@ mod tests {
         let req = Request::builder().uri("/").body(Body::empty()).unwrap();
         let response = app.clone().oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("Cluster Metrics &amp; Telemetry"));
         assert!(html.contains("uptimeChart"));
         assert!(html.contains("nodeQueriesChart"));
 
         // 2. GET /metrics redirects to /
-        let req = Request::builder().uri("/metrics").body(Body::empty()).unwrap();
+        let req = Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .unwrap();
         let response = app.clone().oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert_eq!(response.headers().get("location").unwrap().to_str().unwrap(), "/");
+        assert_eq!(
+            response
+                .headers()
+                .get("location")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "/"
+        );
 
         // 2. GET /api/metrics/snapshot returns JSON snapshot
-        let req = Request::builder().uri("/api/metrics/snapshot").body(Body::empty()).unwrap();
+        let req = Request::builder()
+            .uri("/api/metrics/snapshot")
+            .body(Body::empty())
+            .unwrap();
         let response = app.clone().oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
         let snap: crate::models::ClusterMetricsSnapshot = serde_json::from_slice(&body).unwrap();
         assert_eq!(snap.nodes.len(), 3);
 
         // 3. GET /api/metrics/history returns JSON history
-        let req = Request::builder().uri("/api/metrics/history").body(Body::empty()).unwrap();
+        let req = Request::builder()
+            .uri("/api/metrics/history")
+            .body(Body::empty())
+            .unwrap();
         let response = app.clone().oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
-        let hist: Vec<crate::models::ClusterMetricsSnapshot> = serde_json::from_slice(&body).unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let hist: Vec<crate::models::ClusterMetricsSnapshot> =
+            serde_json::from_slice(&body).unwrap();
         assert_eq!(hist.len(), 60);
 
         // 4. Auth protection when token configured
-        let auth_state = Arc::new(DashboardState::new("test-cluster", Some("secret123".into())));
+        let auth_state = Arc::new(DashboardState::new(
+            "test-cluster",
+            Some("secret123".into()),
+        ));
         let auth_app = create_router(auth_state);
 
         // Unauthenticated /metrics redirects to /login
-        let req = Request::builder().uri("/metrics").body(Body::empty()).unwrap();
+        let req = Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .unwrap();
         let response = auth_app.clone().oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
 
         // Unauthenticated /api/metrics/snapshot returns 401 Unauthorized
-        let req = Request::builder().uri("/api/metrics/snapshot").body(Body::empty()).unwrap();
+        let req = Request::builder()
+            .uri("/api/metrics/snapshot")
+            .body(Body::empty())
+            .unwrap();
         let response = auth_app.clone().oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
@@ -697,4 +769,3 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 }
-

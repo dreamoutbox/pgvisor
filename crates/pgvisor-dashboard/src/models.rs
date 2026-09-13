@@ -119,6 +119,37 @@ pub struct RestoreBackupRequest {
     pub recovery_target_time: Option<String>,
 }
 
+/// Request to perform a quick restore by specifying only the target time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuickRestoreRequest {
+    pub recovery_target_time: String,
+}
+
+/// Result returned from a quick restore operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuickRestoreResponse {
+    pub status: String,
+    pub message: String,
+    pub snapshot_id: String,
+    pub recovery_target_time: String,
+    pub snapshot_created_at: String,
+}
+
+/// Query parameters for finding the best backup for a given target timestamp.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BestBackupQuery {
+    pub target_time: String,
+}
+
+/// Information about the resolved best backup for a target timestamp.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BestBackupResponse {
+    pub snapshot_id: String,
+    pub created_at: String,
+    pub backup_type: String,
+    pub label: Option<String>,
+}
+
 /// Enriched view item for backup display in the dashboard table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupItemView {

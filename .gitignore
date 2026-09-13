@@ -2,4 +2,5 @@
 handoff.md
 tests/.logs/
 logs/
+debug/
 .env

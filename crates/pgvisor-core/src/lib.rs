@@ -21,4 +21,3 @@ pub use raft::{
     QuorumLease, TypeConfig,
 };
 pub use storage::{LogReader, LogStore, SnapshotBuilder, StateMachine, StateMachineStore, Wal};
-

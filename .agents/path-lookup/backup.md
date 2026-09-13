@@ -19,3 +19,14 @@
 - `crates/pgvisor-dashboard/src/models.rs` = `CreateBackupRequest` and `BackupItemView` view models
 - `crates/pgvisor-dashboard/src/handlers.rs` = Backup creation and list endpoints (`/api/backups`) and page renderer mapping metadata to `BackupItemView`
 - `crates/pgvisor-dashboard/templates/backups.html` = Dashboard UI table displaying backup items (Snapshot ID, Type, Optional Label / Note, Created At, Size, WAL range, actions) and creation modal
+
+### If you want to modify Point-In-Time Recovery (PITR), Quick Restore, or snapshot selection, then check:
+
+- `crates/pgvisor-dashboard/src/handlers.rs` = `find_best_backup_snapshot` (resolving closest prior basebackup snapshot to target), `parse_target_timestamp`, `BackupService::quick_restore`, `api_quick_restore`, and `api_find_best_backup`
+- `crates/pgvisor-dashboard/src/models.rs` = `QuickRestoreRequest`, `QuickRestoreResponse`, `BestBackupQuery`, and `BestBackupResponse` models
+- `crates/pgvisor-dashboard/src/lib.rs` = Route registrations for `/api/backups/quick-restore` and `/api/backups/best`
+- `crates/pgvisor-dashboard/templates/backups.html` = Dashboard UI quick restore panel, real-time snapshot auto-match hint, and single-click restore confirmation modal
+- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::restore_backup` coordinating sidecar restore, standby replica re-sync, and connection pool draining
+- `dev-dump-table.sh` = Developer table dump script querying user tables and storing state to `./debug/*`
+- `dev-setup-demo-data.sh` = Demo dataset initialization script invoking `dev-dump-table.sh`
+- `knowledges/pitr-snapshot-selection-and-forward-recovery.md` = Forward recovery mechanics and snapshot selection rules

@@ -256,9 +256,15 @@ echo "  Type        : incremental"
 # ------------------------------------------------------------------------------
 echo ""
 echo "============================================================="
-echo "  Current 'pgvisor_demo' Table State"
+echo "  Dumping User Tables via ./dev-dump-table.sh"
 echo "============================================================="
-run_sql "SELECT id, name, status, counter, created_at FROM pgvisor_demo ORDER BY id;"
+"${SCRIPT_DIR}/dev-dump-table.sh" \
+    --host="${PROXY_HOST}" \
+    --port="${PROXY_PORT}" \
+    --user="${PGUSER}" \
+    --db="${PGDATABASE}" \
+    --container="${NODE_CONTAINER}" \
+    --out-dir="${SCRIPT_DIR}/debug"
 
 echo ""
 echo "============================================================="
@@ -271,8 +277,8 @@ for ts in "${TIMESTAMPS[@]}"; do
 done
 echo "3. Incremental backup 'incr2': ${INCR2_SNAPSHOT_ID} (${INCR2_CREATED_AT})"
 echo ""
-echo "To test Point-In-Time-Recovery (PITR) to a specific point:"
-echo "  curl -X POST \"${DASHBOARD_URL}/api/backups/${INCR2_SNAPSHOT_ID}/restore\" \\"
+echo "To test Quick Point-In-Time-Recovery (automatic snapshot selection):"
+echo "  curl -X POST \"${DASHBOARD_URL}/api/backups/quick-restore\" \\"
 echo "    -H \"Authorization: Bearer ${ADMIN_TOKEN}\" \\"
 echo "    -H \"Content-Type: application/json\" \\"
 echo "    -d '{\"recovery_target_time\": \"<ISO-8601-TIMESTAMP>\"}'"

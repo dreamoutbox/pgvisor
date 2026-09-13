@@ -89,17 +89,18 @@ impl BackupService for ProxyBackupService {
         label: Option<String>,
     ) -> Result<BasebackupMeta, String> {
         let leader = self.leader_addr.read().await.clone();
-        let (host, port) = if let Some(ref addr) = leader.as_ref().or(self.configured_leader.as_ref()) {
-            let parts: Vec<&str> = addr.split(':').collect();
-            let h = parts[0];
-            let p = parts
-                .get(1)
-                .and_then(|p| p.parse::<u16>().ok())
-                .unwrap_or(5432);
-            (h.to_string(), p)
-        } else {
-            ("127.0.0.1".to_string(), 5432)
-        };
+        let (host, port) =
+            if let Some(ref addr) = leader.as_ref().or(self.configured_leader.as_ref()) {
+                let parts: Vec<&str> = addr.split(':').collect();
+                let h = parts[0];
+                let p = parts
+                    .get(1)
+                    .and_then(|p| p.parse::<u16>().ok())
+                    .unwrap_or(5432);
+                (h.to_string(), p)
+            } else {
+                ("127.0.0.1".to_string(), 5432)
+            };
 
         let now = Utc::now();
         let snapshot_id = format!("snap-{}", now.format("%Y%m%d-%H%M%S"));
