@@ -11,248 +11,155 @@
 
 ## Features
 
-### 🔀 L7 PostgreSQL Proxy & Connection Pooling
-- **Transaction-level connection pooling** — backends are released back to the pool at transaction boundaries, not session end, dramatically increasing throughput.
-- **Read/write splitting** — `SELECT`, `SHOW`, and `EXPLAIN` queries are automatically routed to standby replicas; writes and DDL go strictly to the Raft leader.
-- **Failover connection buffering** — during a leader election, in-flight client sessions are transparently paused and replayed against the newly promoted leader without dropping TCP connections.
-- Implements the **PostgreSQL 3.0 wire protocol** natively (via [`pgwire`](https://crates.io/crates/pgwire)).
-
-### 🛡️ Automatic High Availability with Split-Brain Prevention
-- **OpenRaft-based distributed consensus** — fully peer-to-peer leader election, no external Etcd or Consul required.
-- **Quorum Lease fencing** — an isolated leader detects quorum loss within 1,200 ms and immediately fences its local PostgreSQL instance (`pg_ctl stop -m immediate`) — *strictly before* any standby's 1,500 ms election timeout fires — mathematically preventing split-brain writes.
-- **Automatic failover and promotion** — a new leader is elected and `pg_ctl promote` is issued without any human intervention.
-- **Automatic node rejoin** — a restarted old leader rejoins the cluster as a standby replica automatically.
-- **Manual switchover** — initiate a controlled leader transfer from the web dashboard.
-
-### 🗄️ Container Sidecar Supervisor
-- Runs as **container PID 1**, properly reaping zombie processes and forwarding `SIGTERM`/`SIGINT`/`SIGQUIT` to PostgreSQL.
-- **Automated `postgresql.conf` generation** — WAL archiving, replication slots, and HBA rules configured automatically from environment variables.
-- **Standby bootstrapping** — generates `standby.signal` and `primary_conninfo` automatically on replica startup.
-- **Cluster scaling** — add new standby nodes at runtime; they clone from the leader via `pg_basebackup` and begin streaming replication.
-
-### ☁️ Continuous Cloud Backup & Point-In-Time Recovery
-- **WAL archiving** — every completed 16 MB WAL segment is immediately shipped to object storage.
-- **Hourly incremental snapshots** — hourly basebackup delta snapshots.
-- **Daily full basebackup** — full physical snapshot at 01:00 UTC.
-- **Point-In-Time Recovery (PITR)** — restore to any second in history using a basebackup + WAL replay.
-- **Pluggable storage backends** via [OpenDAL](https://github.com/apache/opendal): MinIO, AWS S3, Google Drive, Dropbox, Azure Blob, and local disk.
-- **Configurable retention policy** — automated pruning of obsolete snapshots (default: 7 days).
-
-### 🖥️ Web Dashboard
-- **Cluster overview** — real-time Raft term, quorum size, node roles, and replication lag.
-- **Node inspection** — detailed per-node status, PostgreSQL version, and process uptime.
-- **Backup management** — list, trigger, restore, and label basebackup snapshots from the UI.
-- **Guarded SQL console** — browser-based read-only SQL REPL with strict security:
-  - Comment stripping to block bypass tricks.
-  - Multi-statement rejection.
-  - Hard cap of 500 rows per query.
-  - Statement timeout (default 5 s).
-- **Database user & permissions management** — create/delete roles and manage grants from the UI.
-- **Audit log** — records node up/down events, backup/restore operations, dangerous SQL (`DROP`/`TRUNCATE`/`DELETE`), election votes and results, and user lifecycle events.
-- **Bearer token authentication** via `PGVISOR_ADMIN_TOKEN`.
+- **🔀 L7 Connection Proxy** — Native PostgreSQL wire protocol proxy with transaction-level pooling, transparent read/write splitting (writes to leader, reads to standbys), and zero-downtime failover request buffering.
+- **🛡️ Raft High Availability** — Peer-to-peer OpenRaft consensus with Quorum Lease fencing (`pg_ctl stop -m immediate` in 1,200ms) to strictly eliminate split-brain writes without Etcd or Consul.
+- **🗄️ Sidecar Supervisor** — Container process reaper and supervisor handling automated PostgreSQL config generation, replica bootstrapping, and dynamic cluster scaling.
+- **☁️ Continuous Backup & PITR** — Streaming WAL archiving and automated basebackups via OpenDAL (MinIO, S3, R2, GCS) with second-precision Point-In-Time-Recovery.
+- **🖥️ Web Management Dashboard** — Embedded UI and REST API for real-time cluster topology, live metrics, manual switchover, guarded read-only SQL console, and audit logging.
 
 ---
 
 ## Architecture
 
+```mermaid
+flowchart TD
+    Clients["PostgreSQL Clients"] -->|":5432 Wire Protocol"| Proxy["pgvisor-proxy"]
+    User["Web Browser"] -->|":8080 HTTP"| Proxy
+
+    subgraph Cluster ["3-Node PostgreSQL Cluster"]
+        Proxy -->|"Writes & Transactions"| Node1["Node 1 (Raft Leader)"]
+        Proxy -->|"Read Queries"| Node2["Node 2 (Standby Replica)"]
+        Proxy -->|"Read Queries"| Node3["Node 3 (Standby Replica)"]
+        Node1 -.->|"Streaming Replication"| Node2
+        Node1 -.->|"Streaming Replication"| Node3
+    end
+
+    Node1 -->|"WAL Archiving & Basebackups"| S3["Object Storage (S3 / MinIO / R2)"]
+    Node2 -.->|"Restore / PITR"| S3
+    Node3 -.->|"Restore / PITR"| S3
 ```
-PostgreSQL Clients
-       │ (Postgres wire protocol :5432)
-       ▼
- pgvisor-proxy  ──────────────────────────────────────────────────┐
-       │                                                          │
-       ├─── Writes ────► Node 1: pgvisor-sidecar + PostgreSQL     │
-       │                          (Raft Leader)                   │
-       └─── Reads  ────► Node 2: pgvisor-sidecar + PostgreSQL     │
-                    ────► Node 3: pgvisor-sidecar + PostgreSQL    │
-                                   (Standbys)                     │
-                                                                  │
- pgvisor-dashboard (:8080) ◄──────────────────────────────────────┘
 
- All sidecars ──► OpenDAL ──► MinIO / S3 / Cloud Storage
-```
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full specification with sequence diagrams.
-
-### Crate Layout
-
-| Crate | Role |
-|---|---|
-| `pgvisor-core` | Shared types, PostgreSQL wire protocol codec, pure-Rust OpenRaft storage engine, OpenDAL backup manager |
-| `pgvisor-proxy` | L7 transaction connection pooler, read/write splitter, failover buffering |
-| `pgvisor-sidecar` | Container PID 1 supervisor, Raft node, automated config generation, backup worker |
-| `pgvisor-dashboard` | Axum + Askama web UI, REST API, guarded SQL console, audit log |
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| **Language** | [Rust](https://www.rust-lang.org/) (2021 edition) |
-| **Async Runtime** | [Tokio](https://tokio.rs/) |
-| **Distributed Consensus** | [OpenRaft](https://github.com/datafuselabs/openraft) 0.9 |
-| **Consensus Storage** | Custom pure-Rust append-only WAL (no RocksDB, no C++ deps) |
-| **PostgreSQL Protocol** | [pgwire](https://crates.io/crates/pgwire) 0.41 |
-| **Object Storage** | [OpenDAL](https://github.com/apache/opendal) 0.50 (S3, FS, and more) |
-| **Web Server** | [Axum](https://github.com/tokio-rs/axum) 0.7 |
-| **HTML Templates** | [Askama](https://github.com/djc/askama) 0.12 |
-| **Serialization** | Serde + Bincode + `serde_json` |
-| **Checksum / Integrity** | CRC32 (via `crc32fast`) |
-| **Error Handling** | `thiserror` (libraries) · `anyhow` (binaries) |
-| **Logging & Tracing** | `tracing` + `tracing-subscriber` |
-| **Dev Object Storage** | [MinIO](https://min.io/) |
-| **Containerization** | Docker + Docker Compose |
+See [ARCHITECTURE.md](ARCHITECTURE.md) for full architecture specifications and sequence diagrams.
 
 ---
 
 ## Getting Started
 
-### Prerequisites
+PgVisor provides a production-like 3-node PostgreSQL 18 High-Availability (HA) cluster with an L7 connection proxy, automatic Raft consensus failover, continuous S3/MinIO backup archiving, and an embedded web dashboard.
 
-- [Docker](https://docs.docker.com/get-docker/) & Docker Compose
-- [Rust toolchain](https://rustup.rs/) (for local development)
+### Prerequisites (For Users)
 
-### Quick Start (3-Node Cluster)
+- [Docker](https://docs.docker.com/get-docker/) Engine (24.0+) & Docker Compose v2+
+- *(Optional)* `psql` command-line client to connect directly
 
-Spin up a full 3-node HA cluster with MinIO for backup storage in one command:
+---
 
-```bash
-./reset-docker-compose.sh
-```
+### Quick Start (Bootstrap in One Command)
 
-This will:
-1. Start MinIO and auto-create the `pgvisor-backups` bucket.
-2. Build and launch `pgvisor-node1` (leader), `pgvisor-node2`, and `pgvisor-node3` (standbys).
-3. Start `pgvisor-proxy` with the web dashboard.
-
-Connect to PostgreSQL through the proxy:
+To bootstrap a complete 3-node HA PostgreSQL cluster with S3 backup storage and L7 proxy:
 
 ```bash
-psql -h localhost -p 5432 -U postgres
+./setup.sh
 ```
 
-Open the web dashboard:
+*(Alternatively, from inside the `examples/` directory: `cd examples && ./setup.sh`)*
+
+The bootstrap script will:
+1. Initialize environment configuration from `examples/.env.example` into `examples/.env`.
+2. Launch MinIO/RustFS object storage and auto-create the `pgvisor-backups` bucket.
+3. Start `pgvisor-node1` (Leader), `pgvisor-node2` (Standby Replica), and `pgvisor-node3` (Standby Replica).
+4. Start `pgvisor-proxy` on port `5432` with the web management dashboard on port `8080`.
+5. Wait for all cluster health checks to report healthy and output connection details.
+
+---
+
+### Running via Docker Compose Directly
+
+If you prefer using Docker Compose without the bootstrap script:
+
+```bash
+# Start cluster in background
+docker compose -f examples/docker-compose.yml up -d
+
+# Check cluster health
+docker compose -f examples/docker-compose.yml ps
+```
+
+---
+
+### Connecting to the Cluster
+
+Connect your applications and database tools to the **PgVisor L7 Proxy** on port `5432`:
+
+#### Via `psql` CLI
+
+```bash
+psql -h localhost -p 5432 -U postgres -d postgres
+```
+
+#### Application Connection URI
+
+```text
+postgresql://postgres:postgres@localhost:5432/postgres
+```
+
+#### Transparent Read/Write Splitting & Zero-Downtime Failover
+
+- **Write Queries**: Mutating queries (`INSERT`, `UPDATE`, `DELETE`, `CREATE`, `DROP`, `ALTER`) and explicit transactions are automatically routed to the current Raft leader (`pgvisor-node1`).
+- **Read Queries**: Read-only queries (`SELECT`) are automatically distributed across standby replicas (`pgvisor-node2`, `pgvisor-node3`) with connection pooling.
+- **Failover Buffering**: If the leader node crashes or becomes partitioned, the proxy holds in-flight requests in memory while the remaining nodes elect a new leader via OpenRaft (<3 seconds). Pending queries are replayed to the new leader without dropping client TCP connections.
+
+---
+
+### Web Management Dashboard
+
+Open the embedded web dashboard in your browser:
 
 ```
 http://localhost:8080
 ```
 
-> Default admin token: `postgres` (set via `PGVISOR_ADMIN_TOKEN`)
+- **Authentication**: Enter your admin token (default: `postgres`, configured via `PGVISOR_ADMIN_TOKEN` in `examples/.env`).
+- **Cluster Overview**: Live cluster topology, node roles (Leader vs. Standby), consensus status, and replication lag.
+- **Manual Failover & Switchover**: Safely initiate graceful leader step-down or switchover from the UI.
+- **Backup & Restore**: View basebackup snapshots, trigger on-demand physical backups, and execute Point-In-Time-Recovery (PITR).
+- **SQL Runner & Audit Logs**: Interactive read-guarded SQL console and cluster audit logging (elections, node join/leave, DDL events).
 
-To restart without rebuilding Docker images:
+---
+
+### Cluster Lifecycle & Operations
+
+Manage your cluster using `./setup.sh`:
 
 ```bash
-./reset-docker-compose.sh --no-build
+# View live container logs
+./setup.sh logs
+
+# View logs of a specific service (e.g., proxy or node1)
+./setup.sh logs pgvisor-proxy
+
+# Check cluster status and node health
+./setup.sh status
+
+# Restart the cluster containers
+./setup.sh restart
+
+# Stop the cluster (all database volumes and data preserved)
+./setup.sh down
+
+# Stop the cluster and wipe persistent data volumes (clean reset)
+./setup.sh clean
 ```
 
 ---
 
-## Configuration
+## Development & Configuration
 
-All configuration is done via environment variables.
-
-### Sidecar (`pgvisor-sidecar`)
-
-| Variable | Description |
-|---|---|
-| `PGVISOR_CLUSTER_ID` | Unique cluster identifier |
-| `PGVISOR_NODE_ID` | Unique integer node ID (e.g., `1`, `2`, `3`) |
-| `PGVISOR_ROLE` | Initial role: `leader` or `standby` |
-| `PGVISOR_PEERS` | Comma-separated sidecar HTTP peer addresses |
-| `PRIMARY_CONNINFO` | Connection string to leader (standby nodes only) |
-| `S3_ENDPOINT` | Object storage endpoint (e.g., `http://minio:9000`) |
-| `S3_BUCKET` | Backup bucket name |
-| `S3_ACCESS_KEY` | Storage access key |
-| `S3_SECRET_KEY` | Storage secret key |
-| `PGPORT` | PostgreSQL port (default: `5432`) |
-| `PGDATA` | PostgreSQL data directory |
-| `RUST_LOG` | Log level (e.g., `info`, `debug`) |
-
-### Proxy (`pgvisor-proxy`)
-
-| Variable | Description |
-|---|---|
-| `PGVISOR_PROXY_LISTEN` | Proxy listen address (e.g., `0.0.0.0:5432`) |
-| `PGVISOR_DASHBOARD_LISTEN` | Dashboard listen address (e.g., `0.0.0.0:8080`) |
-| `PGVISOR_LEADER_ADDR` | Leader PostgreSQL address |
-| `PGVISOR_STANDBY_ADDRS` | Comma-separated standby PostgreSQL addresses |
-| `PGVISOR_CLUSTER_ID` | Cluster identifier |
-| `PGVISOR_ADMIN_TOKEN` | Bearer token for dashboard authentication |
-| `S3_ENDPOINT` | Object storage endpoint |
-| `S3_BUCKET` | Backup bucket name |
-| `S3_ACCESS_KEY` | Storage access key |
-| `S3_SECRET_KEY` | Storage secret key |
-
----
-
-## Development
-
-### Build & Check
-
-```bash
-# Check all crates compile cleanly
-cargo check --workspace
-
-# Run a specific binary locally
-cargo run -p pgvisor-proxy
-cargo run -p pgvisor-dashboard
-cargo run -p pgvisor-sidecar
-```
-
-### Running Tests
-
-Tests run against a live Docker Compose cluster. Start the cluster first:
-
-```bash
-./reset-docker-compose.sh
-```
-
-Then run the test suite:
-
-```bash
-# Run all tests sequentially
-./test.sh
-
-# Run with parallelism
-./test.sh -j 5
-```
-
-Individual test scripts in `tests/`:
-
-| Script | What it tests |
-|---|---|
-| `test-failover.sh` | Leader failure → automatic promotion → proxy rerouting → rejoin as standby |
-| `test-backup-restore.sh` | Full basebackup snapshot and restore |
-| `test-pitr.sh` | Point-in-time recovery using WAL replay |
-| `test-add-node.sh` | Dynamically adding a new standby node |
-| `test-transaction.sh` | Transaction correctness through the proxy |
-| `test-read-write-split.sh` | Read queries route to replicas, writes route to leader |
-
-> **Note on replication lag**: After a write via the proxy, reads may hit a replica with non-zero replication lag. Test scripts use polling retry loops (5–10 attempts, 1 s sleep) to handle this correctly rather than single-shot assertions.
-
-### Project Structure
-
-```
-pgvisor/
-├── crates/
-│   ├── pgvisor-core/       # Shared types, protocol codec, Raft storage, backup
-│   ├── pgvisor-proxy/      # L7 wire protocol proxy & connection pooler
-│   ├── pgvisor-sidecar/    # PID 1 supervisor, Raft node, backup worker
-│   └── pgvisor-dashboard/  # Axum + Askama web UI & REST API
-├── tests/                  # Shell-based integration test scripts
-├── scripts/                # Helper scripts (mounted into containers)
-├── composes/               # Additional Docker Compose configurations
-├── docker-compose.yml      # Local 3-node cluster + MinIO dev setup
-├── reset-docker-compose.sh # Wipe volumes and restart the cluster
-├── test.sh                 # Test runner
-├── Dockerfile              # Multi-binary container image
-├── ARCHITECTURE.md         # Full architecture specification
-└── Cargo.toml              # Workspace manifest
-```
+For local development setup, testing workflows, crate architecture, technology stack, and the full environment variable reference, see **[DEVELOPMENT.md](DEVELOPMENT.md)**.
 
 ---
 
 ## License
 
 [MIT](LICENSE)
+

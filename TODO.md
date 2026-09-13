@@ -123,7 +123,7 @@
 
 # Chore
 
-- [ ] move rust tests to tests directory.
+- [ ] move rust tests to separate files/tests directory.
 
 - [ ] run `cargo test` use cargo-nextest to run tests. one by one. fail fast.
 
