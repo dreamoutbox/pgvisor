@@ -38,3 +38,20 @@
 - `crates/pgvisor-proxy/src/main.rs` = AuditLog initialization with S3 operator, topology event polling, and sidecar `/control/events` ingestion
 - `crates/pgvisor-sidecar/src/main.rs` = Sidecar event recording and `GET /control/events` endpoint for promotion, demotion, and fencing
 - `tests/test-audit-logs.sh` = Integration test suite verifying 9 audit assertions end-to-end
+
+### If you want to modify web dashboard charts, metrics telemetry, node resource monitoring, or query rate tracking, then check:
+
+- `crates/pgvisor-core/src/metrics.rs` = Shared metric snapshot models (`ClusterMetricsSnapshot`, `NodeMetrics`, `ProxyMetrics`, `BackupMetrics`, `NodeMetricRole`)
+- `crates/pgvisor-sidecar/src/system.rs` = Container `/proc/stat` and `/proc/meminfo` metrics collection for node CPU and memory
+- `crates/pgvisor-sidecar/src/supervisor.rs` = Node process uptime tracking (`uptime_secs`)
+- `crates/pgvisor-sidecar/src/main.rs` = Sidecar `StatusResponse` exposing CPU, memory, and uptime metrics over `/control/status`
+- `crates/pgvisor-dashboard/src/metrics.rs` = `MetricsService` trait, `StandaloneMetricsService`, and `/api/metrics/snapshot`, `/api/metrics/history` handlers
+- `crates/pgvisor-dashboard/src/models.rs` = Re-exporting metric snapshot types for dashboard
+- `crates/pgvisor-dashboard/src/templates.rs` = `OverviewTemplate` Askama definition
+- `crates/pgvisor-dashboard/templates/overview.html` = Integrated Chart.js HTML template with cluster topology and 7 live telemetry charts (uptime, node read/write, CPU, memory, proxy read/write, replication lag, backup throughput/rate)
+- `crates/pgvisor-dashboard/src/lib.rs` = Route registration for `/` and `/api/metrics/*`
+- `crates/pgvisor-proxy/src/metrics.rs` = `ProxyMetricsStore` atomic counters and `ProxyMetricsService` aggregating rolling history
+- `crates/pgvisor-proxy/src/session.rs` = L7 proxy read and write query counting (`ProxyMetricsStore::record_read` / `record_write`)
+- `crates/pgvisor-proxy/src/main.rs` = Proxy topology monitor querying replication lag from `pg_stat_replication` and sidecar telemetry
+- `tests/test-metrics.sh` = Integration test suite verifying metrics endpoints, proxy query counter increments, node telemetry, and backup metrics
+

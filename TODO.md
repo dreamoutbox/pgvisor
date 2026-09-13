@@ -102,7 +102,7 @@
 
 - [x] add github workflow to build docker image, run tests, and publish to docker hub. 
 
-- [ ] web dashboard chart & graph for useful data
+- [x] web dashboard chart & graph for useful data
       - all nodes uptime
       - node read/write count
       - node cpu/memory usage
@@ -110,6 +110,18 @@
       - backup size & throughput
       - backup success/fail rate
       - replication lag
+
+- [ ] demo PgVisor.
+    - [ ] setup.
+    - [ ] adding new node.
+    - [ ] backup/restore
+    - [ ] testing node down.
+
+- [ ] secure proxy to sidecar worker over network with password/private key
+
+---
+
+# Chore
 
 - [ ] move rust tests to tests directory.
 

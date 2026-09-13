@@ -58,6 +58,7 @@ run_cmd docker compose down -v --remove-orphans
 
 if [ "$DO_BUILD" = true ]; then
     log_msg "[2/4] Building PgVisor Docker images (default)..."
+    run_cmd docker build -t pgvisor-test-node:latest -t pgvisor-test-proxy:latest .
     run_cmd docker compose build
 else
     log_msg "[2/4] Skipping Docker image build (--no-build specified)..."

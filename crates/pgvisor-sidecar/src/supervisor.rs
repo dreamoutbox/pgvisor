@@ -40,6 +40,7 @@ pub struct PostgresSupervisor {
     status: Arc<Mutex<ProcessStatus>>,
     child_pid: Arc<AtomicU32>,
     active_child: Arc<Mutex<Option<Child>>>,
+    started_at: Arc<Mutex<Option<std::time::Instant>>>,
 }
 
 impl PostgresSupervisor {
@@ -49,6 +50,7 @@ impl PostgresSupervisor {
             status: Arc::new(Mutex::new(ProcessStatus::Stopped)),
             child_pid: Arc::new(AtomicU32::new(0)),
             active_child: Arc::new(Mutex::new(None)),
+            started_at: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -174,6 +176,8 @@ impl PostgresSupervisor {
             *active = Some(child);
             let mut st = self.status.lock().await;
             *st = ProcessStatus::Running;
+            let mut started = self.started_at.lock().await;
+            *started = Some(std::time::Instant::now());
         }
 
         info!(pid, "PostgreSQL process running under sidecar supervision");
@@ -245,6 +249,8 @@ impl PostgresSupervisor {
         {
             let mut st = self.status.lock().await;
             *st = ProcessStatus::Fenced;
+            let mut started = self.started_at.lock().await;
+            *started = None;
         }
 
         let status = Command::new("pg_ctl")
@@ -298,6 +304,8 @@ impl PostgresSupervisor {
 
         let mut st = self.status.lock().await;
         *st = ProcessStatus::Stopped;
+        let mut started = self.started_at.lock().await;
+        *started = None;
         self.child_pid.store(0, Ordering::SeqCst);
         Ok(())
     }
@@ -311,6 +319,12 @@ impl PostgresSupervisor {
     /// Returns the monitored child PID, or 0 if not running.
     pub fn child_pid(&self) -> u32 {
         self.child_pid.load(Ordering::SeqCst)
+    }
+
+    /// Returns the uptime of the monitored Postgres process in seconds.
+    pub async fn uptime_secs(&self) -> u64 {
+        let started = self.started_at.lock().await;
+        started.map(|t| t.elapsed().as_secs()).unwrap_or(0)
     }
 
     /// Waits for child process to terminate.

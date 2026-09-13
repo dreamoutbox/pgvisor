@@ -148,4 +148,46 @@ mod tests {
         assert!(rendered.contains("DROP TABLE test_tbl;"));
         assert!(rendered.contains("User &amp; Role"));
     }
+
+    #[test]
+    fn test_overview_template_rendering_with_charts() {
+        let overview = ClusterOverview {
+            cluster_id: "test-cluster".to_string(),
+            current_term: 1,
+            leader_id: Some(1),
+            leader_address: Some("127.0.0.1:5432".to_string()),
+            quorum_size: 2,
+            total_nodes: 1,
+            healthy_nodes: 1,
+            last_backup_at: None,
+            total_backups: 0,
+            nodes: vec![NodeSummary {
+                node_id: 1,
+                address: "127.0.0.1:5432".into(),
+                role: NodeRole::Leader,
+                state: NodeHealthState::Healthy,
+                pg_version: "18.6".into(),
+                replication_lag_bytes: 0,
+                uptime_secs: 3600,
+                is_local: true,
+            }],
+        };
+        let template = OverviewTemplate {
+            overview: &overview,
+            auth_enabled: true,
+        };
+        let rendered = template
+            .render()
+            .expect("OverviewTemplate must render without errors");
+        assert!(rendered.contains("Cluster: test-cluster"));
+        assert!(rendered.contains("Cluster Metrics &amp; Telemetry"));
+        assert!(rendered.contains("uptimeChart"));
+        assert!(rendered.contains("nodeQueriesChart"));
+        assert!(rendered.contains("cpuChart"));
+        assert!(rendered.contains("memChart"));
+        assert!(rendered.contains("proxyQueriesChart"));
+        assert!(rendered.contains("replicationLagChart"));
+        assert!(rendered.contains("backupSizeThroughputChart"));
+        assert!(rendered.contains("backupRateChart"));
+    }
 }

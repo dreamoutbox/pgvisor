@@ -21,3 +21,10 @@
 - `test.sh` = Integration test orchestrator invoked by the CI test job.
 - `README.md` = Documentation for CI status badges, Docker Hub images, and required GitHub repository secrets (`DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`).
 - `TODO.md` = Roadmap and task completion tracking for CI/CD and release automation.
+
+### If you want to modify Docker image builds, dependency caching, or cargo-chef layers, then check:
+
+- `Dockerfile` = Multi-stage Docker build recipe using `cargo-chef` (`chef`, `planner`, `builder`) and runtime PostgreSQL 18.6 base.
+- `.dockerignore` = Excluded files and directories to avoid invalidating Docker build context and cargo-chef cache layers.
+- `Cargo.toml` = Root workspace manifest whose dependencies determine the chef `recipe.json` cache key.
+- `Cargo.lock` = Lockfile tracked for deterministic cargo-chef dependency recipe computation.

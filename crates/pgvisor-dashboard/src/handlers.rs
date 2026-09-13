@@ -27,6 +27,10 @@ use crate::templates::{
 };
 use pgvisor_core::audit::{AuditEventKind, AuditLog};
 
+pub use crate::metrics::{
+    api_metrics_history, api_metrics_snapshot, MetricsService, StandaloneMetricsService,
+};
+
 /// Abstraction for executing SQL queries on PostgreSQL backends.
 #[async_trait::async_trait]
 pub trait SqlExecutor: Send + Sync {
@@ -838,6 +842,7 @@ pub struct DashboardState {
     pub backup_service: Arc<dyn BackupService>,
     pub cluster_service: Arc<dyn ClusterService>,
     pub user_service: Arc<dyn UserService>,
+    pub metrics_service: Arc<dyn MetricsService>,
     pub audit_log: Arc<AuditLog>,
     pub admin_token: Option<String>,
 }
@@ -896,6 +901,7 @@ impl DashboardState {
             backup_service: Arc::new(StandaloneBackupService::new()),
             cluster_service: Arc::new(StandaloneClusterService::new(overview_arc)),
             user_service: Arc::new(StandaloneUserService::new()),
+            metrics_service: Arc::new(StandaloneMetricsService::new()),
             audit_log: Arc::new(AuditLog::new(cluster_id, None, 2000)),
             admin_token,
         }

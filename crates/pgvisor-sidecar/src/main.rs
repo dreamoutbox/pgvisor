@@ -1,5 +1,6 @@
 pub mod config;
 pub mod supervisor;
+pub mod system;
 
 use std::env;
 use std::net::SocketAddr;
@@ -41,6 +42,7 @@ struct SidecarState {
     pg_version: String,
     events: Arc<RwLock<VecDeque<SidecarEventRecord>>>,
     event_id: Arc<AtomicU64>,
+    system_metrics: Arc<system::SystemMetricsCollector>,
 }
 
 impl SidecarState {
@@ -77,12 +79,16 @@ struct RepointPayload {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct StatusResponse {
-    node_id: u64,
-    role: String,
-    status: String,
-    child_pid: u32,
-    pg_version: String,
+pub struct StatusResponse {
+    pub node_id: u64,
+    pub role: String,
+    pub status: String,
+    pub child_pid: u32,
+    pub pg_version: String,
+    pub uptime_secs: u64,
+    pub cpu_percent: f32,
+    pub memory_used_bytes: u64,
+    pub memory_total_bytes: u64,
 }
 
 async fn handle_status(State(state): State<SidecarState>) -> impl IntoResponse {
@@ -93,12 +99,20 @@ async fn handle_status(State(state): State<SidecarState>) -> impl IntoResponse {
         ProcessStatus::Fenced => "fenced",
     };
     let current_role = state.role.read().await.clone();
+    let uptime_secs = state.supervisor.uptime_secs().await;
+    let cpu_percent = state.system_metrics.cpu_percent();
+    let (memory_used_bytes, memory_total_bytes) = state.system_metrics.memory_usage();
+
     Json(StatusResponse {
         node_id: state.node_id,
         role: current_role,
         status: status_str.to_string(),
         child_pid: state.supervisor.child_pid(),
         pg_version: state.pg_version.clone(),
+        uptime_secs,
+        cpu_percent,
+        memory_used_bytes,
+        memory_total_bytes,
     })
 }
 
@@ -462,6 +476,7 @@ async fn main() -> Result<()> {
     let role_ref = Arc::new(RwLock::new(role.clone()));
     let events_queue = Arc::new(RwLock::new(VecDeque::new()));
     let event_id_counter = Arc::new(AtomicU64::new(1));
+    let system_metrics = Arc::new(system::SystemMetricsCollector::new());
 
     let control_state = SidecarState {
         supervisor: supervisor.clone(),
@@ -472,6 +487,7 @@ async fn main() -> Result<()> {
         pg_version,
         events: events_queue.clone(),
         event_id: event_id_counter.clone(),
+        system_metrics,
     };
 
     // Log initial startup event

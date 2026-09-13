@@ -33,6 +33,7 @@ pub struct ClientSession {
     startup_params: Option<StartupMessage>,
     failover_config: FailoverConfig,
     audit_log: Option<Arc<AuditLog>>,
+    metrics: Option<Arc<crate::metrics::ProxyMetricsStore>>,
 }
 
 impl ClientSession {
@@ -45,7 +46,14 @@ impl ClientSession {
             startup_params: None,
             failover_config: FailoverConfig::default(),
             audit_log: None,
+            metrics: None,
         }
+    }
+
+    /// Sets the proxy metrics store for tracking query routing counts.
+    pub fn with_metrics(mut self, metrics: Arc<crate::metrics::ProxyMetricsStore>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// Sets the central audit log store for recording client operations.
@@ -190,8 +198,14 @@ impl ClientSession {
     async fn handle_query(&mut self, sql: &str) -> Result<(), SessionError> {
         let requires_leader = self.tracker.requires_leader(sql);
         let role = if requires_leader {
+            if let Some(m) = self.metrics.as_ref() {
+                m.record_write();
+            }
             BackendRole::Leader
         } else {
+            if let Some(m) = self.metrics.as_ref() {
+                m.record_read();
+            }
             BackendRole::Standby
         };
 

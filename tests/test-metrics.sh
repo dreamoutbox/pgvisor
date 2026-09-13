@@ -73,45 +73,45 @@ exec_sql() {
 }
 
 echo ""
-echo "[1/6] Verifying Web Dashboard /metrics page rendering..."
-METRICS_HTML=$(curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/metrics")
+echo "[1/6] Verifying Web Dashboard Overview page (/) renders telemetry charts..."
+METRICS_HTML=$(curl -s -f -L "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/")
 echo "${METRICS_HTML}" | grep -q "Cluster Metrics &amp; Telemetry" || {
-    echo "FAILED: /metrics page missing title"
+    echo "FAILED: Overview page missing telemetry section"
     exit 1
 }
 echo "${METRICS_HTML}" | grep -q "uptimeChart" || {
-    echo "FAILED: /metrics page missing uptimeChart canvas"
+    echo "FAILED: Overview page missing uptimeChart canvas"
     exit 1
 }
 echo "${METRICS_HTML}" | grep -q "nodeQueriesChart" || {
-    echo "FAILED: /metrics page missing nodeQueriesChart canvas"
+    echo "FAILED: Overview page missing nodeQueriesChart canvas"
     exit 1
 }
 echo "${METRICS_HTML}" | grep -q "cpuChart" || {
-    echo "FAILED: /metrics page missing cpuChart canvas"
+    echo "FAILED: Overview page missing cpuChart canvas"
     exit 1
 }
 echo "${METRICS_HTML}" | grep -q "memChart" || {
-    echo "FAILED: /metrics page missing memChart canvas"
+    echo "FAILED: Overview page missing memChart canvas"
     exit 1
 }
 echo "${METRICS_HTML}" | grep -q "proxyQueriesChart" || {
-    echo "FAILED: /metrics page missing proxyQueriesChart canvas"
+    echo "FAILED: Overview page missing proxyQueriesChart canvas"
     exit 1
 }
 echo "${METRICS_HTML}" | grep -q "replicationLagChart" || {
-    echo "FAILED: /metrics page missing replicationLagChart canvas"
+    echo "FAILED: Overview page missing replicationLagChart canvas"
     exit 1
 }
 echo "${METRICS_HTML}" | grep -q "backupSizeThroughputChart" || {
-    echo "FAILED: /metrics page missing backupSizeThroughputChart canvas"
+    echo "FAILED: Overview page missing backupSizeThroughputChart canvas"
     exit 1
 }
 echo "${METRICS_HTML}" | grep -q "backupRateChart" || {
-    echo "FAILED: /metrics page missing backupRateChart canvas"
+    echo "FAILED: Overview page missing backupRateChart canvas"
     exit 1
 }
-echo "PASSED: /metrics page renders all 7 visualization canvas elements."
+echo "PASSED: Overview page renders all 7 visualization canvas elements."
 
 echo ""
 echo "[2/6] Verifying GET /api/metrics/snapshot..."

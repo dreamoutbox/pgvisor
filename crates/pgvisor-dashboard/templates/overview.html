@@ -9,8 +9,14 @@
         <h1>Cluster: {{ overview.cluster_id }}</h1>
         <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 4px;">Consensus Term: {{ overview.current_term }} | Quorum Required: {{ overview.quorum_size }}</p>
     </div>
-    <div>
-        <span class="badge badge-healthy">Quorum Active</span>
+    <div style="display: flex; align-items: center; gap: 12px;">
+        <span id="live-indicator" class="badge badge-healthy" style="display: flex; align-items: center; gap: 6px;">
+            <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--success); box-shadow: 0 0 6px var(--success);"></span>
+            Live Telemetry (5s poll)
+        </span>
+        <button id="refresh-btn" onclick="fetchSnapshot()" style="background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 500;">
+            Refresh
+        </button>
     </div>
 </header>
 
@@ -38,10 +44,20 @@
         <h3>Total Basebackups</h3>
         <div class="value">{{ overview.total_backups }}</div>
     </div>
+    <div class="card">
+        <h3>Total Proxy Queries</h3>
+        <div class="value" id="kpi-proxy-total" style="color: var(--primary);">0</div>
+        <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;" id="kpi-proxy-breakdown">Reads: 0 | Writes: 0</p>
+    </div>
+    <div class="card">
+        <h3>Max Replication Lag</h3>
+        <div class="value" id="kpi-max-lag" style="color: var(--warning);">0 B</div>
+        <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">Across all replicas</p>
+    </div>
 </div>
 
 <h2 style="font-size: 1.25rem; margin-bottom: 16px;">Node Topology</h2>
-<table>
+<table style="margin-bottom: 32px;">
     <thead>
         <tr>
             <th>Node ID</th>
@@ -85,4 +101,403 @@
         {% endfor %}
     </tbody>
 </table>
+
+<h2 style="font-size: 1.25rem; margin-bottom: 16px;">Cluster Metrics &amp; Telemetry</h2>
+
+<!-- Charts Grid -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap: 24px; margin-bottom: 32px;">
+    
+    <!-- 1. All Nodes Uptime -->
+    <div class="card" style="padding: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin-bottom: 0;">All Nodes Uptime</h3>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">Current Node Lifespans</span>
+        </div>
+        <div style="position: relative; height: 260px;">
+            <canvas id="uptimeChart"></canvas>
+        </div>
+    </div>
+
+    <!-- 2. Node Read/Write Count -->
+    <div class="card" style="padding: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin-bottom: 0;">Node Read / Write Workload</h3>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">Database Block Operations</span>
+        </div>
+        <div style="position: relative; height: 260px;">
+            <canvas id="nodeQueriesChart"></canvas>
+        </div>
+    </div>
+
+    <!-- 3. Node CPU Utilization -->
+    <div class="card" style="padding: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin-bottom: 0;">Node CPU Usage (%)</h3>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">From sidecar /proc/stat</span>
+        </div>
+        <div style="position: relative; height: 260px;">
+            <canvas id="cpuChart"></canvas>
+        </div>
+    </div>
+
+    <!-- 4. Node Memory Consumption -->
+    <div class="card" style="padding: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin-bottom: 0;">Node Memory Usage (MB)</h3>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">Active container RAM</span>
+        </div>
+        <div style="position: relative; height: 260px;">
+            <canvas id="memChart"></canvas>
+        </div>
+    </div>
+
+    <!-- 5. Proxy Read/Write Routing -->
+    <div class="card" style="padding: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin-bottom: 0;">Proxy Read / Write Routing</h3>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">L7 Proxy Dispatched Queries</span>
+        </div>
+        <div style="position: relative; height: 260px;">
+            <canvas id="proxyQueriesChart"></canvas>
+        </div>
+    </div>
+
+    <!-- 6. Replication Lag -->
+    <div class="card" style="padding: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin-bottom: 0;">Streaming Replication Lag</h3>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">Bytes behind leader LSN</span>
+        </div>
+        <div style="position: relative; height: 260px;">
+            <canvas id="replicationLagChart"></canvas>
+        </div>
+    </div>
+
+    <!-- 7. Backup Size & Throughput -->
+    <div class="card" style="padding: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin-bottom: 0;">Backup Storage &amp; Throughput</h3>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">OpenDAL Snapshot Storage</span>
+        </div>
+        <div style="position: relative; height: 260px;">
+            <canvas id="backupSizeThroughputChart"></canvas>
+        </div>
+    </div>
+
+    <!-- 8. Backup Success / Fail Rate -->
+    <div class="card" style="padding: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin-bottom: 0;">Backup Success vs. Failure Rate</h3>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">Reliability Status</span>
+        </div>
+        <div style="position: relative; height: 260px; display: flex; justify-content: center;">
+            <canvas id="backupRateChart"></canvas>
+        </div>
+    </div>
+
+</div>
+
+<!-- Load Chart.js from CDN -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+    Chart.defaults.color = '#94a3b8';
+    Chart.defaults.borderColor = '#334155';
+    Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+
+    const colorPalette = [
+        '#38bdf8', '#4ade80', '#facc15', '#f87171', '#818cf8', '#fb923c', '#c084fc'
+    ];
+
+    function formatBytes(bytes) {
+        if (!bytes || bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    function formatSeconds(secs) {
+        if (!secs) return '0s';
+        if (secs < 60) return secs + 's';
+        if (secs < 3600) return Math.floor(secs / 60) + 'm ' + (secs % 60) + 's';
+        const hrs = Math.floor(secs / 3600);
+        const mins = Math.floor((secs % 3600) / 60);
+        return hrs + 'h ' + mins + 'm';
+    }
+
+    let uptimeChart = null;
+    let nodeQueriesChart = null;
+    let cpuChart = null;
+    let memChart = null;
+    let proxyQueriesChart = null;
+    let replicationLagChart = null;
+    let backupSizeThroughputChart = null;
+    let backupRateChart = null;
+
+    function initCharts() {
+        uptimeChart = new Chart(document.getElementById('uptimeChart'), {
+            type: 'bar',
+            data: { labels: [], datasets: [{ label: 'Uptime (seconds)', data: [], backgroundColor: '#38bdf8' }] },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) { return 'Uptime: ' + formatSeconds(context.raw); }
+                        }
+                    }
+                },
+                scales: { y: { beginAtZero: true, title: { display: true, text: 'Seconds' } } }
+            }
+        });
+
+        nodeQueriesChart = new Chart(document.getElementById('nodeQueriesChart'), {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'PG Reads', data: [], backgroundColor: '#38bdf8' },
+                    { label: 'PG Writes', data: [], backgroundColor: '#fb923c' }
+                ]
+            },
+            options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+        });
+
+        cpuChart = new Chart(document.getElementById('cpuChart'), {
+            type: 'line',
+            data: { labels: [], datasets: [] },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: { y: { beginAtZero: true, max: 100, title: { display: true, text: '% CPU' } } }
+            }
+        });
+
+        memChart = new Chart(document.getElementById('memChart'), {
+            type: 'line',
+            data: { labels: [], datasets: [] },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'Megabytes (MB)' },
+                        ticks: { callback: function(val) { return val + ' MB'; } }
+                    }
+                }
+            }
+        });
+
+        proxyQueriesChart = new Chart(document.getElementById('proxyQueriesChart'), {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'Proxy Reads', data: [], borderColor: '#38bdf8', backgroundColor: 'rgba(56, 189, 248, 0.1)', fill: true, tension: 0.3 },
+                    { label: 'Proxy Writes', data: [], borderColor: '#4ade80', backgroundColor: 'rgba(74, 222, 128, 0.1)', fill: true, tension: 0.3 }
+                ]
+            },
+            options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+        });
+
+        replicationLagChart = new Chart(document.getElementById('replicationLagChart'), {
+            type: 'line',
+            data: { labels: [], datasets: [] },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'Bytes' },
+                        ticks: { callback: function(val) { return formatBytes(val); } }
+                    }
+                }
+            }
+        });
+
+        backupSizeThroughputChart = new Chart(document.getElementById('backupSizeThroughputChart'), {
+            data: {
+                labels: ['Total Storage Size (MB)', 'Avg Throughput (MB/s)'],
+                datasets: [{
+                    type: 'bar',
+                    label: 'Storage & Speed',
+                    data: [0, 0],
+                    backgroundColor: ['#818cf8', '#4ade80']
+                }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+        });
+
+        backupRateChart = new Chart(document.getElementById('backupRateChart'), {
+            type: 'doughnut',
+            data: {
+                labels: ['Successful Backups', 'Failed Backups'],
+                datasets: [{ data: [1, 0], backgroundColor: ['#4ade80', '#f87171'] }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { position: 'bottom' } }
+            }
+        });
+    }
+
+    function updateCharts(history) {
+        if (!history || history.length === 0) return;
+        const latest = history[history.length - 1];
+
+        const totalProxy = (latest.proxy.reads_total || 0) + (latest.proxy.writes_total || 0);
+        const kpiProxyEl = document.getElementById('kpi-proxy-total');
+        if (kpiProxyEl) kpiProxyEl.textContent = totalProxy.toLocaleString();
+        const kpiProxyBd = document.getElementById('kpi-proxy-breakdown');
+        if (kpiProxyBd) kpiProxyBd.textContent = 'Reads: ' + (latest.proxy.reads_total || 0).toLocaleString() + ' | Writes: ' + (latest.proxy.writes_total || 0).toLocaleString();
+
+        let maxLag = 0;
+        latest.nodes.forEach(n => {
+            if (n.replication_lag_bytes > maxLag) maxLag = n.replication_lag_bytes;
+        });
+        const kpiMaxLag = document.getElementById('kpi-max-lag');
+        if (kpiMaxLag) kpiMaxLag.textContent = formatBytes(maxLag);
+
+        if (uptimeChart) {
+            uptimeChart.data.labels = latest.nodes.map(n => 'Node #' + n.node_id + ' (' + n.role + ')');
+            uptimeChart.data.datasets[0].data = latest.nodes.map(n => n.uptime_secs);
+            uptimeChart.update('none');
+        }
+
+        if (nodeQueriesChart) {
+            nodeQueriesChart.data.labels = latest.nodes.map(n => 'Node #' + n.node_id);
+            nodeQueriesChart.data.datasets[0].data = latest.nodes.map(n => n.pg_reads);
+            nodeQueriesChart.data.datasets[1].data = latest.nodes.map(n => n.pg_writes);
+            nodeQueriesChart.update('none');
+        }
+
+        const timeLabels = history.map(h => {
+            const d = new Date(h.timestamp_ms);
+            return d.getHours().toString().padStart(2, '0') + ':' +
+                   d.getMinutes().toString().padStart(2, '0') + ':' +
+                   d.getSeconds().toString().padStart(2, '0');
+        });
+
+        const nodeIds = [...new Set(history.flatMap(h => h.nodes.map(n => n.node_id)))].sort();
+        if (cpuChart) {
+            cpuChart.data.labels = timeLabels;
+            cpuChart.data.datasets = nodeIds.map((id, idx) => {
+                const color = colorPalette[idx % colorPalette.length];
+                return {
+                    label: 'Node #' + id,
+                    data: history.map(h => {
+                        const node = h.nodes.find(n => n.node_id === id);
+                        return node ? Number(node.cpu_percent.toFixed(1)) : null;
+                    }),
+                    borderColor: color,
+                    backgroundColor: color,
+                    tension: 0.3,
+                    spanGaps: true
+                };
+            });
+            cpuChart.update('none');
+        }
+
+        if (memChart) {
+            memChart.data.labels = timeLabels;
+            memChart.data.datasets = nodeIds.map((id, idx) => {
+                const color = colorPalette[idx % colorPalette.length];
+                return {
+                    label: 'Node #' + id,
+                    data: history.map(h => {
+                        const node = h.nodes.find(n => n.node_id === id);
+                        return node ? Math.round(node.memory_used_bytes / (1024 * 1024)) : null;
+                    }),
+                    borderColor: color,
+                    backgroundColor: color,
+                    tension: 0.3,
+                    spanGaps: true
+                };
+            });
+            memChart.update('none');
+        }
+
+        if (proxyQueriesChart) {
+            proxyQueriesChart.data.labels = timeLabels;
+            proxyQueriesChart.data.datasets[0].data = history.map(h => h.proxy.reads_total);
+            proxyQueriesChart.data.datasets[1].data = history.map(h => h.proxy.writes_total);
+            proxyQueriesChart.update('none');
+        }
+
+        if (replicationLagChart) {
+            replicationLagChart.data.labels = timeLabels;
+            replicationLagChart.data.datasets = nodeIds.map((id, idx) => {
+                const color = colorPalette[(idx + 2) % colorPalette.length];
+                return {
+                    label: 'Node #' + id,
+                    data: history.map(h => {
+                        const node = h.nodes.find(n => n.node_id === id);
+                        return node ? node.replication_lag_bytes : null;
+                    }),
+                    borderColor: color,
+                    backgroundColor: color,
+                    tension: 0.3,
+                    spanGaps: true
+                };
+            });
+            replicationLagChart.update('none');
+        }
+
+        if (backupSizeThroughputChart) {
+            const sizeMb = (latest.backups.total_size_bytes / (1024 * 1024)).toFixed(2);
+            const tpMb = (latest.backups.throughput_bytes_per_sec / (1024 * 1024)).toFixed(2);
+            backupSizeThroughputChart.data.datasets[0].data = [parseFloat(sizeMb), parseFloat(tpMb)];
+            backupSizeThroughputChart.update('none');
+        }
+
+        if (backupRateChart) {
+            const successes = latest.backups.success_count || (latest.backups.total_backups > 0 ? latest.backups.total_backups : 1);
+            const fails = latest.backups.fail_count || 0;
+            backupRateChart.data.datasets[0].data = [successes, fails];
+            backupRateChart.update('none');
+        }
+    }
+
+    let globalHistory = [];
+
+    async function fetchInitialHistory() {
+        try {
+            const res = await fetch('/api/metrics/history');
+            if (res.ok) {
+                globalHistory = await res.json();
+                updateCharts(globalHistory);
+            }
+        } catch (err) {
+            console.error('Error fetching initial metrics history:', err);
+        }
+    }
+
+    async function fetchSnapshot() {
+        try {
+            const res = await fetch('/api/metrics/snapshot');
+            if (res.ok) {
+                const snap = await res.json();
+                globalHistory.push(snap);
+                if (globalHistory.length > 60) {
+                    globalHistory.shift();
+                }
+                updateCharts(globalHistory);
+            }
+        } catch (err) {
+            console.error('Error polling metrics snapshot:', err);
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        initCharts();
+        fetchInitialHistory().then(() => {
+            setInterval(fetchSnapshot, 5000);
+        });
+    });
+</script>
 {% endblock %}

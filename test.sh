@@ -17,9 +17,15 @@ mkdir -p "${LOG_DIR}"
 PARALLEL=false
 MAX_JOBS=2
 
+BUILD_IMAGES=false
+
 # Parse CLI arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --build)
+            BUILD_IMAGES=true
+            shift
+            ;;
         --parallel)
             PARALLEL=true
             shift
@@ -38,6 +44,7 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [options]"
             echo ""
             echo "Options:"
+            echo "  --build            Pre-build test Docker images before running tests"
             echo "  --parallel         Run tests concurrently (default max jobs: 2)"
             echo "  -j, --jobs=N       Set max parallel jobs (implies --parallel)"
             echo "  -h, --help         Show this help message"
@@ -50,6 +57,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ "${BUILD_IMAGES}" == "true" ]]; then
+    echo "Building PgVisor test images (pgvisor-test-node:latest, pgvisor-test-proxy:latest)..."
+    docker build -t pgvisor-test-node:latest -t pgvisor-test-proxy:latest "${REPO_ROOT}"
+fi
 
 # Ensure compose profiles are up to date
 "${REPO_ROOT}/scripts/generate-test-composes.sh" > /dev/null
@@ -69,6 +81,7 @@ TEST_SCRIPTS=(
     "test-audit-logs.sh"
     "test-double-failure.sh"
     "test-proxy-failover.sh"
+    "test-metrics.sh"
 )
 
 TOTAL_TESTS="${#TEST_SCRIPTS[@]}"

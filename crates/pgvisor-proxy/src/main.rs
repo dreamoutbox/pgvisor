@@ -1,8 +1,11 @@
 pub mod backup;
 pub mod cluster;
 pub mod executor;
+pub mod metrics;
 pub mod pool;
 pub mod session;
+
+use metrics::{NodeTelemetry, ProxyMetricsService, ProxyMetricsStore};
 
 use std::collections::HashMap;
 use std::env;
@@ -88,7 +91,14 @@ async fn main() -> Result<()> {
         role: String,
         status: String,
         pg_version: Option<String>,
+        uptime_secs: Option<u64>,
+        cpu_percent: Option<f32>,
+        memory_used_bytes: Option<u64>,
+        memory_total_bytes: Option<u64>,
     }
+
+    let metrics_store = Arc::new(ProxyMetricsStore::new());
+    let node_telemetry = Arc::new(RwLock::new(HashMap::<u64, NodeTelemetry>::new()));
 
     let cluster_id =
         env::var("PGVISOR_CLUSTER_ID").unwrap_or_else(|_| "pgvisor-cluster".to_string());
@@ -157,7 +167,8 @@ async fn main() -> Result<()> {
                 warn!("Failed to initialize OpenDAL S3 operator, using fallback");
                 Arc::new(pgvisor_dashboard::handlers::StandaloneBackupService::new())
             };
-        dash_state_inner.backup_service = backup_service;
+        // Clone Arc handle to share BackupService with ProxyMetricsService
+        dash_state_inner.backup_service = backup_service.clone();
 
         let cluster_service = Arc::new(
             ProxyClusterService::new(
@@ -172,6 +183,24 @@ async fn main() -> Result<()> {
         dash_state_inner.user_service = Arc::new(pgvisor_dashboard::handlers::SqlUserService::new(
             dash_state_inner.sql_executor.clone(),
         ));
+
+        let proxy_metrics_service = Arc::new(ProxyMetricsService::new(
+            metrics_store.clone(),
+            dash_state_inner.overview.clone(),
+            node_telemetry.clone(),
+            backup_service.clone(),
+            60,
+        ));
+        dash_state_inner.metrics_service = proxy_metrics_service.clone();
+
+        let metrics_ticker = proxy_metrics_service.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+            loop {
+                ticker.tick().await;
+                metrics_ticker.record_tick().await;
+            }
+        });
 
         let dash_state = Arc::new(dash_state_inner);
         dash_state_opt = Some(dash_state.clone());
@@ -232,6 +261,7 @@ async fn main() -> Result<()> {
     let dash_state_for_monitor = dash_state_opt.clone();
     let targets_monitor = targets.clone();
     let audit_monitor = audit_log.clone();
+    let node_telemetry_monitor = node_telemetry.clone();
 
     tokio::spawn(async move {
         let client = reqwest::Client::builder()
@@ -247,10 +277,12 @@ async fn main() -> Result<()> {
         loop {
             interval.tick().await;
 
-            // 1. Query active leader's pg_stat_replication to discover dynamic replicas
+            let mut replica_lags: HashMap<String, u64> = HashMap::new();
+
+            // 1. Query active leader's pg_stat_replication to discover dynamic replicas and replication lag
             if let Ok(result) = executor_for_discovery
                 .execute(
-                    "SELECT client_addr::text, application_name FROM pg_stat_replication;",
+                    "SELECT client_addr::text, application_name, COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn), 0)::text FROM pg_stat_replication;",
                     50,
                 )
                 .await
@@ -259,6 +291,7 @@ async fn main() -> Result<()> {
                     if row.len() >= 2 {
                         let client_addr = &row[0];
                         let app_name = &row[1];
+                        let lag_bytes = row.get(2).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
                         let host = if app_name.starts_with("pgvisor-node") {
                             app_name.clone()
                         } else if !client_addr.is_empty() && client_addr != "NULL" {
@@ -266,6 +299,9 @@ async fn main() -> Result<()> {
                         } else {
                             continue;
                         };
+
+                        replica_lags.insert(format!("{}:5432", host), lag_bytes);
+                        replica_lags.insert(host.clone(), lag_bytes);
 
                         let pg_addr = format!("{}:5432", host);
                         let control_url = format!("http://{}:{}", host, control_port);
@@ -341,14 +377,47 @@ async fn main() -> Result<()> {
                                 NodeRole::Standby
                             };
 
+                            let lag_bytes = if role == NodeRole::Leader {
+                                0
+                            } else {
+                                replica_lags
+                                    .get(&target.pg_addr)
+                                    .or_else(|| {
+                                        let host = target
+                                            .pg_addr
+                                            .split(':')
+                                            .next()
+                                            .unwrap_or(&target.pg_addr);
+                                        replica_lags.get(host)
+                                    })
+                                    .copied()
+                                    .unwrap_or(0)
+                            };
+
+                            let uptime = st.uptime_secs.unwrap_or(100);
+                            let cpu = st.cpu_percent.unwrap_or(0.0);
+                            let mem_used = st.memory_used_bytes.unwrap_or(0);
+                            let mem_total = st.memory_total_bytes.unwrap_or(0);
+
+                            node_telemetry_monitor.write().await.insert(
+                                st.node_id,
+                                NodeTelemetry {
+                                    cpu_percent: cpu,
+                                    memory_used_bytes: mem_used,
+                                    memory_total_bytes: mem_total,
+                                    replication_lag_bytes: lag_bytes,
+                                    uptime_secs: uptime,
+                                },
+                            );
+
                             node_summaries.push(NodeSummary {
                                 node_id: st.node_id,
                                 address: target.pg_addr.clone(),
                                 role,
                                 state,
                                 pg_version: pg_ver,
-                                replication_lag_bytes: 0,
-                                uptime_secs: 100,
+                                replication_lag_bytes: lag_bytes,
+                                uptime_secs: uptime,
                                 is_local: false,
                             });
 
@@ -631,8 +700,11 @@ async fn main() -> Result<()> {
 
         let pool_clone = pool.clone();
         let session_audit = audit_log.clone();
+        let session_metrics = metrics_store.clone();
         tokio::spawn(async move {
-            let mut session = ClientSession::new(socket, pool_clone).with_audit_log(session_audit);
+            let mut session = ClientSession::new(socket, pool_clone)
+                .with_audit_log(session_audit)
+                .with_metrics(session_metrics);
             if let Err(err) = session.run().await {
                 error!(%peer_addr, %err, "Session terminated with error");
             }
