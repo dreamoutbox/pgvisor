@@ -9,6 +9,7 @@
 - `knowledges/post-mortem-flaky-pitr-restore.md` = Post-mortem detailing cluster restore timeline, split-brain failover race conditions under parallel CPU load, and resolution
 - `knowledges/post-mortem-pitr-restore-cluster-failure.md` = Post-mortem detailing missing restore_command fatal crash, silent error swallowing, and standby PGDATA wipe cascade during PITR restore
 - `knowledges/pitr-snapshot-selection-and-forward-recovery.md` = Guide and case study explaining forward-only WAL replay mechanics, why snapshots cannot roll backward, and snapshot selection rules for PITR
+- `knowledges/post-mortem-timeline-divergence-and-recovery-overrun.md` = Post-mortem detailing multi-timeline divergence on standby recovery, recovery target overrun FATAL error, proxy redirect-follow / self-restore bug, and dead pool timeout
 - `docker-compose.yml` = Local MinIO and S3 credentials configuration for local development
 
 ### If you want to modify backup metadata (labels, notes, WAL ranges), snapshot triggering, or backup table views, then check:
