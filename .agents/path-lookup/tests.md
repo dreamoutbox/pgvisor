@@ -41,6 +41,10 @@
 
 ### If you want to fix flaky post-restore assertions (wrong row counts after snapshot restore), then check:
 
-- `tests/test-incremental-pitr.sh` = PITR test; after `restore_cluster_node` increase the initial `sleep` (settle time) and widen the retry loop (`seq 1 20` × `sleep 3` = 60s budget) to absorb full cluster re-initialization + standby re-clone + proxy pool reconnect lag.
+- `tests/test-incremental-pitr.sh` = PITR test; uses `wait_for_healthy` and `wait_for_proxy_ready` after `restore_cluster_node`, and ensures `pg_switch_wal()` executes on the leader.
+- `crates/pgvisor-sidecar/src/supervisor.rs` = `ProcessStatus::Restoring` state set during `restore_from_snapshot` and `resync_from_primary` to pause standby elections during active restores.
+- `crates/pgvisor-sidecar/src/main.rs` = sidecar `/control/status` handler exposing `"restoring"` status and heartbeat loop honoring `"restoring"` leader status to prevent split-brain elections.
+- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::restore_backup` re-syncing both dynamic and configured standbys with 3-attempt retry loop.
+- `crates/pgvisor-proxy/src/main.rs` = proxy discovery loop preserving discovered leader while in `"restoring"` status and passing configured standbys.
 - `tests/test-backup-restore.sh` = similar restore+verify pattern; apply the same retry budget if it shows similar flakiness.
-- `tests/lib/cluster.sh` = `wait_for_proxy_ready` and `wait_for_healthy`; if restore takes longer, the settle period may need to call these helpers instead of a bare `sleep`.
+- `tests/lib/cluster.sh` = `wait_for_proxy_ready` and `wait_for_healthy` container health helpers.

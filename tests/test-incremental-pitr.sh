@@ -169,9 +169,10 @@ if [ "${VAL_B}" != "beta" ]; then
 fi
 echo "✓ Inserted row 2: val='beta' (T1 state established)"
 
-# Switch WAL so the WAL segment containing 'beta' is flushed and archived
+# Switch WAL on leader so the WAL segment containing 'beta' is flushed and archived
 echo "  Switching WAL on leader to trigger archive_command..."
-run_sql "SELECT pg_switch_wal();" > /dev/null || true
+run_sql "BEGIN; SELECT pg_switch_wal(); COMMIT;" > /dev/null 2>&1 || \
+    docker exec -i "${NODE_CONTAINER}" psql -U postgres -d postgres -t -A -c "SELECT pg_switch_wal();" > /dev/null 2>&1 || true
 sleep 1
 
 # ------------------------------------------------------------------------------
@@ -204,10 +205,10 @@ echo "✓ Snapshot T2 archive verified ($(wc -c < "${TMP_ARCHIVE_T2}") bytes)."
 echo ""
 echo "[6/8] Restoring from snapshot T0 (${SNAP_T0})..."
 restore_cluster_node "${SNAP_T0}"
-# After a full restore the sidecar reinitializes Postgres, standbys re-clone via
-# pg_basebackup, and the proxy pool reconnects. Give the cluster time to settle
-# before starting to poll, then poll generously to absorb replication lag.
-sleep 5
+# Ensure all containers and proxy are fully healthy and responsive before querying
+wait_for_healthy 60 "pgvisor-pitr-node1" "pgvisor-pitr-node2" "pgvisor-pitr-node3"
+wait_for_proxy_ready "${DASHBOARD_URL}" 30 "${AUTH_HEADER[@]}"
+sleep 3
 
 COUNT_RESTORE_T0=""
 for attempt in $(seq 1 20); do
@@ -239,8 +240,10 @@ echo "✓ Snapshot T0 verified: exactly 1 row ('alpha' present, 'beta' absent)."
 echo ""
 echo "[7/8] Restoring from snapshot T2 (${SNAP_T2})..."
 restore_cluster_node "${SNAP_T2}"
-# Same rationale as above: full cluster restore needs time to converge.
-sleep 5
+# Ensure all containers and proxy are fully healthy and responsive before querying
+wait_for_healthy 60 "pgvisor-pitr-node1" "pgvisor-pitr-node2" "pgvisor-pitr-node3"
+wait_for_proxy_ready "${DASHBOARD_URL}" 30 "${AUTH_HEADER[@]}"
+sleep 3
 
 COUNT_RESTORE_T2=""
 for attempt in $(seq 1 20); do

@@ -97,6 +97,7 @@ async fn handle_status(State(state): State<SidecarState>) -> impl IntoResponse {
         ProcessStatus::Running => "running",
         ProcessStatus::Stopped => "stopped",
         ProcessStatus::Fenced => "fenced",
+        ProcessStatus::Restoring => "restoring",
     };
     let current_role = state.role.read().await.clone();
     let uptime_secs = state.supervisor.uptime_secs().await;
@@ -563,7 +564,7 @@ async fn main() -> Result<()> {
     if !peers.is_empty() {
         let monitor_state = control_state.clone();
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_millis(400))
+            .timeout(std::time::Duration::from_millis(800))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
@@ -573,6 +574,13 @@ async fn main() -> Result<()> {
 
             loop {
                 interval.tick().await;
+
+                let local_status = monitor_state.supervisor.status().await;
+                if local_status == ProcessStatus::Restoring {
+                    // Node is actively restoring or re-syncing; pause auto-failover actions
+                    missed_heartbeats = 0;
+                    continue;
+                }
 
                 let local_role = monitor_state.role.read().await.clone();
                 if local_role == "fenced" {
@@ -695,7 +703,7 @@ async fn main() -> Result<()> {
                     let url = format!("{}/control/status", peer.trim_end_matches('/'));
                     if let Ok(resp) = client.get(&url).send().await {
                         if let Ok(st) = resp.json::<StatusResponse>().await {
-                            if st.status == "running" {
+                            if st.status == "running" || st.status == "restoring" {
                                 alive_nodes.push(st.node_id);
                                 if st.role == "leader" {
                                     leader_found = true;
@@ -719,8 +727,8 @@ async fn main() -> Result<()> {
                         "No active leader detected"
                     );
 
-                    // Election timeout: 3 consecutive misses (1500ms) matches Ticket 004
-                    if missed_heartbeats >= 3 {
+                    // Election timeout: 5 consecutive misses (2500ms) matches Ticket 004
+                    if missed_heartbeats >= 5 {
                         let quorum = (peers.len() / 2) + 1;
                         if alive_nodes.len() >= quorum {
                             if let Some(&winner_id) = alive_nodes.first() {

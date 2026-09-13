@@ -32,6 +32,7 @@ pub enum ProcessStatus {
     Stopped,
     Running,
     Fenced,
+    Restoring,
 }
 
 /// Container PID 1 supervisor managing Postgres lifecycle, signal routing, and fencing.
@@ -361,6 +362,10 @@ impl PostgresSupervisor {
 
         // 1. Stop Postgres if running
         let _ = self.stop().await;
+        {
+            let mut st = self.status.lock().await;
+            *st = ProcessStatus::Restoring;
+        }
 
         // 2. Clear old data directory
         if self.data_dir.exists() {
@@ -426,6 +431,10 @@ impl PostgresSupervisor {
 
         // 1. Stop Postgres if running
         let _ = self.stop().await;
+        {
+            let mut st = self.status.lock().await;
+            *st = ProcessStatus::Restoring;
+        }
 
         // 2. Clear old data directory
         if self.data_dir.exists() {

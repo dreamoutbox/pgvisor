@@ -12,11 +12,13 @@ use tracing::{info, warn};
 use crate::pool::ConnectionPool;
 
 /// Live proxy backup service coordinating basebackups, WAL archiving with OpenDAL,
+/// Live proxy backup service coordinating basebackups, WAL archiving with OpenDAL,
 /// and live cluster restoration via node sidecar control endpoints.
 pub struct ProxyBackupService {
     backup_manager: Arc<BackupManager>,
     leader_addr: Arc<RwLock<Option<String>>>,
     standby_addrs: Arc<RwLock<Vec<String>>>,
+    configured_standbys: Vec<String>,
     pool: Option<ConnectionPool>,
     endpoint: String,
     bucket: String,
@@ -31,6 +33,7 @@ impl ProxyBackupService {
         backup_manager: Arc<BackupManager>,
         leader_addr: Arc<RwLock<Option<String>>>,
         standby_addrs: Arc<RwLock<Vec<String>>>,
+        configured_standbys: Vec<String>,
         pool: Option<ConnectionPool>,
         endpoint: String,
         bucket: String,
@@ -41,6 +44,7 @@ impl ProxyBackupService {
             backup_manager,
             leader_addr,
             standby_addrs,
+            configured_standbys,
             pool,
             endpoint,
             bucket,
@@ -249,8 +253,18 @@ impl BackupService for ProxyBackupService {
 
         info!("Leader successfully restored, now triggering re-sync on standbys");
 
-        // 2. Re-sync standbys
-        let standbys = self.standby_addrs.read().await.clone();
+        // 2. Re-sync standbys: union dynamic standbys and configured standbys
+        let mut standbys = self.standby_addrs.read().await.clone();
+        for s in &self.configured_standbys {
+            if !standbys.contains(s) {
+                standbys.push(s.clone());
+            }
+        }
+        standbys.retain(|s| {
+            let host = s.split(':').next().unwrap_or(s);
+            host != leader_host
+        });
+
         for standby_addr in standbys {
             let standby_host = standby_addr.split(':').next().unwrap_or(&standby_addr);
             let resync_url = format!(
@@ -263,25 +277,38 @@ impl BackupService for ProxyBackupService {
                 "primary_conninfo": format!("host={} port=5432 user=postgres", leader_host)
             });
 
-            match self
-                .http_client
-                .post(&resync_url)
-                .json(&resync_body)
-                .send()
-                .await
-            {
-                Ok(resync_resp) => {
-                    if !resync_resp.status().is_success() {
+            // Retry re-sync up to 3 attempts with brief backoff to absorb transient sidecar readiness delays
+            let mut resync_ok = false;
+            for attempt in 1..=3 {
+                match self
+                    .http_client
+                    .post(&resync_url)
+                    .json(&resync_body)
+                    .send()
+                    .await
+                {
+                    Ok(resync_resp) if resync_resp.status().is_success() => {
+                        resync_ok = true;
+                        info!(%resync_url, attempt, "Standby replica successfully re-synced");
+                        break;
+                    }
+                    Ok(resync_resp) => {
                         warn!(
                             %resync_url,
+                            attempt,
                             status = ?resync_resp.status(),
-                            "Standby re-sync returned non-success"
+                            "Standby re-sync returned non-success, retrying..."
                         );
                     }
+                    Err(e) => {
+                        warn!(%resync_url, attempt, ?e, "Failed to reach standby sidecar for re-sync, retrying...");
+                    }
                 }
-                Err(e) => {
-                    warn!(%resync_url, ?e, "Failed to reach standby sidecar for re-sync");
-                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+            }
+
+            if !resync_ok {
+                warn!(%resync_url, "Standby re-sync failed after all retry attempts");
             }
         }
 

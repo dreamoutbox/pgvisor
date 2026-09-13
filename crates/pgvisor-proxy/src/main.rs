@@ -155,6 +155,7 @@ async fn main() -> Result<()> {
                         bm,
                         leader_ref.clone(),
                         standby_ref.clone(),
+                        standby_addrs.clone(),
                         Some(pool.clone()),
                         s3_endpoint,
                         s3_bucket,
@@ -265,7 +266,7 @@ async fn main() -> Result<()> {
 
     tokio::spawn(async move {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_millis(400))
+            .timeout(std::time::Duration::from_millis(800))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
@@ -359,6 +360,7 @@ async fn main() -> Result<()> {
                                     healthy_count += 1;
                                     NodeHealthState::Healthy
                                 }
+                                "restoring" => NodeHealthState::Degraded,
                                 "fenced" => NodeHealthState::Fenced,
                                 _ => NodeHealthState::Offline,
                             };
@@ -366,7 +368,7 @@ async fn main() -> Result<()> {
                             let pg_ver = st.pg_version.unwrap_or_else(|| "18.6".to_string());
 
                             let role = if st.role == "leader" {
-                                if is_healthy {
+                                if is_healthy || st.status == "restoring" {
                                     discovered_leader = Some(target.pg_addr.clone());
                                 }
                                 NodeRole::Leader
