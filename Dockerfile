@@ -1,12 +1,21 @@
-# Multi-stage build for PgVisor
-FROM rust:bookworm AS builder
-
+# Multi-stage build for PgVisor using cargo-chef
+FROM lukemathwalker/cargo-chef:latest-rust-bookworm AS chef
 WORKDIR /app
 
-# Cache layer: copy Cargo definitions and build all crates
+# Planner stage: compute dependency recipe
+FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
+RUN cargo chef prepare --recipe-path recipe.json
 
+# Builder stage: cache dependencies and build binaries
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+# Build dependencies - this is the caching Docker layer!
+RUN cargo chef cook --release --recipe-path recipe.json
+# Build application crates
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
 RUN cargo build --release
 
 # Final runtime image based on official PostgreSQL 18.6
