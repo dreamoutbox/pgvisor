@@ -112,25 +112,37 @@
       - replication lag
 
 - [ ] fix Failed Tests:
-      first test run:      
+      1st run:      
             - test-failover.sh (38s)  
             - test-auto-rejoin.sh (34s)  
             - test-switchover.sh (43s) 
             - test-timeline-divergence.sh (202s) 
-      second test run:
+      2nd run:
             - test-failover.sh (30s)
             - test-auto-rejoin.sh (30s)
             - test-switchover.sh (39s)
             - test-double-failure.sh (50s)
-      
-      * test-timeline-divergence.sh and test-double-failure.sh maybe flaky tests. we should fix it.
+      3rd run:
+            - test-failover.sh (33s)
+            - test-auto-rejoin.sh (35s)
+            - test-switchover.sh (45s)
+            - test-add-node.sh (45s)
+            - test-timeline-divergence.sh (204s)
+
+      run test with `./test.sh -j 5`
+      flaky tests:
+      - test-timeline-divergence.sh
+      - test-double-failure.sh
+      - test-add-node.sh 
+      different failed tests in different runs come from flaky tests. 
+      we should fix it.
 
 - [ ] start/stop/restart node from web dashboard.
 
 - [ ] manage database and execute backup/restore with cli
 
-- [ ] demo PgVisor.
-    - [ ] setup.
+- [x] demo PgVisor.
+    - [x] setup.
     - [ ] adding new node.
     - [ ] backup/restore
     - [ ] testing node down.
