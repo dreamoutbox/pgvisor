@@ -15,10 +15,11 @@ use tracing::{error, info, warn};
 use crate::models::{
     format_bytes, AlterRoleRequest, AuditEventView, AuditListResponse, AuditOverviewStats,
     BackupItemView, BackupOverviewSummary, BestBackupQuery, BestBackupResponse, ClusterOverview,
-    ColumnInfo, CreateBackupRequest, CreateRoleRequest, NodeHealthState, NodeRole, NodeSummary,
-    PgRole, QuickRestoreRequest, QuickRestoreResponse, RestoreBackupRequest, RoleMembershipRequest,
-    SqlQueryError, SqlQueryRequest, SqlQueryResult, SwitchoverRequest, SwitchoverResponse,
-    TableDataResponse, TablePrivilege, TablePrivilegeKind, TablePrivilegeRequest, TableSummary,
+    ColumnInfo, CreateBackupRequest, CreateRoleRequest, NodeActionRequest, NodeActionResponse,
+    NodeHealthState, NodeLifecycleAction, NodeRole, NodeSummary, PgRole, QuickRestoreRequest,
+    QuickRestoreResponse, RestoreBackupRequest, RoleMembershipRequest, SqlQueryError,
+    SqlQueryRequest, SqlQueryResult, SwitchoverRequest, SwitchoverResponse, TableDataResponse,
+    TablePrivilege, TablePrivilegeKind, TablePrivilegeRequest, TableSummary,
 };
 use crate::security::{SecurityError, SqlSecurityGuard};
 use crate::templates::{
@@ -412,10 +413,13 @@ impl BackupService for StandaloneBackupService {
     }
 }
 
-/// Abstraction for managing cluster lifecycle and leader switchover.
+/// Abstraction for managing cluster lifecycle, node operations, and leader switchover.
 #[async_trait::async_trait]
 pub trait ClusterService: Send + Sync {
     async fn switchover(&self, target_node_id: u64) -> Result<SwitchoverResponse, String>;
+    async fn start_node(&self, node_id: u64) -> Result<NodeActionResponse, String>;
+    async fn stop_node(&self, node_id: u64) -> Result<NodeActionResponse, String>;
+    async fn restart_node(&self, node_id: u64) -> Result<NodeActionResponse, String>;
 }
 
 /// In-memory cluster service for standalone testing or dashboard demo.
@@ -448,6 +452,58 @@ impl ClusterService for StandaloneClusterService {
             previous_leader_id: prev,
             new_leader_id: target_node_id,
         })
+    }
+
+    async fn start_node(&self, node_id: u64) -> Result<NodeActionResponse, String> {
+        let mut ov = self.overview.write().await;
+        if let Some(node) = ov.nodes.iter_mut().find(|n| n.node_id == node_id) {
+            if node.state == NodeHealthState::Healthy {
+                return Err(format!("Node #{} is already running", node_id));
+            }
+            node.state = NodeHealthState::Healthy;
+            Ok(NodeActionResponse {
+                status: "ok".into(),
+                message: format!("Node #{} started successfully", node_id),
+                node_id,
+                action: NodeLifecycleAction::Start,
+            })
+        } else {
+            Err(format!("Node #{} not found", node_id))
+        }
+    }
+
+    async fn stop_node(&self, node_id: u64) -> Result<NodeActionResponse, String> {
+        let mut ov = self.overview.write().await;
+        if let Some(node) = ov.nodes.iter_mut().find(|n| n.node_id == node_id) {
+            if node.state == NodeHealthState::Stopped {
+                return Err(format!("Node #{} is already stopped", node_id));
+            }
+            node.state = NodeHealthState::Stopped;
+            Ok(NodeActionResponse {
+                status: "ok".into(),
+                message: format!("Node #{} stopped cleanly", node_id),
+                node_id,
+                action: NodeLifecycleAction::Stop,
+            })
+        } else {
+            Err(format!("Node #{} not found", node_id))
+        }
+    }
+
+    async fn restart_node(&self, node_id: u64) -> Result<NodeActionResponse, String> {
+        let mut ov = self.overview.write().await;
+        if let Some(node) = ov.nodes.iter_mut().find(|n| n.node_id == node_id) {
+            node.state = NodeHealthState::Healthy;
+            node.uptime_secs = 0;
+            Ok(NodeActionResponse {
+                status: "ok".into(),
+                message: format!("Node #{} restarted successfully", node_id),
+                node_id,
+                action: NodeLifecycleAction::Restart,
+            })
+        } else {
+            Err(format!("Node #{} not found", node_id))
+        }
     }
 }
 
@@ -1795,6 +1851,84 @@ pub async fn api_switchover(
     }
 
     Ok(Json(resp))
+}
+
+async fn api_node_action_internal(
+    state: Arc<DashboardState>,
+    node_id: u64,
+    action: NodeLifecycleAction,
+) -> Result<Json<NodeActionResponse>, (StatusCode, Json<serde_json::Value>)> {
+    // Validate target node exists in cluster overview
+    {
+        let overview = state.overview.read().await;
+        if !overview.nodes.iter().any(|n| n.node_id == node_id) {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": format!("Node #{} not found in cluster", node_id)
+                })),
+            ));
+        }
+    }
+
+    info!(node_id, action = ?action, "Executing node lifecycle action from dashboard API");
+
+    let res = match action {
+        NodeLifecycleAction::Start => state.cluster_service.start_node(node_id).await,
+        NodeLifecycleAction::Stop => state.cluster_service.stop_node(node_id).await,
+        NodeLifecycleAction::Restart => state.cluster_service.restart_node(node_id).await,
+    };
+
+    match res {
+        Ok(resp) => Ok(Json(resp)),
+        Err(e) => {
+            error!(node_id, action = ?action, ?e, "Node lifecycle action failed");
+            let status = if e.contains("already") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            Err((
+                status,
+                Json(serde_json::json!({
+                    "error": e
+                })),
+            ))
+        }
+    }
+}
+
+/// POST /api/nodes/:node_id/start -> Starts PostgreSQL on target node
+pub async fn api_start_node(
+    State(state): State<Arc<DashboardState>>,
+    Path(node_id): Path<u64>,
+) -> Result<Json<NodeActionResponse>, (StatusCode, Json<serde_json::Value>)> {
+    api_node_action_internal(state, node_id, NodeLifecycleAction::Start).await
+}
+
+/// POST /api/nodes/:node_id/stop -> Stops PostgreSQL on target node
+pub async fn api_stop_node(
+    State(state): State<Arc<DashboardState>>,
+    Path(node_id): Path<u64>,
+) -> Result<Json<NodeActionResponse>, (StatusCode, Json<serde_json::Value>)> {
+    api_node_action_internal(state, node_id, NodeLifecycleAction::Stop).await
+}
+
+/// POST /api/nodes/:node_id/restart -> Restarts PostgreSQL on target node
+pub async fn api_restart_node(
+    State(state): State<Arc<DashboardState>>,
+    Path(node_id): Path<u64>,
+) -> Result<Json<NodeActionResponse>, (StatusCode, Json<serde_json::Value>)> {
+    api_node_action_internal(state, node_id, NodeLifecycleAction::Restart).await
+}
+
+/// POST /api/nodes/:node_id/action -> Executes arbitrary lifecycle action on target node
+pub async fn api_node_action(
+    State(state): State<Arc<DashboardState>>,
+    Path(node_id): Path<u64>,
+    Json(payload): Json<NodeActionRequest>,
+) -> Result<Json<NodeActionResponse>, (StatusCode, Json<serde_json::Value>)> {
+    api_node_action_internal(state, node_id, payload.action).await
 }
 
 /// Query parameters for the /users dashboard view.

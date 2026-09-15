@@ -35,7 +35,7 @@ pub struct SidecarEventRecord {
 #[derive(Clone)]
 struct SidecarState {
     supervisor: Arc<PostgresSupervisor>,
-    config: PostgresConfig,
+    config: Arc<RwLock<PostgresConfig>>,
     backup_manager: Option<Arc<BackupManager>>,
     node_id: u64,
     role: Arc<RwLock<String>>,
@@ -43,6 +43,7 @@ struct SidecarState {
     events: Arc<RwLock<VecDeque<SidecarEventRecord>>>,
     event_id: Arc<AtomicU64>,
     system_metrics: Arc<system::SystemMetricsCollector>,
+    peers: Arc<Vec<String>>,
 }
 
 impl SidecarState {
@@ -136,6 +137,8 @@ async fn handle_promote(
     {
         let mut r = state.role.write().await;
         *r = "leader".to_string();
+        let mut cfg = state.config.write().await;
+        cfg.primary_conninfo = None;
     }
 
     state
@@ -224,10 +227,11 @@ async fn handle_repoint(
     Json(payload): Json<RepointPayload>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let current_role = state.role.read().await.clone();
-    if current_role == "leader" {
+    let current_status = state.supervisor.status().await;
+    if current_role == "leader" && current_status == ProcessStatus::Running {
         info!(
             node_id = state.node_id,
-            "Ignoring repoint request because node is currently leader"
+            "Ignoring repoint request because node is currently running as leader"
         );
         return Ok(Json(serde_json::json!({
             "status": "ok",
@@ -259,6 +263,8 @@ async fn handle_repoint(
     {
         let mut r = state.role.write().await;
         *r = "standby".to_string();
+        let mut cfg = state.config.write().await;
+        cfg.primary_conninfo = Some(target_conninfo.clone());
     }
 
     state
@@ -303,13 +309,10 @@ async fn handle_restore(
     })?;
 
     info!(snapshot_id = %payload.snapshot_id, bytes = tar_bytes.len(), "Restoring PostgreSQL data directory");
+    let cfg = state.config.read().await.clone();
     state
         .supervisor
-        .restore_from_snapshot(
-            &tar_bytes,
-            &state.config,
-            payload.recovery_target_time.as_deref(),
-        )
+        .restore_from_snapshot(&tar_bytes, &cfg, payload.recovery_target_time.as_deref())
         .await
         .map_err(|e| {
             (
@@ -331,9 +334,10 @@ async fn handle_resync(
     State(state): State<SidecarState>,
     payload: Option<Json<ResyncPayload>>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let configured_conninfo = state.config.read().await.primary_conninfo.clone();
     let mut primary_conninfo = payload
         .and_then(|p| p.primary_conninfo.clone())
-        .or_else(|| state.config.primary_conninfo.clone())
+        .or(configured_conninfo)
         .ok_or_else(|| {
             (
                 axum::http::StatusCode::BAD_REQUEST,
@@ -348,9 +352,14 @@ async fn handle_resync(
     }
 
     info!(%primary_conninfo, "Executing standby re-sync from primary");
+    {
+        let mut cfg = state.config.write().await;
+        cfg.primary_conninfo = Some(primary_conninfo.clone());
+    }
+    let cfg = state.config.read().await.clone();
     state
         .supervisor
-        .resync_from_primary(&primary_conninfo, &state.config)
+        .resync_from_primary(&primary_conninfo, &cfg)
         .await
         .map_err(|e| {
             (
@@ -369,6 +378,205 @@ async fn handle_resync(
     Ok(Json(serde_json::json!({
         "status": "ok",
         "message": "Standby re-synced successfully and PostgreSQL ready"
+    })))
+}
+
+/// Safely starts Postgres child process, checking peer nodes for an active leader first.
+/// If another node is already operating as the active cluster leader, this node reconfigures
+/// and starts as a standby replica, preventing split-brain startup and immediate fencing.
+async fn start_postgres_safely(
+    state: &SidecarState,
+) -> Result<(), (axum::http::StatusCode, Json<serde_json::Value>)> {
+    // Probe peers to discover if an active leader is already operating in the cluster
+    let mut peer_leader: Option<(u64, String)> = None;
+    if !state.peers.is_empty() {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(800))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
+        for peer in state.peers.iter() {
+            let self_tag = format!("node{}", state.node_id);
+            if peer.contains(&self_tag) {
+                continue;
+            }
+            let url = format!("{}/control/status", peer.trim_end_matches('/'));
+            if let Ok(resp) = client.get(&url).send().await {
+                if let Ok(st) = resp.json::<StatusResponse>().await {
+                    if st.role == "leader" && st.status == "running" {
+                        let conninfo = format!(
+                            "host=pgvisor-node{} port=5432 user=postgres application_name=pgvisor-node{}",
+                            st.node_id, state.node_id
+                        );
+                        peer_leader = Some((st.node_id, conninfo));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some((leader_id, conninfo)) = peer_leader {
+        info!(
+            node_id = state.node_id,
+            leader_id,
+            "Active cluster leader detected on start. Configuring node as standby replica."
+        );
+        let _ = state.supervisor.repoint_primary(&conninfo).await;
+        {
+            let mut r = state.role.write().await;
+            *r = "standby".to_string();
+            let mut cfg = state.config.write().await;
+            cfg.primary_conninfo = Some(conninfo.clone());
+        }
+
+        let cfg = state.config.read().await.clone();
+        let start_res = match state.supervisor.start(&cfg).await {
+            Ok(()) => state.supervisor.wait_ready(cfg.port, 15).await,
+            Err(e) => Err(e),
+        };
+
+        if let Err(err) = start_res {
+            warn!(
+                node_id = state.node_id,
+                ?err,
+                "Standby start failed or timeline diverged; re-syncing from primary via pg_basebackup"
+            );
+            state
+                .supervisor
+                .resync_from_primary(&conninfo, &cfg)
+                .await
+                .map_err(|e| {
+                    (
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": format!("Failed to re-sync standby from primary: {}", e)
+                        })),
+                    )
+                })?;
+        }
+    } else {
+        let cfg = state.config.read().await.clone();
+        state.supervisor.start(&cfg).await.map_err(|e| {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Start failed: {}", e)
+                })),
+            )
+        })?;
+
+        state
+            .supervisor
+            .wait_ready(cfg.port, 30)
+            .await
+            .map_err(|e| {
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("Postgres not ready after start: {}", e)
+                    })),
+                )
+            })?;
+    }
+
+    Ok(())
+}
+
+async fn handle_start(
+    State(state): State<SidecarState>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let current_status = state.supervisor.status().await;
+    if current_status == ProcessStatus::Running {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("Node {} is already running", state.node_id)
+            })),
+        ));
+    }
+
+    info!(node_id = state.node_id, "Handling start request");
+    start_postgres_safely(&state).await?;
+
+    state
+        .record_event(
+            "node_up",
+            format!("Node {} started successfully", state.node_id),
+        )
+        .await;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "message": format!("Node {} started successfully", state.node_id),
+        "node_id": state.node_id
+    })))
+}
+
+async fn handle_stop(
+    State(state): State<SidecarState>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let current_status = state.supervisor.status().await;
+    if current_status == ProcessStatus::Stopped {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("Node {} is already stopped", state.node_id)
+            })),
+        ));
+    }
+
+    info!(node_id = state.node_id, "Handling stop request");
+    state.supervisor.stop().await.map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Stop failed: {}", e)
+            })),
+        )
+    })?;
+
+    state
+        .record_event(
+            "node_down",
+            format!("Node {} stopped cleanly", state.node_id),
+        )
+        .await;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "message": format!("Node {} stopped cleanly", state.node_id),
+        "node_id": state.node_id
+    })))
+}
+
+async fn handle_restart(
+    State(state): State<SidecarState>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    info!(node_id = state.node_id, "Handling restart request");
+    state.supervisor.stop().await.map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Restart failed: {}", e)
+            })),
+        )
+    })?;
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    start_postgres_safely(&state).await?;
+
+    state
+        .record_event(
+            "node_up",
+            format!("Node {} restarted successfully", state.node_id),
+        )
+        .await;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "message": format!("Node {} restarted successfully", state.node_id),
+        "node_id": state.node_id
     })))
 }
 
@@ -574,9 +782,18 @@ async fn main() -> Result<()> {
     let event_id_counter = Arc::new(AtomicU64::new(1));
     let system_metrics = Arc::new(system::SystemMetricsCollector::new());
 
+    let peers_str = env::var("PGVISOR_PEERS").unwrap_or_default();
+    let peers: Arc<Vec<String>> = Arc::new(
+        peers_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+    );
+
     let control_state = SidecarState {
         supervisor: supervisor.clone(),
-        config: config.clone(),
+        config: Arc::new(RwLock::new(config.clone())),
         backup_manager,
         node_id,
         role: role_ref.clone(),
@@ -584,6 +801,7 @@ async fn main() -> Result<()> {
         events: events_queue.clone(),
         event_id: event_id_counter.clone(),
         system_metrics,
+        peers: peers.clone(),
     };
 
     // Log initial startup event
@@ -628,6 +846,9 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/control/status", get(handle_status))
         .route("/control/events", get(handle_events))
+        .route("/control/start", post(handle_start))
+        .route("/control/stop", post(handle_stop))
+        .route("/control/restart", post(handle_restart))
         .route("/control/restore", post(handle_restore))
         .route("/control/resync", post(handle_resync))
         .route("/control/promote", post(handle_promote))
@@ -649,14 +870,8 @@ async fn main() -> Result<()> {
     });
 
     // Background heartbeat & auto-failover election monitor
-    let peers_str = env::var("PGVISOR_PEERS").unwrap_or_default();
-    let peers: Vec<String> = peers_str
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-
     if !peers.is_empty() {
+        let peers = peers.clone();
         let monitor_state = control_state.clone();
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_millis(800))
@@ -671,8 +886,10 @@ async fn main() -> Result<()> {
                 interval.tick().await;
 
                 let local_status = monitor_state.supervisor.status().await;
-                if local_status == ProcessStatus::Restoring {
-                    // Node is actively restoring or re-syncing; pause auto-failover actions
+                if local_status == ProcessStatus::Restoring
+                    || local_status == ProcessStatus::Stopped
+                {
+                    // Node is actively restoring, re-syncing, or intentionally stopped; pause auto-failover actions
                     missed_heartbeats = 0;
                     continue;
                 }
@@ -682,7 +899,7 @@ async fn main() -> Result<()> {
                     // Check if an active leader is operating and available for auto-rejoin
                     let mut active_leader: Option<(u64, String)> = None;
 
-                    for peer in &peers {
+                    for peer in peers.iter() {
                         let self_tag = format!("node{}", monitor_state.node_id);
                         if peer.contains(&self_tag) {
                             continue;
@@ -709,7 +926,7 @@ async fn main() -> Result<()> {
                             "Fenced node detected active cluster leader. Initiating auto-rejoin as standby replica."
                         );
 
-                        let mut standby_config = monitor_state.config.clone();
+                        let mut standby_config = monitor_state.config.read().await.clone();
                         standby_config.primary_conninfo = Some(conninfo.clone());
 
                         match monitor_state
@@ -726,6 +943,8 @@ async fn main() -> Result<()> {
                                 {
                                     let mut r = monitor_state.role.write().await;
                                     *r = "standby".to_string();
+                                    let mut cfg = monitor_state.config.write().await;
+                                    cfg.primary_conninfo = Some(conninfo.clone());
                                 }
                                 monitor_state
                                     .record_event(
@@ -754,7 +973,7 @@ async fn main() -> Result<()> {
 
                 if local_role == "leader" {
                     // Split-brain guard: check if another peer is already operating as active leader
-                    for peer in &peers {
+                    for peer in peers.iter() {
                         let self_tag = format!("node{}", monitor_state.node_id);
                         if peer.contains(&self_tag) {
                             continue;
@@ -794,7 +1013,7 @@ async fn main() -> Result<()> {
                 let mut leader_found = false;
                 let mut alive_nodes: Vec<u64> = vec![monitor_state.node_id];
 
-                for peer in &peers {
+                for peer in peers.iter() {
                     let url = format!("{}/control/status", peer.trim_end_matches('/'));
                     if let Ok(resp) = client.get(&url).send().await {
                         if let Ok(st) = resp.json::<StatusResponse>().await {
@@ -857,7 +1076,7 @@ async fn main() -> Result<()> {
                                         );
                                         let self_host = format!("node{}:", monitor_state.node_id);
                                         let self_host2 = format!("node{}", monitor_state.node_id);
-                                        for peer in &peers {
+                                        for peer in peers.iter() {
                                             if peer.contains(&self_host)
                                                 || peer.ends_with(&self_host2)
                                             {

@@ -37,6 +37,8 @@ PROFILES = [
     ("proxy-failover", "proxy-failover", 6832, 9480, 10400, 10401),
     ("metrics", "metrics", 6932, 9580, 10500, 10501),
     ("timeline-divergence", "timeline-divergence", 7032, 9680, 10600, 10601),
+    ("node-lifecycle", "node-lifecycle", 7132, 9780, 10700, 10701),
+    ("restart-leader", "restart-leader", 7232, 9880, 10800, 10801),
 ]
 
 

@@ -4,7 +4,7 @@ use tracing::{info, warn};
 
 use pgvisor_core::audit::{AuditEventKind, AuditLog};
 use pgvisor_dashboard::handlers::ClusterService;
-use pgvisor_dashboard::models::SwitchoverResponse;
+use pgvisor_dashboard::models::{NodeActionResponse, NodeLifecycleAction, SwitchoverResponse};
 
 use crate::pool::ConnectionPool;
 
@@ -53,6 +53,27 @@ impl ProxyClusterService {
     pub fn with_audit_log(mut self, audit_log: Arc<AuditLog>) -> Self {
         self.audit_log = Some(audit_log);
         self
+    }
+
+    /// Finds target node by node_id through querying its sidecar /control/status.
+    async fn find_target(&self, node_id: u64) -> Result<(NodeTarget, NodeStatusResponse), String> {
+        let targets = {
+            let t = self.targets.read().await;
+            t.clone()
+        };
+
+        for target in &targets {
+            let status_url = format!("{}/control/status", target.control_url.trim_end_matches('/'));
+            if let Ok(resp) = self.http_client.get(&status_url).send().await {
+                if let Ok(st) = resp.json::<NodeStatusResponse>().await {
+                    if st.node_id == node_id {
+                        return Ok((target.clone(), st));
+                    }
+                }
+            }
+        }
+
+        Err(format!("Node #{} not found or sidecar not reachable", node_id))
     }
 }
 
@@ -234,6 +255,129 @@ impl ClusterService for ProxyClusterService {
             ),
             previous_leader_id: current_leader_id,
             new_leader_id: target_node_id,
+        })
+    }
+
+    async fn start_node(&self, node_id: u64) -> Result<NodeActionResponse, String> {
+        info!(node_id, "Executing start command on node");
+        let (target, status) = self.find_target(node_id).await?;
+        if status.status == "running" {
+            return Err(format!("Node #{} is already running", node_id));
+        }
+
+        let start_url = format!("{}/control/start", target.control_url.trim_end_matches('/'));
+        let resp = self
+            .http_client
+            .post(&start_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to send start request to {}: {}", start_url, e))?;
+
+        if !resp.status().is_success() {
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(format!("Start failed on Node #{}: {}", node_id, err_body));
+        }
+
+        if let Some(audit) = self.audit_log.as_ref() {
+            audit
+                .append(
+                    AuditEventKind::NodeUp,
+                    Some(node_id),
+                    Some(&target.pg_addr),
+                    format!("Node #{} started from dashboard", node_id),
+                    None,
+                )
+                .await;
+        }
+
+        Ok(NodeActionResponse {
+            status: "ok".into(),
+            message: format!("Node #{} started successfully", node_id),
+            node_id,
+            action: NodeLifecycleAction::Start,
+        })
+    }
+
+    async fn stop_node(&self, node_id: u64) -> Result<NodeActionResponse, String> {
+        info!(node_id, "Executing stop command on node");
+        let (target, status) = self.find_target(node_id).await?;
+        if status.status == "stopped" {
+            return Err(format!("Node #{} is already stopped", node_id));
+        }
+
+        let stop_url = format!("{}/control/stop", target.control_url.trim_end_matches('/'));
+        let resp = self
+            .http_client
+            .post(&stop_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to send stop request to {}: {}", stop_url, e))?;
+
+        if !resp.status().is_success() {
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(format!("Stop failed on Node #{}: {}", node_id, err_body));
+        }
+
+        // Drain pool connections so clients don't encounter dead TCP sockets
+        self.pool.drain_all().await;
+
+        if let Some(audit) = self.audit_log.as_ref() {
+            audit
+                .append(
+                    AuditEventKind::NodeDown,
+                    Some(node_id),
+                    Some(&target.pg_addr),
+                    format!("Node #{} stopped from dashboard", node_id),
+                    None,
+                )
+                .await;
+        }
+
+        Ok(NodeActionResponse {
+            status: "ok".into(),
+            message: format!("Node #{} stopped cleanly", node_id),
+            node_id,
+            action: NodeLifecycleAction::Stop,
+        })
+    }
+
+    async fn restart_node(&self, node_id: u64) -> Result<NodeActionResponse, String> {
+        info!(node_id, "Executing restart command on node");
+        let (target, _status) = self.find_target(node_id).await?;
+
+        let restart_url = format!("{}/control/restart", target.control_url.trim_end_matches('/'));
+        let resp = self
+            .http_client
+            .post(&restart_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to send restart request to {}: {}", restart_url, e))?;
+
+        if !resp.status().is_success() {
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(format!("Restart failed on Node #{}: {}", node_id, err_body));
+        }
+
+        // Drain pool connections so clients refresh connections after restart
+        self.pool.drain_all().await;
+
+        if let Some(audit) = self.audit_log.as_ref() {
+            audit
+                .append(
+                    AuditEventKind::NodeUp,
+                    Some(node_id),
+                    Some(&target.pg_addr),
+                    format!("Node #{} restarted from dashboard", node_id),
+                    None,
+                )
+                .await;
+        }
+
+        Ok(NodeActionResponse {
+            status: "ok".into(),
+            message: format!("Node #{} restarted successfully", node_id),
+            node_id,
+            action: NodeLifecycleAction::Restart,
         })
     }
 }

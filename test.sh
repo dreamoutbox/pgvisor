@@ -83,6 +83,8 @@ TEST_SCRIPTS=(
     "test-proxy-failover.sh"
     "test-metrics.sh"
     "test-timeline-divergence.sh"
+    "test-node-lifecycle.sh"
+    "test-restart-leader.sh"
 )
 
 TOTAL_TESTS="${#TEST_SCRIPTS[@]}"

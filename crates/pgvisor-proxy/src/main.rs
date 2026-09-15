@@ -364,6 +364,7 @@ async fn main() -> Result<()> {
                                 }
                                 "restoring" => NodeHealthState::Degraded,
                                 "fenced" => NodeHealthState::Fenced,
+                                "stopped" => NodeHealthState::Stopped,
                                 _ => NodeHealthState::Offline,
                             };
 

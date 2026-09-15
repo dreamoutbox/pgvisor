@@ -17,6 +17,9 @@ at startup:
 |--------|------|---------|
 | `GET`  | `/control/status`  | `handle_status` – returns `node_id`, `role`, `status`, `child_pid`, `pg_version` |
 | `GET`  | `/control/events`  | `handle_events` – auditable lifecycle event log (polling) |
+| `POST` | `/control/start`   | `handle_start` – spawns PostgreSQL child process under sidecar supervision |
+| `POST` | `/control/stop`    | `handle_stop` – `pg_ctl stop -m fast` graceful shutdown |
+| `POST` | `/control/restart` | `handle_restart` – stops and restarts PostgreSQL under supervision |
 | `POST` | `/control/promote` | `handle_promote` – `pg_ctl promote` → role becomes `leader` |
 | `POST` | `/control/fence`   | `handle_fence` – `pg_ctl stop -m immediate` → role becomes `fenced` |
 | `POST` | `/control/demote`  | `handle_demote` – graceful stop → role becomes `fenced` |

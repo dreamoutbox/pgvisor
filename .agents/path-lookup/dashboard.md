@@ -55,3 +55,16 @@
 - `crates/pgvisor-proxy/src/main.rs` = Proxy topology monitor querying replication lag from `pg_stat_replication` and sidecar telemetry
 - `tests/test-metrics.sh` = Integration test suite verifying metrics endpoints, proxy query counter increments, node telemetry, and backup metrics
 
+### If you want to start, stop, or restart cluster nodes from the web dashboard or API:
+
+- `crates/pgvisor-dashboard/src/models.rs` = `NodeHealthState::Stopped`, `NodeLifecycleAction` enum, `NodeActionRequest`, and `NodeActionResponse`
+- `crates/pgvisor-dashboard/src/handlers.rs` = `ClusterService` trait (`start_node`, `stop_node`, `restart_node`), `StandaloneClusterService`, and `/api/nodes/:node_id/{start,stop,restart,action}` handlers
+- `crates/pgvisor-dashboard/src/lib.rs` = Route registration and unit tests for node lifecycle
+- `crates/pgvisor-dashboard/templates/nodes.html` = Nodes page table actions, start/stop/restart buttons, leader stop warning modal, and fetch API invocation
+- `crates/pgvisor-dashboard/templates/overview.html` = Overview status badge for `NodeHealthState::Stopped`
+- `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService` orchestrating node start/stop/restart via sidecar HTTP API, pool draining, and audit logging
+- `crates/pgvisor-proxy/src/main.rs` = Topology heartbeat mapping sidecar `"stopped"` status to `NodeHealthState::Stopped`
+- `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor` managing process start, stop, and restart with status verification
+- `crates/pgvisor-sidecar/src/main.rs` = Sidecar `/control/start`, `/control/stop`, `/control/restart` endpoints and election monitor pause on stopped status
+- `tests/test-node-lifecycle.sh` = Integration test verifying end-to-end node stop, start, restart, pool continuity, error cases, and audit logs
+

@@ -42,6 +42,24 @@
         background: #475569;
     }
 
+    .btn-danger {
+        background: #ef4444;
+        color: #ffffff;
+    }
+
+    .btn-danger:hover {
+        background: #dc2626;
+    }
+
+    .btn-success {
+        background: #10b981;
+        color: #0f172a;
+    }
+
+    .btn-success:hover {
+        background: #059669;
+    }
+
     .modal-backdrop {
         position: fixed;
         top: 0;
@@ -169,6 +187,8 @@
                         <span class="badge badge-degraded">Degraded</span>
                     {% when NodeHealthState::Fenced %}
                         <span class="badge badge-fenced">Fenced (Quorum Lost)</span>
+                    {% when NodeHealthState::Stopped %}
+                        <span class="badge badge-offline">Stopped</span>
                     {% when NodeHealthState::Offline %}
                         <span class="badge badge-offline">Offline</span>
                 {% endmatch %}
@@ -176,21 +196,40 @@
             <td>{{ node.replication_lag_bytes }} B</td>
             <td>{{ node.uptime_secs }}s</td>
             <td>
-                {% match node.role %}
-                    {% when NodeRole::Leader %}
-                        <span class="badge badge-leader" style="font-size: 0.75rem;">Active Primary</span>
-                    {% when NodeRole::Standby %}
-                        {% match node.state %}
-                            {% when NodeHealthState::Healthy %}
+                <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+                {% match node.state %}
+                    {% when NodeHealthState::Healthy %}
+                        {% match node.role %}
+                            {% when NodeRole::Standby %}
                                 <button class="btn btn-sm btn-primary" onclick="openSwitchoverModal('{{ node.node_id }}', '{{ node.address }}')">
-                                    Promote to Leader
+                                    Promote
                                 </button>
-                            {% else %}
-                                <span style="color: var(--text-muted); font-size: 0.8rem;">Unavailable</span>
+                            {% when NodeRole::Leader %}
+                            {% when NodeRole::Learner %}
                         {% endmatch %}
-                    {% when NodeRole::Learner %}
-                        <span style="color: var(--text-muted); font-size: 0.8rem;">Learner</span>
+                        <button class="btn btn-sm btn-secondary" onclick="openNodeActionModal('restart', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
+                            Restart
+                        </button>
+                        <button class="btn btn-sm btn-danger" onclick="openNodeActionModal('stop', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
+                            Stop
+                        </button>
+                    {% when NodeHealthState::Stopped %}
+                        <button class="btn btn-sm btn-success" onclick="openNodeActionModal('start', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
+                            Start
+                        </button>
+                    {% when NodeHealthState::Fenced %}
+                        <button class="btn btn-sm btn-success" onclick="openNodeActionModal('start', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
+                            Start
+                        </button>
+                        <button class="btn btn-sm btn-secondary" onclick="openNodeActionModal('restart', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
+                            Restart
+                        </button>
+                    {% when NodeHealthState::Degraded %}
+                        <span style="color: var(--text-muted); font-size: 0.8rem;">Restoring...</span>
+                    {% when NodeHealthState::Offline %}
+                        <span style="color: var(--text-muted); font-size: 0.8rem;">Unreachable</span>
                 {% endmatch %}
+                </div>
             </td>
         </tr>
         {% endfor %}
@@ -218,6 +257,25 @@
     </div>
 </div>
 
+<!-- Node Action Modal (Start / Stop / Restart) -->
+<div id="nodeActionModal" class="modal-backdrop">
+    <div class="modal">
+        <h2 id="nodeActionTitle">Confirm Node Action</h2>
+        <p id="nodeActionDesc">Are you sure you want to perform this lifecycle action?</p>
+
+        <div id="nodeActionLeaderWarning" class="step-list" style="display: none; border-color: var(--danger); color: #f87171;">
+            <div><strong>WARNING: Node is currently the active cluster Leader!</strong></div>
+            <div>Stopping this node will trigger an automatic failover election among standby replicas.</div>
+            <div>Active client connections will be drained and rerouted to the newly elected leader.</div>
+        </div>
+
+        <div class="modal-actions">
+            <button class="btn btn-secondary" onclick="closeNodeActionModal()">Cancel</button>
+            <button id="btnSubmitNodeAction" class="btn btn-primary" onclick="submitNodeAction()">Confirm</button>
+        </div>
+    </div>
+</div>
+
 <!-- Toast -->
 <div id="toast" class="toast">
     <span id="toastMsg"></span>
@@ -225,6 +283,8 @@
 
 <script>
     let selectedTargetNodeId = null;
+    let selectedActionNodeId = null;
+    let selectedActionKind = null;
 
     function showToast(msg, isError = false) {
         const toast = document.getElementById('toast');
@@ -277,6 +337,81 @@
             showToast('Network error during switchover: ' + err.message, true);
             btn.disabled = false;
             btn.textContent = 'Confirm Switchover';
+        }
+    }
+
+    function openNodeActionModal(action, nodeId, nodeAddr, role) {
+        selectedActionNodeId = parseInt(nodeId, 10);
+        selectedActionKind = action;
+
+        const titleElem = document.getElementById('nodeActionTitle');
+        const descElem = document.getElementById('nodeActionDesc');
+        const warningElem = document.getElementById('nodeActionLeaderWarning');
+        const submitBtn = document.getElementById('btnSubmitNodeAction');
+
+        const actionCap = action.charAt(0).toUpperCase() + action.slice(1);
+        titleElem.textContent = `Confirm ${actionCap} - Node #${nodeId}`;
+
+        if (action === 'stop') {
+            submitBtn.className = 'btn btn-danger';
+            submitBtn.textContent = 'Confirm Stop';
+            if (role === 'leader' || role === 'Leader') {
+                warningElem.style.display = 'flex';
+                descElem.textContent = `Gracefully stop PostgreSQL on Node #${nodeId} (${nodeAddr}).`;
+            } else {
+                warningElem.style.display = 'none';
+                descElem.textContent = `Stop PostgreSQL on standby Node #${nodeId} (${nodeAddr}). The replica will pause replication until restarted.`;
+            }
+        } else if (action === 'restart') {
+            submitBtn.className = 'btn btn-primary';
+            submitBtn.textContent = 'Confirm Restart';
+            warningElem.style.display = 'none';
+            descElem.textContent = `Gracefully restart PostgreSQL child process on Node #${nodeId} (${nodeAddr}).`;
+        } else if (action === 'start') {
+            submitBtn.className = 'btn btn-success';
+            submitBtn.textContent = 'Confirm Start';
+            warningElem.style.display = 'none';
+            descElem.textContent = `Start PostgreSQL child process on Node #${nodeId} (${nodeAddr}) and rejoin cluster.`;
+        }
+
+        document.getElementById('nodeActionModal').style.display = 'flex';
+    }
+
+    function closeNodeActionModal() {
+        document.getElementById('nodeActionModal').style.display = 'none';
+        selectedActionNodeId = null;
+        selectedActionKind = null;
+    }
+
+    async function submitNodeAction() {
+        if (!selectedActionNodeId || !selectedActionKind) return;
+
+        const btn = document.getElementById('btnSubmitNodeAction');
+        btn.disabled = true;
+        const originalText = btn.textContent;
+        btn.textContent = 'Processing...';
+
+        try {
+            const resp = await fetch(`/api/nodes/${selectedActionNodeId}/${selectedActionKind}`, {
+                method: 'POST'
+            });
+
+            const data = await resp.json();
+            if (resp.ok) {
+                closeNodeActionModal();
+                showToast(data.message || `${selectedActionKind} action succeeded! Reloading...`);
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1500);
+            } else {
+                showToast(data.error || `Failed to ${selectedActionKind} node`, true);
+                btn.disabled = false;
+                btn.textContent = originalText;
+            }
+        } catch (err) {
+            showToast(`Network error: ${err.message}`, true);
+            btn.disabled = false;
+            btn.textContent = originalText;
         }
     }
 </script>

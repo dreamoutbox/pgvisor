@@ -14,6 +14,16 @@ pub enum NodeRole {
     Learner,
 }
 
+impl std::fmt::Display for NodeRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Leader => write!(f, "leader"),
+            Self::Standby => write!(f, "standby"),
+            Self::Learner => write!(f, "learner"),
+        }
+    }
+}
+
 /// Operational state of a node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -21,6 +31,7 @@ pub enum NodeHealthState {
     Healthy,
     Degraded,
     Fenced,
+    Stopped,
     Offline,
 }
 
@@ -204,6 +215,40 @@ pub struct SwitchoverResponse {
     pub message: String,
     pub previous_leader_id: Option<u64>,
     pub new_leader_id: u64,
+}
+
+/// Closed set of supported node lifecycle actions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeLifecycleAction {
+    Start,
+    Stop,
+    Restart,
+}
+
+impl NodeLifecycleAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Restart => "restart",
+        }
+    }
+}
+
+/// Request payload to perform a lifecycle action on a specific node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeActionRequest {
+    pub action: NodeLifecycleAction,
+}
+
+/// Response payload from a successful node lifecycle action.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeActionResponse {
+    pub status: String,
+    pub message: String,
+    pub node_id: u64,
+    pub action: NodeLifecycleAction,
 }
 
 /// Closed set of supported table-level privilege types.

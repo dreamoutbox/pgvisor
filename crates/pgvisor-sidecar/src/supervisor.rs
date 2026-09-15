@@ -140,6 +140,14 @@ impl PostgresSupervisor {
 
     /// Generates configurations and starts the PostgreSQL child process.
     pub async fn start(&self, config: &PostgresConfig) -> Result<(), SupervisorError> {
+        {
+            let st = self.status.lock().await;
+            if *st == ProcessStatus::Running {
+                info!(dir = ?self.data_dir, "PostgreSQL process is already running");
+                return Ok(());
+            }
+        }
+
         ConfigGenerator::write_configs(&self.data_dir, config)?;
 
         info!(dir = ?self.data_dir, "Spawning postgres process");
@@ -291,6 +299,14 @@ impl PostgresSupervisor {
 
     /// Gracefully stops Postgres child process using `pg_ctl stop -m fast`.
     pub async fn stop(&self) -> Result<(), SupervisorError> {
+        {
+            let st = self.status.lock().await;
+            if *st == ProcessStatus::Stopped {
+                info!(dir = ?self.data_dir, "PostgreSQL process is already stopped");
+                return Ok(());
+            }
+        }
+
         info!(dir = ?self.data_dir, "Executing fast shutdown on Postgres");
         if self.data_dir.join("PG_VERSION").exists() {
             let status = Command::new("pg_ctl")
@@ -326,6 +342,17 @@ impl PostgresSupervisor {
         Ok(())
     }
 
+    /// Gracefully restarts the PostgreSQL child process under sidecar supervision.
+    pub async fn restart(&self, config: &PostgresConfig) -> Result<(), SupervisorError> {
+        info!(dir = ?self.data_dir, "Restarting PostgreSQL process under sidecar supervision");
+        self.stop().await?;
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        self.start(config).await?;
+        self.wait_ready(config.port, 30).await?;
+        info!("PostgreSQL restarted successfully and accepting connections");
+        Ok(())
+    }
+
     /// Returns the current supervisor process status.
     pub async fn status(&self) -> ProcessStatus {
         let st = self.status.lock().await;
@@ -351,7 +378,9 @@ impl PostgresSupervisor {
                 Ok(status) => {
                     info!(?status, "Postgres child process exited");
                     let mut st = self.status.lock().await;
-                    *st = ProcessStatus::Stopped;
+                    if *st != ProcessStatus::Fenced {
+                        *st = ProcessStatus::Stopped;
+                    }
                     Some(status)
                 }
                 Err(err) => {
@@ -414,6 +443,9 @@ impl PostgresSupervisor {
         if let Ok(s) = status {
             if !s.success() {
                 warn!("tar extraction returned non-zero status");
+                return Err(SupervisorError::CommandFailed(
+                    "tar extraction returned non-zero status".to_string(),
+                ));
             }
         }
 
@@ -546,7 +578,9 @@ impl PostgresSupervisor {
                     if let Ok(Some(status)) = child.try_wait() {
                         self.child_pid.store(0, Ordering::SeqCst);
                         let mut st = self.status.lock().await;
-                        *st = ProcessStatus::Stopped;
+                        if *st != ProcessStatus::Fenced {
+                            *st = ProcessStatus::Stopped;
+                        }
                         return Err(SupervisorError::CommandFailed(format!(
                             "Postgres process exited unexpectedly with status: {status}"
                         )));
@@ -594,7 +628,10 @@ mod tests {
     async fn test_restore_from_snapshot_invalid_tar() {
         let dir = tempdir().unwrap();
         let supervisor = PostgresSupervisor::new(dir.path());
-        let config = PostgresConfig::default();
+        let config = PostgresConfig {
+            port: 59999,
+            ..Default::default()
+        };
 
         let dummy_tar = vec![0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff];
         let res = supervisor

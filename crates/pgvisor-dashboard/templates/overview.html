@@ -91,6 +91,8 @@
                         <span class="badge badge-degraded">Degraded</span>
                     {% when NodeHealthState::Fenced %}
                         <span class="badge badge-fenced">Fenced</span>
+                    {% when NodeHealthState::Stopped %}
+                        <span class="badge badge-offline">Stopped</span>
                     {% when NodeHealthState::Offline %}
                         <span class="badge badge-offline">Offline</span>
                 {% endmatch %}

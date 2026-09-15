@@ -16,10 +16,11 @@ use crate::handlers::{
     api_alter_user, api_create_backup, api_create_user, api_delete_backup, api_download_backup,
     api_drop_user, api_execute_sql, api_find_best_backup, api_get_privileges, api_get_user,
     api_grant_membership, api_list_audit_logs, api_list_backups, api_list_tables, api_list_users,
-    api_metrics_history, api_metrics_snapshot, api_nodes, api_quick_restore, api_restore_backup,
-    api_revoke_membership, api_set_privilege, api_status, api_switchover, api_table_data,
-    api_table_schema, get_audit_logs_page, get_backups_page, get_login_page, get_logout, get_nodes,
-    get_overview, get_sql_console, get_tables_page, get_users_page, post_login, DashboardState,
+    api_metrics_history, api_metrics_snapshot, api_node_action, api_nodes, api_quick_restore,
+    api_restart_node, api_restore_backup, api_revoke_membership, api_set_privilege,
+    api_start_node, api_status, api_stop_node, api_switchover, api_table_data, api_table_schema,
+    get_audit_logs_page, get_backups_page, get_login_page, get_logout, get_nodes, get_overview,
+    get_sql_console, get_tables_page, get_users_page, post_login, DashboardState,
 };
 use crate::security::SqlSecurityGuard;
 
@@ -77,6 +78,10 @@ pub fn create_router(state: Arc<DashboardState>) -> Router {
         .route("/audit-logs", get(get_audit_logs_page))
         .route("/api/status", get(api_status))
         .route("/api/nodes", get(api_nodes))
+        .route("/api/nodes/:node_id/start", post(api_start_node))
+        .route("/api/nodes/:node_id/stop", post(api_stop_node))
+        .route("/api/nodes/:node_id/restart", post(api_restart_node))
+        .route("/api/nodes/:node_id/action", post(api_node_action))
         .route("/api/metrics/snapshot", get(api_metrics_snapshot))
         .route("/api/metrics/history", get(api_metrics_history))
         .route("/api/audit-logs", get(api_list_audit_logs))
@@ -670,6 +675,76 @@ mod tests {
             .uri("/api/cluster/switchover")
             .header("Content-Type", "application/json")
             .body(Body::from(r#"{"target_node_id": 99}"#))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_dashboard_node_lifecycle_routes() {
+        let state = Arc::new(DashboardState::new("test-cluster", None));
+        let app = create_router(state);
+
+        // 1. Stop healthy Node #2 -> 200 OK
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/nodes/2/stop")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 2. Stop Node #2 again -> 400 Bad Request (already stopped)
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/nodes/2/stop")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // 3. Start Node #2 -> 200 OK
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/nodes/2/start")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 4. Start Node #2 again -> 400 Bad Request (already running)
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/nodes/2/start")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // 5. Restart Node #2 -> 200 OK
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/nodes/2/restart")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 6. Action route with payload on Node #2 -> 200 OK
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/nodes/2/action")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"action": "stop"}"#))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 7. Action on non-existent node #99 -> 404 Not Found
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/nodes/99/start")
+            .body(Body::empty())
             .unwrap();
         let response = app.clone().oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
