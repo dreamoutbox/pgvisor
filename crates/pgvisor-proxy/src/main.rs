@@ -3,9 +3,11 @@ pub mod cluster;
 pub mod executor;
 pub mod metrics;
 pub mod pool;
+pub mod scheduler;
 pub mod session;
 
 use metrics::{NodeTelemetry, ProxyMetricsService, ProxyMetricsStore};
+use scheduler::BackupScheduler;
 
 use std::collections::HashMap;
 use std::env;
@@ -105,19 +107,10 @@ async fn main() -> Result<()> {
         env::var("PGVISOR_CLUSTER_ID").unwrap_or_else(|_| "pgvisor-cluster".to_string());
     let admin_token = env::var("PGVISOR_ADMIN_TOKEN").ok();
 
-    // S3 configuration for physical backups and persistent audit logs
-    let s3_endpoint = env::var("S3_ENDPOINT").unwrap_or_else(|_| "http://minio:9000".to_string());
-    let s3_bucket = env::var("S3_BUCKET").unwrap_or_else(|_| "pgvisor-backups".to_string());
-    let s3_access_key = env::var("S3_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".to_string());
-    let s3_secret_key = env::var("S3_SECRET_KEY").unwrap_or_else(|_| "minioadmin".to_string());
-
-    let backup_config = BackupScheduleConfig {
-        minio_endpoint: s3_endpoint.clone(),
-        minio_bucket: s3_bucket.clone(),
-        access_key: s3_access_key,
-        secret_key: s3_secret_key,
-        ..Default::default()
-    };
+    // S3 and backup configuration for physical snapshots, automated CRON, and audit logs
+    let backup_config = BackupScheduleConfig::from_env();
+    let s3_endpoint = backup_config.minio_endpoint.clone();
+    let s3_bucket = backup_config.minio_bucket.clone();
 
     let s3_operator = backup_config.build_operator().ok();
     let audit_log = Arc::new(AuditLog::new(&cluster_id, s3_operator.clone(), 2000));
@@ -162,6 +155,7 @@ async fn main() -> Result<()> {
                         s3_endpoint,
                         s3_bucket,
                         backup_config.retention_days,
+                        backup_config.keep_count,
                         control_port,
                     )
                     .with_audit_log(audit_log.clone()),
@@ -172,6 +166,12 @@ async fn main() -> Result<()> {
             };
         // Clone Arc handle to share BackupService with ProxyMetricsService
         dash_state_inner.backup_service = backup_service.clone();
+
+        // Start automated background backup scheduler if enabled
+        if backup_config.cron_enabled {
+            let scheduler = Arc::new(BackupScheduler::new(backup_service.clone(), backup_config.clone()));
+            scheduler.start();
+        }
 
         let cluster_service = Arc::new(
             ProxyClusterService::new(

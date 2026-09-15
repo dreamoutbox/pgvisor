@@ -172,6 +172,7 @@ pub struct BackupItemView {
     pub stop_wal: String,
     pub size_pretty: String,
     pub total_bytes: u64,
+    pub source_node: Option<String>,
 }
 
 /// Aggregated backup metrics for the dashboard summary cards.
@@ -181,6 +182,7 @@ pub struct BackupOverviewSummary {
     pub latest_backup: Option<String>,
     pub total_size_pretty: String,
     pub retention_days: u32,
+    pub keep_count: Option<usize>,
     pub storage_endpoint: String,
     pub storage_bucket: String,
 }

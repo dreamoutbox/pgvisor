@@ -219,7 +219,7 @@
     <div class="card">
         <h3>Total Snapshots</h3>
         <div class="value">{{ summary.total_backups }}</div>
-        <small style="color: var(--text-muted)">Retention: {{ summary.retention_days }} days</small>
+        <small style="color: var(--text-muted)">Retention: {{ summary.retention_days }} days{% if let Some(limit) = summary.keep_count %} &bull; Keep: {{ limit }}{% endif %}</small>
     </div>
     <div class="card">
         <h3>Total Storage Used</h3>
@@ -282,6 +282,7 @@
         <tr>
             <th>Snapshot ID</th>
             <th>Type</th>
+            <th>Source Node</th>
             <th>Optional Label / Note</th>
             <th>Created At</th>
             <th>Archive Size</th>
@@ -292,7 +293,7 @@
     <tbody>
         {% if backups.is_empty() %}
         <tr>
-            <td colspan="7">
+            <td colspan="8">
                 <div class="empty-state">
                     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
                         style="margin-bottom: 12px; color: var(--text-muted);">
@@ -319,6 +320,13 @@
                 <span class="badge badge-leader">Full</span>
                 {% else %}
                 <span class="badge badge-standby">Incremental</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if let Some(node) = b.source_node %}
+                <span style="font-family: monospace; font-size: 0.85rem; color: var(--text-main);">{{ node }}</span>
+                {% else %}
+                <span style="color: var(--text-muted); font-size: 0.85rem;">-</span>
                 {% endif %}
             </td>
             <td>

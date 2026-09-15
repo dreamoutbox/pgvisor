@@ -38,3 +38,17 @@
 - `crates/pgvisor-proxy/src/main.rs` = Replication lag monitor using `CASE WHEN NOT pg_is_in_recovery()` to prevent WAL control errors during recovery
 - `crates/pgvisor-core/src/protocol/tracker.rs` = Query classifier routing `SELECT pg_switch_wal()` as `QueryKind::Write` to leader
 - `tests/test-promoted-restore.sh` = Automated regression test verifying leader failover, snapshot restore on promoted leader, absence of recovery spam, and standby re-sync
+
+### If you want to modify backup retention policies, CRON scheduling, concurrent backup/restore mutex locks, or follower backup offloading, then check:
+
+- `crates/pgvisor-core/src/backup/manager.rs` = `BackupScheduleConfig` (`keep_count`, `retention_days`, `full_backup_cron`, `incremental_backup_cron`, `cron_enabled`, `from_env`), `BasebackupMeta.source_node`, and `prune_retention` with single latest snapshot safeguard
+- `crates/pgvisor-proxy/src/scheduler.rs` = `BackupScheduler` driving automated background full and incremental backup jobs via `croner::Cron`
+- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::select_backup_target` prioritizing follower/standby nodes over primary for `pg_basebackup`, and `operation_lock` (async mutex) rejecting concurrent backup/restore with error
+- `crates/pgvisor-dashboard/src/handlers.rs` = `api_create_backup`, `api_restore_backup`, and `api_quick_restore` mapping concurrent lock rejections to HTTP 409 Conflict, and `StandaloneBackupService` with mutex lock
+- `crates/pgvisor-dashboard/src/models.rs` = `BackupOverviewSummary.keep_count` and `BackupItemView.source_node`
+- `crates/pgvisor-dashboard/templates/backups.html` = Dashboard UI displaying keep count in summary and source node badge in backup snapshot list
+- `crates/pgvisor-proxy/src/main.rs` = Wiring `BackupScheduleConfig::from_env()` and starting `BackupScheduler`
+- `docker-compose.yml` = Canonical compose definition configuring `PGVISOR_BACKUP_*` retention and CRON variables
+- `examples/docker-compose.yml` = Example compose definition passing `PGVISOR_BACKUP_*` retention and CRON variables with defaults
+- `examples/.env.example` & `examples/.env` = Environment variable templates defining default retention limits and CRON schedules
+- `tests/test-backup-restore.sh` = Automated integration test asserting follower node backup execution, primary node restore execution, and HTTP 409 Conflict mutex rejection

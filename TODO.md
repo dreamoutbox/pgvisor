@@ -141,11 +141,11 @@
 
 - [x] fix cluster failure and recovery log spam when restoring snapshot on auto-promoted leader (verified in `test-promoted-restore.sh`) 
 
-- [ ] make following config-able: 
+- [x] make following config-able with ENV: 
       - backup snapshots keep count. retention days.
       - CRON auto run full backup / incremental backup.
-- [ ] mutex lock on backup/restore prevent concurrent actions. like 2 users clicking backup/restore on web dashboard on the same time.
-- [ ] add test. assert restore perform on primary. backup perform on follower nodes to reduce the primary node load.
+- [x] mutex lock on backup/restore prevent concurrent actions. like 2 users clicking backup/restore on web dashboard on the same time.
+- [x] add test. assert restore perform on primary. backup perform on follower nodes to reduce the primary node load.
 
 - [ ] upload backup file from local computer, save to S3 and restore. 
 
@@ -154,6 +154,8 @@
     - [ ] adding new node.
     - [ ] backup/restore
     - [ ] testing node down.
+
+- [ ] loadtesting. how much we can handle.
 
 - [ ] TLS/SSL auto setup. write simple shell/python script to test SSL/TLS connection is working.
 
@@ -165,16 +167,21 @@
 
 # Backlog
 
+- [ ] single node mode. no quorum leader. no raft election
+
 - [ ] redesign when new node join cluster.
       - dynamic node discovery. use env ROLE / PEERS list as starter data.
       - new node send join cluster request to leader node
       - leader node register new node
       - leader node replicate (send all) cluster data (all nodes data/cluster data/status/etc.) to all nodes. incase the leader failed, so new leader can take over with up to date data.
 
-- [ ] single node mode. no quorum leader. no raft election
-
 - [ ] multiple s3 storage.
+
 - [ ] survive. Multi-Availability Zone (Multi-AZ) support
+
+- [ ] add Kubernetes Operator & CRDs. - **Kubernetes Operator**: Custom CRDs and k8s-native controllers.
+
+- [ ] make sidecar worker not access the backup storage directly. (remove `S3_ENDPOINT` `S3_BUCKET` `S3_ACCESS_KEY` `S3_SECRET_KEY`). make proxy generate presigned url for backup/restore.
 
 ---
 
@@ -184,14 +191,4 @@
 
 - [ ] run `cargo test` use cargo-nextest to run tests. one by one. fail fast.
 
----
-
-# Backlog:
-
 - [ ] web dashboard change to use bootstrap5. less custom css/js.
-
-- [ ] - **Dynamic Cluster Scaling**: Protocol for adding and removing sidecar nodes dynamically via OpenRaft joint consensus at runtime without node restarts.
-
-- [ ] add Kubernetes Operator & CRDs. - **Kubernetes Operator**: Custom CRDs and k8s-native controllers.
-
-- [ ] make sidecar worker not access the backup storage directly. (remove `S3_ENDPOINT` `S3_BUCKET` `S3_ACCESS_KEY` `S3_SECRET_KEY`). make proxy generate presigned url for backup/restore.

@@ -5,8 +5,6 @@
 
 **PgVisor** is a lightweight, developer-friendly PostgreSQL High Availability cluster supervisor and proxy — built entirely in pure Rust. It replaces the operational sprawl of Patroni + PgBouncer + Etcd + pgBackRest with a single, unified binary architecture that just works.
 
-> Built for developers who want HA PostgreSQL without the complexity.
-
 ---
 
 ## Features
@@ -59,10 +57,10 @@ PgVisor provides a production-like 3-node PostgreSQL 18 High-Availability (HA) c
 To bootstrap a complete 3-node HA PostgreSQL cluster with S3 backup storage and L7 proxy:
 
 ```bash
+cd examples/
 ./setup.sh
 ```
 
-*(Alternatively, from inside the `examples/` directory: `cd examples && ./setup.sh`)*
 
 The bootstrap script will:
 1. Initialize environment configuration from `examples/.env.example` into `examples/.env`.

@@ -25,3 +25,5 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 pgwire = { workspace = true }
+croner = { workspace = true }
+opendal = { workspace = true }

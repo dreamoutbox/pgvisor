@@ -283,8 +283,8 @@ pub trait BackupService: Send + Sync {
         &self,
         snapshot_id: &str,
     ) -> Result<(BasebackupMeta, Vec<u8>), String>;
-    fn storage_info(&self) -> (String, String, u32) {
-        ("http://127.0.0.1:9000".into(), "pgvisor-backups".into(), 7)
+    fn storage_info(&self) -> (String, String, u32, Option<usize>) {
+        ("http://127.0.0.1:9000".into(), "pgvisor-backups".into(), 7, Some(10))
     }
 }
 
@@ -293,6 +293,7 @@ pub struct StandaloneBackupService {
     backups: Arc<RwLock<Vec<BasebackupMeta>>>,
     endpoint: String,
     bucket: String,
+    operation_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl StandaloneBackupService {
@@ -306,6 +307,7 @@ impl StandaloneBackupService {
                 start_wal: "000000010000000000000001".into(),
                 stop_wal: Some("000000010000000000000002".into()),
                 total_bytes: 14_850_000,
+                source_node: Some("pgvisor-node2".into()),
             },
             BasebackupMeta {
                 snapshot_id: "snap-20260904-210000".into(),
@@ -315,12 +317,14 @@ impl StandaloneBackupService {
                 start_wal: "000000010000000000000003".into(),
                 stop_wal: Some("000000010000000000000004".into()),
                 total_bytes: 2_450_000,
+                source_node: Some("pgvisor-node3".into()),
             },
         ];
         Self {
             backups: Arc::new(RwLock::new(initial)),
             endpoint: "http://127.0.0.1:9000".into(),
             bucket: "pgvisor-backups".into(),
+            operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 }
@@ -344,6 +348,10 @@ impl BackupService for StandaloneBackupService {
         backup_type: BackupType,
         label: Option<String>,
     ) -> Result<BasebackupMeta, String> {
+        let _guard = self.operation_lock.try_lock().map_err(|_| {
+            "A backup or restore operation is already in progress. Please wait for the current operation to complete.".to_string()
+        })?;
+
         let now = Utc::now();
         let meta = BasebackupMeta {
             snapshot_id: format!("snap-{}", now.format("%Y%m%d-%H%M%S")),
@@ -356,6 +364,7 @@ impl BackupService for StandaloneBackupService {
                 BackupType::Full => 15_200_000,
                 BackupType::Incremental => 1_850_000,
             },
+            source_node: Some("pgvisor-node2".into()),
         };
 
         let mut lock = self.backups.write().await;
@@ -379,6 +388,10 @@ impl BackupService for StandaloneBackupService {
         snapshot_id: &str,
         target_time: Option<String>,
     ) -> Result<String, String> {
+        let _guard = self.operation_lock.try_lock().map_err(|_| {
+            "A backup or restore operation is already in progress. Please wait for the current operation to complete.".to_string()
+        })?;
+
         let lock = self.backups.read().await;
         if let Some(b) = lock.iter().find(|b| b.snapshot_id == snapshot_id) {
             let b_type_str = match b.backup_type {
@@ -430,8 +443,8 @@ impl BackupService for StandaloneBackupService {
         Ok((meta, dummy_tar_gz))
     }
 
-    fn storage_info(&self) -> (String, String, u32) {
-        (self.endpoint.clone(), self.bucket.clone(), 7)
+    fn storage_info(&self) -> (String, String, u32, Option<usize>) {
+        (self.endpoint.clone(), self.bucket.clone(), 7, Some(10))
     }
 }
 
@@ -1484,7 +1497,7 @@ pub async fn get_backups_page(
         .list_backups()
         .await
         .unwrap_or_default();
-    let (storage_endpoint, storage_bucket, retention_days) = state.backup_service.storage_info();
+    let (storage_endpoint, storage_bucket, retention_days, keep_count) = state.backup_service.storage_info();
 
     let total_bytes: u64 = list.iter().map(|b| b.total_bytes).sum();
     let latest_backup = list
@@ -1496,6 +1509,7 @@ pub async fn get_backups_page(
         latest_backup,
         total_size_pretty: format_bytes(total_bytes),
         retention_days,
+        keep_count,
         storage_endpoint,
         storage_bucket,
     };
@@ -1516,6 +1530,7 @@ pub async fn get_backups_page(
                 stop_wal: b.stop_wal.unwrap_or_else(|| "-".to_string()),
                 size_pretty: format_bytes(b.total_bytes),
                 total_bytes: b.total_bytes,
+                source_node: b.source_node,
             }
         })
         .collect();
@@ -1554,7 +1569,13 @@ pub async fn api_create_backup(
         .backup_service
         .create_backup(b_type, payload.label)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(|e| {
+            if e.contains("already in progress") {
+                (StatusCode::CONFLICT, e)
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e)
+            }
+        })?;
 
     {
         let mut overview = state.overview.write().await;
@@ -1600,7 +1621,13 @@ pub async fn api_restore_backup(
         .backup_service
         .restore_backup(&snapshot_id, payload.recovery_target_time)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(|e| {
+            if e.contains("already in progress") {
+                (StatusCode::CONFLICT, e)
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e)
+            }
+        })?;
 
     Ok(Json(serde_json::json!({
         "status": "success",
@@ -1618,7 +1645,13 @@ pub async fn api_quick_restore(
         .backup_service
         .quick_restore(&payload.recovery_target_time)
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+        .map_err(|e| {
+            if e.contains("already in progress") {
+                (StatusCode::CONFLICT, e)
+            } else {
+                (StatusCode::BAD_REQUEST, e)
+            }
+        })?;
 
     Ok(Json(QuickRestoreResponse {
         status: "success".to_string(),
