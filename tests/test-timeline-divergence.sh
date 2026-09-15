@@ -178,6 +178,25 @@ assert_row_count() {
     return 1
 }
 
+# Helper to poll and assert golf row count in pgvisor_demo table
+assert_golf_count() {
+    local expected="$1"
+    local timeout_secs="${2:-15}"
+    local count=""
+    local deadline=$(( $(date +%s) + timeout_secs ))
+
+    while [ "$(date +%s)" -lt "${deadline}" ]; do
+        count=$(run_sql "SELECT COUNT(*) FROM pgvisor_demo WHERE name = 'golf';" 2>/dev/null || true)
+        if [ "${count}" = "${expected}" ]; then
+            return 0
+        fi
+        sleep 1
+    done
+
+    echo "FAIL: Expected ${expected} 'golf' rows in pgvisor_demo within ${timeout_secs}s, got '${count}'" >&2
+    return 1
+}
+
 # Helper to assert that /tables endpoint responds fast without hanging
 assert_tables_fast() {
     local max_secs="${1:-5}"
@@ -306,11 +325,7 @@ assert_healthy_nodes 3 30
 
 # Verify row count is 6 (alpha..foxtrot present, golf omitted)
 assert_row_count 6 30
-GOLF_COUNT=$(run_sql "SELECT COUNT(*) FROM pgvisor_demo WHERE name = 'golf';")
-if [ "${GOLF_COUNT}" != "0" ]; then
-    echo "FAIL: 'golf' row found after PITR restore (expected 0, got ${GOLF_COUNT})" >&2
-    exit 1
-fi
+assert_golf_count 0 15
 echo "✓ Step 1 verified: exactly 6 rows present, 'golf' excluded, cluster forked to Timeline 2."
 
 # ------------------------------------------------------------------------------
@@ -333,11 +348,7 @@ assert_healthy_nodes 3 30
 
 # Verify row count is 7 ('golf' is present on Timeline 1)
 assert_row_count 7 30
-GOLF_COUNT=$(run_sql "SELECT COUNT(*) FROM pgvisor_demo WHERE name = 'golf';")
-if [ "${GOLF_COUNT}" != "1" ]; then
-    echo "FAIL: 'golf' row missing after incr2 restore (expected 1, got ${GOLF_COUNT})" >&2
-    exit 1
-fi
+assert_golf_count 1 15
 echo "✓ Step 2 verified: all 7 rows restored, standbys synchronized cleanly on Timeline 1."
 
 # ------------------------------------------------------------------------------
@@ -362,11 +373,7 @@ assert_healthy_nodes 3 30
 
 # 3. Row count must be exactly 6 ('golf' excluded)
 assert_row_count 6 30
-GOLF_COUNT=$(run_sql "SELECT COUNT(*) FROM pgvisor_demo WHERE name = 'golf';")
-if [ "${GOLF_COUNT}" != "0" ]; then
-    echo "FAIL: 'golf' row found after repeated PITR restore (expected 0, got ${GOLF_COUNT})" >&2
-    exit 1
-fi
+assert_golf_count 0 15
 
 # 4. Web Dashboard /tables must load immediately and not hang for 30 seconds
 assert_tables_fast 5

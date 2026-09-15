@@ -205,7 +205,15 @@ if [[ "${WRITE_SUCCESS}" != "true" ]]; then
     exit 1
 fi
 
-TOTAL_ROWS=$(run_proxy_sql "SELECT count(*) FROM ${TABLE_NAME};")
+TOTAL_ROWS=""
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    TOTAL_ROWS=$(run_proxy_sql "SELECT count(*) FROM ${TABLE_NAME};" 2>/dev/null || true)
+    if [[ "${TOTAL_ROWS}" == "2" ]]; then
+        break
+    fi
+    sleep 1
+done
+
 if [[ "${TOTAL_ROWS}" != "2" ]]; then
     echo "ERROR: Expected 2 rows after failover write, got: ${TOTAL_ROWS}"
     start_node "${NODE1_CONTAINER}" "${PROJECT_NAME}" "${COMPOSE_FILE}" pgvisor-node1

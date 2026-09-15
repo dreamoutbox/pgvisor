@@ -206,7 +206,15 @@ echo "+ Leader now actively streams WAL to 3 connected standby replicas."
 echo ""
 echo "[7/10] Writing post-scale data ('t1_post_scale') through proxy..."
 run_proxy_sql "INSERT INTO ${TABLE_NAME} (val) VALUES ('t1_post_scale');" > /dev/null
-TOTAL_ROWS=$(run_proxy_sql "SELECT count(*) FROM ${TABLE_NAME};")
+TOTAL_ROWS=""
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    TOTAL_ROWS=$(run_proxy_sql "SELECT count(*) FROM ${TABLE_NAME};" 2>/dev/null || true)
+    if [[ "${TOTAL_ROWS}" == "2" ]]; then
+        break
+    fi
+    sleep 1
+done
+
 if [[ "${TOTAL_ROWS}" != "2" ]]; then
     echo "ERROR: Expected 2 rows in ${TABLE_NAME} via proxy, got: ${TOTAL_ROWS}"
     exit 1

@@ -168,13 +168,21 @@ echo ""
 echo "[5/11] Writing post-failover data at T1 ('t1_post_failover') via proxy..."
 sleep 2
 run_proxy_sql "INSERT INTO ${TABLE_NAME} (val) VALUES ('t1_post_failover');" > /dev/null
-TOTAL_ROWS=$(run_proxy_sql "SELECT count(*) FROM ${TABLE_NAME};")
+TOTAL_ROWS=""
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    TOTAL_ROWS=$(run_proxy_sql "SELECT count(*) FROM ${TABLE_NAME};" 2>/dev/null || true)
+    if [[ "${TOTAL_ROWS}" == "2" ]]; then
+        break
+    fi
+    sleep 1
+done
+
 if [[ "${TOTAL_ROWS}" != "2" ]]; then
     echo "ERROR: Expected 2 rows after post-failover write, got: ${TOTAL_ROWS}"
     start_node "${NODE1_CONTAINER}" "${PROJECT_NAME}" "${COMPOSE_FILE}" pgvisor-node1
     exit 1
 fi
-echo "+ Post-failover write completed via proxy. Total rows in leader = ${TOTAL_ROWS}"
+echo "+ Post-failover write completed via proxy. Total rows = ${TOTAL_ROWS}"
 
 echo ""
 echo "[6/11] Verifying surviving standby (${SURVIVING_STANDBY}) receives replication..."

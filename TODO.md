@@ -111,7 +111,7 @@
       - backup success/fail rate
       - replication lag
 
-- [ ] fix Failed Tests:
+- [x] fix Failed Tests:
       1st run:      
             - test-failover.sh (38s)  
             - test-auto-rejoin.sh (34s)  
@@ -130,16 +130,22 @@
             - test-timeline-divergence.sh (204s)
 
       run test with `./test.sh -j 5`
-      flaky tests:
+      different failed tests in different runs come from following flaky tests:
       - test-timeline-divergence.sh
       - test-double-failure.sh
       - test-add-node.sh 
-      different failed tests in different runs come from flaky tests. 
-      we should fix it.
-
+      
 - [ ] start/stop/restart node from web dashboard.
 
-- [ ] manage database and execute backup/restore with cli
+- [ ] assert restore perform on primary. backup perform on follower nodes
+
+- [ ] mutex lock on backup/restore prevent concurrent actions. like 2 users clicking backup/restore on web dashboard on the same time.
+
+- [ ] CRON auto run backup
+
+- [ ] config backup snapshots keep count. retention days.
+
+- [ ] upload backup file from local computer, save to S3 and restore. 
 
 - [x] demo PgVisor.
     - [x] setup.
@@ -147,7 +153,26 @@
     - [ ] backup/restore
     - [ ] testing node down.
 
-- [ ] secure proxy to sidecar worker over network with password/private key
+- [ ] TLS/SSL auto setup. write simple shell/python script to test SSL/TLS connection is working.
+
+- [ ] manage database and execute backup/restore with cli
+
+- [ ] secure proxy to sidecar worker communication over network with password/private key
+
+---
+
+# Backlog
+
+- [ ] redesign when new node join cluster.
+      - dynamic node discovery. use env ROLE / PEERS list as starter data.
+      - new node send join cluster request to leader node
+      - leader node register new node
+      - leader node replicate (send all) cluster data (all nodes data/cluster data/status/etc.) to all nodes. incase the leader failed, so new leader can take over with up to date data.
+
+- [ ] single node mode. no quorum leader. no raft election
+
+- [ ] multiple s3 storage.
+- [ ] survive. Multi-Availability Zone (Multi-AZ) support
 
 ---
 

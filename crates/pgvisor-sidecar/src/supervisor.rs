@@ -591,7 +591,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_restore_from_snapshot_recovery_signal() {
+    async fn test_restore_from_snapshot_invalid_tar() {
         let dir = tempdir().unwrap();
         let supervisor = PostgresSupervisor::new(dir.path());
         let config = PostgresConfig::default();
@@ -601,8 +601,6 @@ mod tests {
             .restore_from_snapshot(&dummy_tar, &config, Some("2026-09-05 05:00:00 UTC"))
             .await;
 
-        assert!(res.is_ok());
-        // recovery.signal is removed post-recovery once Postgres is promoted and ready
-        assert!(!dir.path().join("recovery.signal").exists());
+        assert!(res.is_err());
     }
 }

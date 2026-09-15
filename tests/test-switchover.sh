@@ -227,7 +227,7 @@ echo ""
 echo "[8/12] Verifying streaming replication across both standbys (Node #1 and Node #3)..."
 for replica in "${NODE1_CONTAINER}" "${NODE3_CONTAINER}"; do
     REP_ROWS=""
-    for attempt in 1 2 3 4 5; do
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
         REP_ROWS=$(run_node_sql "${replica}" "SELECT count(*) FROM ${TABLE_NAME};")
         if [[ "${REP_ROWS}" == "2" ]]; then
             break
@@ -318,7 +318,7 @@ echo "+ Post-second-switchover write 'gamma_t2' succeeded via proxy."
 # Verify 3 rows on all nodes
 for container in "${NODE1_CONTAINER}" "${NODE2_CONTAINER}" "${NODE3_CONTAINER}"; do
     ROWS=""
-    for attempt in 1 2 3 4 5; do
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
         ROWS=$(run_node_sql "${container}" "SELECT count(*) FROM ${TABLE_NAME};")
         if [[ "${ROWS}" == "3" ]]; then
             break

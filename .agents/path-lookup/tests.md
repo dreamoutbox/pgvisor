@@ -52,3 +52,13 @@
 - `crates/pgvisor-proxy/src/main.rs` = proxy discovery loop preserving discovered leader while in `"restoring"` status and passing configured standbys.
 - `tests/test-backup-restore.sh` = similar restore+verify pattern; apply the same retry budget if it shows similar flakiness.
 - `tests/lib/cluster.sh` = `wait_for_proxy_ready` and `wait_for_healthy` container health helpers.
+
+### If you want to fix flaky test assertions from read/write splitting, replication lag, or standby timeline divergence, then check:
+
+- `crates/pgvisor-sidecar/src/config.rs` = omits `recovery_target_timeline = 'current'` and `restore_command` for streaming standbys so standbys can follow promoted leaders to new timelines without archive conflicts.
+- `tests/test-failover.sh` = polling retry loop for post-failover row count verification via proxy.
+- `tests/test-auto-rejoin.sh` = polling retry loop for post-failover write row count verification via proxy.
+- `tests/test-switchover.sh` = 10-attempt polling retry budget for streaming replication across standbys after primary switchovers.
+- `tests/test-double-failure.sh` = polling retry loops for `COUNT_T1` and `COUNT_T2` proxy row counts after quorum rejoin.
+- `tests/test-add-node.sh` = polling retry loop for post-scale proxy write verification.
+- `tests/test-timeline-divergence.sh` = `assert_golf_count` polling helper preventing microsecond race conditions across round-robin standbys.

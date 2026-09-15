@@ -281,7 +281,15 @@ if [[ "${WRITE_SUCCESS}" != "true" ]]; then
     exit 1
 fi
 
-COUNT_T1=$(run_proxy_sql "SELECT count(*) FROM ${TABLE_NAME};")
+COUNT_T1=""
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    COUNT_T1=$(run_proxy_sql "SELECT count(*) FROM ${TABLE_NAME};" 2>/dev/null || true)
+    if [[ "${COUNT_T1}" == "2" ]]; then
+        break
+    fi
+    sleep 1
+done
+
 if [[ "${COUNT_T1}" != "2" ]]; then
     echo "ERROR: Expected 2 rows after first rejoin write, got: ${COUNT_T1}"
     exit 1
@@ -339,7 +347,15 @@ if [[ "${WRITE_SUCCESS2}" != "true" ]]; then
     exit 1
 fi
 
-COUNT_T2=$(run_proxy_sql "SELECT count(*) FROM ${TABLE_NAME};")
+COUNT_T2=""
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    COUNT_T2=$(run_proxy_sql "SELECT count(*) FROM ${TABLE_NAME};" 2>/dev/null || true)
+    if [[ "${COUNT_T2}" == "3" ]]; then
+        break
+    fi
+    sleep 1
+done
+
 if [[ "${COUNT_T2}" != "3" ]]; then
     echo "ERROR: Expected 3 rows after second rejoin write, got: ${COUNT_T2}"
     exit 1

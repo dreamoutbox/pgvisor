@@ -83,7 +83,11 @@ impl ConfigGenerator {
         }
 
         if let Some(restore_cmd) = &config.restore_command {
-            conf_content.push_str(&format!("restore_command = '{restore_cmd}'\n"));
+            // Standbys streaming from primary must NOT use restore_command pointing to
+            // shared archive, preventing standby crashes from orphaned/divergent timeline history files.
+            if config.primary_conninfo.is_none() {
+                conf_content.push_str(&format!("restore_command = '{restore_cmd}'\n"));
+            }
         }
 
         if let Some(target_time) = &config.recovery_target_time {
@@ -106,7 +110,6 @@ impl ConfigGenerator {
 
         if let Some(primary_info) = &config.primary_conninfo {
             conf_content.push_str(&format!("primary_conninfo = '{primary_info}'\n"));
-            conf_content.push_str("recovery_target_timeline = 'current'\n");
             // Standby indicator file
             let standby_signal = dir.join("standby.signal");
             File::create(standby_signal)?;
@@ -171,13 +174,15 @@ mod tests {
         let config = PostgresConfig {
             port: 5433,
             primary_conninfo: Some("host=127.0.0.1 port=5432 user=postgres".into()),
+            restore_command: Some("pgvisor-sidecar restore %f %p".into()),
             ..Default::default()
         };
 
         ConfigGenerator::write_configs(dir.path(), &config).unwrap();
         let conf = fs::read_to_string(dir.path().join("postgresql.conf")).unwrap();
         assert!(conf.contains("primary_conninfo = 'host=127.0.0.1 port=5432 user=postgres'"));
-        assert!(conf.contains("recovery_target_timeline = 'current'"));
+        assert!(!conf.contains("recovery_target_timeline = 'current'"));
+        assert!(!conf.contains("restore_command"));
         assert!(dir.path().join("standby.signal").exists());
         assert!(!dir.path().join("recovery.signal").exists());
     }
