@@ -26,6 +26,8 @@
 - `tests/test-node-lifecycle.sh` = self-contained node start/stop/restart verification test (port 7132; tests stopping standby, pool continuity, starting standby, restart, error handling 400/404, and audit events).
 - `tests/test-restart-leader.sh` = self-contained stopped leader restart and standby rejoin test (port 7232; stops leader Node 1, waits for standby failover, starts Node 1, asserts no split-brain crash, and verifies replication catch-up).
 - `tests/test-promoted-restore.sh` = self-contained promoted leader snapshot restore regression test (port 7332; stops leader Node 1, asserts Node 2 auto-promotes, restores incremental snapshot without PITR target time, asserts Node 2 boots as read-write primary with zero recovery spam, and verifies replica re-sync).
+- `dev-loadtest.sh` = standalone load testing and capacity benchmark runner using pgbench (port 7432; outputs markdown reports into `tests/load/`).
+- `composes/docker-compose.load.yml` = isolated test compose file for load testing with 1 CPU and 1GB RAM limits.
 - `composes/docker-compose.proxy-failover-proxy2.yml` = compose overlay defining the second proxy (pgvisor-proxy2) on ports 6833/9481.
 - `reset-docker-compose.sh` = developer cluster reset script; builds images by default, supports `--no-build` and `-s`/`--silent`.
 - `dev-dump-logs.sh` = developer helper script to dump logs from pgvisor nodes 1-3 into `logs/` directory, supporting timestamps, tail, and proxy/minio options.

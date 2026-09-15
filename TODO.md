@@ -147,7 +147,11 @@
 - [x] mutex lock on backup/restore prevent concurrent actions. like 2 users clicking backup/restore on web dashboard on the same time.
 - [x] add test. assert restore perform on primary. backup perform on follower nodes to reduce the primary node load.
 
-- [ ] upload backup file from local computer, save to S3 and restore. 
+- [x] loadtesting. how much we can handle. (implemented in `dev-loadtest.sh`, outputs reports to `tests/load/`)
+
+- [ ] fix tests/test-switchover.sh
+
+- [ ] upload backup file from local computer, save to S3.
 
 - [x] demo PgVisor.
     - [x] setup.
@@ -155,17 +159,15 @@
     - [ ] backup/restore
     - [ ] testing node down.
 
-- [ ] loadtesting. how much we can handle.
-
 - [ ] TLS/SSL auto setup. write simple shell/python script to test SSL/TLS connection is working.
-
-- [ ] manage database and execute backup/restore with cli
 
 - [ ] secure proxy to sidecar worker communication over network with password/private key
 
 ---
 
 # Backlog
+
+- [ ] manage database and execute backup/restore with cli
 
 - [ ] single node mode. no quorum leader. no raft election
 

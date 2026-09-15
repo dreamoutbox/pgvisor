@@ -5,3 +5,5 @@ logs/
 debug/
 .env
 knowledges/how-new-node-join-cluster.md
+plans/
+
