@@ -397,6 +397,12 @@ impl PostgresSupervisor {
         *st
     }
 
+    /// Updates supervisor process status.
+    pub async fn set_status(&self, status: ProcessStatus) {
+        let mut st = self.status.lock().await;
+        *st = status;
+    }
+
     /// Returns the monitored child PID, or 0 if not running.
     pub fn child_pid(&self) -> u32 {
         self.child_pid.load(Ordering::SeqCst)
@@ -554,6 +560,19 @@ impl PostgresSupervisor {
             *st = ProcessStatus::Restoring;
         }
 
+        let res = self.resync_from_primary_inner(primary_conninfo, config).await;
+        if res.is_err() {
+            let mut st = self.status.lock().await;
+            *st = ProcessStatus::Fenced;
+        }
+        res
+    }
+
+    async fn resync_from_primary_inner(
+        &self,
+        primary_conninfo: &str,
+        config: &PostgresConfig,
+    ) -> Result<(), SupervisorError> {
         // 2. Wait for primary to accept replication connections BEFORE wiping local data
         let mut retries = 15;
         while retries > 0 {

@@ -226,6 +226,8 @@ async fn handle_demote(
         )
     })?;
 
+    state.supervisor.set_status(ProcessStatus::Fenced).await;
+
     {
         let mut r = state.role.write().await;
         *r = "fenced".to_string();
@@ -946,15 +948,19 @@ async fn main() -> Result<()> {
                 interval.tick().await;
 
                 let local_status = monitor_state.supervisor.status().await;
-                if local_status == ProcessStatus::Restoring
-                    || local_status == ProcessStatus::Stopped
-                {
-                    // Node is actively restoring, re-syncing, or intentionally stopped; pause auto-failover actions
+                if local_status == ProcessStatus::Restoring {
+                    // Node is actively restoring or re-syncing; pause auto-failover actions
                     missed_heartbeats = 0;
                     continue;
                 }
 
                 let local_role = monitor_state.role.read().await.clone();
+                if local_status == ProcessStatus::Stopped && local_role != "fenced" {
+                    // Node is intentionally stopped; pause auto-failover actions
+                    missed_heartbeats = 0;
+                    continue;
+                }
+
                 if local_role == "fenced" {
                     // Check if an active leader is operating and available for auto-rejoin
                     let mut active_leader: Option<(u64, String)> = None;

@@ -15,3 +15,10 @@
 - `crates/pgvisor-sidecar/src/main.rs` = `start_postgres_safely` pre-start peer leader discovery, `handle_repoint` accepting repoint while stopped/fenced (guards leader-down highlight to running nodes only), and `SidecarState.peers`
 - `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor::repoint_primary` (skips `pg_ctl reload` if Postgres is not running), `wait_ready`, preserving `ProcessStatus::Fenced`, and fallback to `resync_from_primary`
 - `tests/test-restart-leader.sh` = Integration test verifying leader stop, failover to standby, leader restart without split-brain, and streaming replication catch-up
+
+### If you want to modify manual leader switchover, demoted leader fencing, or auto-rejoin as standby, then check:
+
+- `crates/pgvisor-sidecar/src/main.rs` = `handle_demote` setting `ProcessStatus::Fenced` and background election monitor loop allowing fenced nodes to auto-rejoin under active leader
+- `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor::set_status` and `resync_from_primary` resetting status on error
+- `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService::switchover` orchestrating demotion of current leader, promotion of target standby, and repointing of remaining standbys
+- `tests/test-switchover.sh` = Integration test verifying graceful switchover, demoted leader auto-rejoin, streaming replication, and second reverse switchover

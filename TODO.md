@@ -149,15 +149,20 @@
 
 - [x] loadtesting. how much we can handle. (implemented in `dev-loadtest.sh`, outputs reports to `tests/load/`)
 
-- [ ] fix tests/test-switchover.sh
+- [x] fix tests/test-switchover.sh
 
-- [ ] upload backup file from local computer, save to S3.
+- [ ] add backup metadata.json. inside backup dir. 
+- [ ] user manually upload backup file to s3, then restore with web dashboard.
+
+- [ ] store multiple audit logs in a json file. rotate if too large.
 
 - [x] demo PgVisor.
     - [x] setup.
     - [ ] adding new node.
     - [ ] backup/restore
     - [ ] testing node down.
+
+- [ ] prevent invalid PITR input error make database can’t start (error → offline hang not restart). 
 
 - [ ] TLS/SSL auto setup. write simple shell/python script to test SSL/TLS connection is working.
 
