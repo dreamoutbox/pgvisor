@@ -186,6 +186,13 @@ impl BackupService for ProxyBackupService {
             .await
             .map_err(|e| format!("Failed to save basebackup to OpenDAL: {}", e))?;
 
+        let b_type_str = match backup_type {
+            BackupType::Full => "FULL BACKUP",
+            BackupType::Incremental => "INCREMENTAL BACKUP",
+        };
+        let backup_name = meta.label.as_deref().unwrap_or(&meta.snapshot_id);
+        pgvisor_core::log_highlight(&pgvisor_core::format_backup_highlight(b_type_str, backup_name));
+
         info!(snapshot_id = %meta.snapshot_id, bytes = total_bytes, "Basebackup saved and registered successfully");
 
         if let Some(audit) = self.audit_log.as_ref() {
@@ -213,6 +220,40 @@ impl BackupService for ProxyBackupService {
         snapshot_id: &str,
         target_time: Option<String>,
     ) -> Result<String, String> {
+        let (b_type_str, backup_name) = if let Ok(list) = self.backup_manager.list_basebackups().await {
+            if let Some(m) = list
+                .iter()
+                .find(|b| b.snapshot_id == snapshot_id || b.label.as_deref() == Some(snapshot_id))
+            {
+                let t = match m.backup_type {
+                    BackupType::Full => "FULL BACKUP",
+                    BackupType::Incremental => "INCREMENTAL BACKUP",
+                };
+                let name = m.label.as_deref().unwrap_or(&m.snapshot_id).to_string();
+                (t, name)
+            } else {
+                let t = if snapshot_id.contains("incr") {
+                    "INCREMENTAL BACKUP"
+                } else {
+                    "FULL BACKUP"
+                };
+                (t, snapshot_id.to_string())
+            }
+        } else {
+            let t = if snapshot_id.contains("incr") {
+                "INCREMENTAL BACKUP"
+            } else {
+                "FULL BACKUP"
+            };
+            (t, snapshot_id.to_string())
+        };
+
+        pgvisor_core::log_highlight(&pgvisor_core::format_restore_highlight(
+            b_type_str,
+            &backup_name,
+            target_time.as_deref(),
+        ));
+
         info!(
             snapshot_id,
             ?target_time,

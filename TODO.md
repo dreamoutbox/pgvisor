@@ -137,15 +137,12 @@
 
 - [x] start/stop/restart node from web dashboard.
 
-- [ ] add log text to highligt `start/stop/backup/restore/listen to new leader` with input value 
+- [x] add log text to highligt `start/stop/backup/restore/listen to new leader` with input value 
 
 - [ ] config backup snapshots keep count. retention days.
-
 - [ ] CRON auto run backup
-
-- [ ] assert restore perform on primary. backup perform on follower nodes
-
 - [ ] mutex lock on backup/restore prevent concurrent actions. like 2 users clicking backup/restore on web dashboard on the same time.
+- [ ] add test. assert restore perform on primary. backup perform on follower nodes to reduce the primary node load.
 
 - [ ] upload backup file from local computer, save to S3 and restore. 
 

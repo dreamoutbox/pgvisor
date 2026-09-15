@@ -12,6 +12,6 @@
 
 ### If you want to modify stopped leader restart, standby repoint, or split-brain prevention on startup, then check:
 
-- `crates/pgvisor-sidecar/src/main.rs` = `start_postgres_safely` pre-start peer leader discovery, `handle_repoint` accepting repoint while stopped/fenced, and `SidecarState.peers`
-- `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor::repoint_primary`, `wait_ready`, preserving `ProcessStatus::Fenced`, and fallback to `resync_from_primary`
+- `crates/pgvisor-sidecar/src/main.rs` = `start_postgres_safely` pre-start peer leader discovery, `handle_repoint` accepting repoint while stopped/fenced (guards leader-down highlight to running nodes only), and `SidecarState.peers`
+- `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor::repoint_primary` (skips `pg_ctl reload` if Postgres is not running), `wait_ready`, preserving `ProcessStatus::Fenced`, and fallback to `resync_from_primary`
 - `tests/test-restart-leader.sh` = Integration test verifying leader stop, failover to standby, leader restart without split-brain, and streaming replication catch-up

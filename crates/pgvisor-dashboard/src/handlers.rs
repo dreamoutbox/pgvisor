@@ -360,6 +360,17 @@ impl BackupService for StandaloneBackupService {
 
         let mut lock = self.backups.write().await;
         lock.push(meta.clone());
+
+        let b_type_str = match backup_type {
+            BackupType::Full => "FULL BACKUP",
+            BackupType::Incremental => "INCREMENTAL BACKUP",
+        };
+        let backup_name = meta.label.as_deref().unwrap_or(&meta.snapshot_id);
+        pgvisor_core::log_highlight(&pgvisor_core::format_backup_highlight(
+            b_type_str,
+            backup_name,
+        ));
+
         Ok(meta)
     }
 
@@ -369,7 +380,18 @@ impl BackupService for StandaloneBackupService {
         target_time: Option<String>,
     ) -> Result<String, String> {
         let lock = self.backups.read().await;
-        if lock.iter().any(|b| b.snapshot_id == snapshot_id) {
+        if let Some(b) = lock.iter().find(|b| b.snapshot_id == snapshot_id) {
+            let b_type_str = match b.backup_type {
+                BackupType::Full => "FULL BACKUP",
+                BackupType::Incremental => "INCREMENTAL BACKUP",
+            };
+            let backup_name = b.label.as_deref().unwrap_or(&b.snapshot_id);
+            pgvisor_core::log_highlight(&pgvisor_core::format_restore_highlight(
+                b_type_str,
+                backup_name,
+                target_time.as_deref(),
+            ));
+
             let detail = target_time
                 .map(|t| format!(" (PITR target: {})", t))
                 .unwrap_or_default();
@@ -446,6 +468,15 @@ impl ClusterService for StandaloneClusterService {
             }
         }
         ov.leader_id = Some(target_node_id);
+
+        let old_node = prev
+            .map(|id| format!("node{}", id))
+            .unwrap_or_else(|| "node1".to_string());
+        let new_node = format!("node{}", target_node_id);
+        pgvisor_core::log_highlight(&pgvisor_core::format_leader_down_highlight(
+            &old_node, &new_node,
+        ));
+
         Ok(SwitchoverResponse {
             status: "ok".into(),
             message: format!("Switched over leader to Node #{}", target_node_id),
@@ -461,6 +492,7 @@ impl ClusterService for StandaloneClusterService {
                 return Err(format!("Node #{} is already running", node_id));
             }
             node.state = NodeHealthState::Healthy;
+            pgvisor_core::log_highlight("START NODE");
             Ok(NodeActionResponse {
                 status: "ok".into(),
                 message: format!("Node #{} started successfully", node_id),
@@ -479,6 +511,7 @@ impl ClusterService for StandaloneClusterService {
                 return Err(format!("Node #{} is already stopped", node_id));
             }
             node.state = NodeHealthState::Stopped;
+            pgvisor_core::log_highlight("STOP NODE");
             Ok(NodeActionResponse {
                 status: "ok".into(),
                 message: format!("Node #{} stopped cleanly", node_id),

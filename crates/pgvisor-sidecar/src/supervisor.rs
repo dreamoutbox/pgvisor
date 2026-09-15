@@ -148,6 +148,10 @@ impl PostgresSupervisor {
             }
         }
 
+        if *self.status.lock().await != ProcessStatus::Restoring {
+            pgvisor_core::log_highlight("START NODE");
+        }
+
         ConfigGenerator::write_configs(&self.data_dir, config)?;
 
         info!(dir = ?self.data_dir, "Spawning postgres process");
@@ -233,27 +237,37 @@ impl PostgresSupervisor {
 
         tokio::fs::write(&auto_conf_path, line.as_bytes()).await?;
 
-        // Signal reload to running PostgreSQL WAL receiver
-        let status = Command::new("pg_ctl")
-            .arg("reload")
-            .arg("-D")
-            .arg(&self.data_dir)
-            .status()
-            .await;
+        // Signal reload to running PostgreSQL WAL receiver only if Postgres is currently running
+        let is_running = {
+            let st = self.status.lock().await;
+            *st == ProcessStatus::Running
+        };
 
-        if let Ok(s) = status {
-            if s.success() {
-                info!("PostgreSQL primary_conninfo reloaded successfully");
-                return Ok(());
+        if is_running {
+            let status = Command::new("pg_ctl")
+                .arg("reload")
+                .arg("-D")
+                .arg(&self.data_dir)
+                .status()
+                .await;
+
+            if let Ok(s) = status {
+                if s.success() {
+                    info!("PostgreSQL primary_conninfo reloaded successfully");
+                    return Ok(());
+                }
             }
-        }
 
-        warn!("pg_ctl reload did not succeed cleanly, checking process status");
+            warn!("pg_ctl reload did not succeed cleanly, checking process status");
+        } else {
+            info!(dir = ?self.data_dir, "PostgreSQL is not running, skipping pg_ctl reload");
+        }
         Ok(())
     }
 
     /// Immediately halts Postgres using `pg_ctl stop -m immediate` to prevent split-brain writes.
     pub async fn fence(&self) -> Result<(), SupervisorError> {
+        pgvisor_core::log_highlight("STOP NODE");
         warn!(dir = ?self.data_dir, "FENCING: executing immediate stop on Postgres");
         {
             let mut st = self.status.lock().await;
@@ -305,6 +319,10 @@ impl PostgresSupervisor {
                 info!(dir = ?self.data_dir, "PostgreSQL process is already stopped");
                 return Ok(());
             }
+        }
+
+        if *self.status.lock().await != ProcessStatus::Restoring {
+            pgvisor_core::log_highlight("STOP NODE");
         }
 
         info!(dir = ?self.data_dir, "Executing fast shutdown on Postgres");

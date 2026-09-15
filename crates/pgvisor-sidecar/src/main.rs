@@ -16,7 +16,11 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use config::PostgresConfig;
-use pgvisor_core::backup::{BackupManager, BackupScheduleConfig};
+use pgvisor_core::backup::{BackupManager, BackupScheduleConfig, BackupType};
+use pgvisor_core::{
+    extract_node_name, format_become_leader_highlight, format_leader_down_highlight,
+    format_restore_highlight, log_highlight,
+};
 use serde::{Deserialize, Serialize};
 use supervisor::{PostgresSupervisor, ProcessStatus};
 use tokio::signal::unix::{signal, SignalKind};
@@ -125,6 +129,26 @@ async fn handle_promote(
         node_id = state.node_id,
         "Handling manual/automated promotion request"
     );
+
+    let old_conninfo = state
+        .config
+        .read()
+        .await
+        .primary_conninfo
+        .clone()
+        .unwrap_or_default();
+    let old_node = extract_node_name(&old_conninfo);
+    let old_leader = if old_node == "unknown"
+        || old_node.is_empty()
+        || old_node == format!("node{}", state.node_id)
+    {
+        "node1".to_string()
+    } else {
+        old_node
+    };
+    let my_node = format!("node{}", state.node_id);
+    log_highlight(&format_become_leader_highlight(&old_leader, &my_node));
+
     state.supervisor.promote().await.map_err(|e| {
         (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -246,6 +270,24 @@ async fn handle_repoint(
         target_conninfo.push_str(&format!(" application_name=pgvisor-node{}", state.node_id));
     }
 
+    if current_status == ProcessStatus::Running {
+        let old_conninfo = state
+            .config
+            .read()
+            .await
+            .primary_conninfo
+            .clone()
+            .unwrap_or_default();
+        let old_node = extract_node_name(&old_conninfo);
+        let new_node = extract_node_name(&payload.primary_conninfo);
+        let old_leader = if old_node == "unknown" || old_node.is_empty() || old_node == new_node {
+            "node1".to_string()
+        } else {
+            old_node
+        };
+        log_highlight(&format_leader_down_highlight(&old_leader, &new_node));
+    }
+
     info!(node_id = state.node_id, conninfo = %target_conninfo, "Handling standby re-point request");
     state
         .supervisor
@@ -299,7 +341,7 @@ async fn handle_restore(
     })?;
 
     info!(snapshot_id = %payload.snapshot_id, "Fetching snapshot archive from storage");
-    let (_meta, tar_bytes) = bm.get_basebackup(&payload.snapshot_id).await.map_err(|e| {
+    let (meta, tar_bytes) = bm.get_basebackup(&payload.snapshot_id).await.map_err(|e| {
         (
             axum::http::StatusCode::NOT_FOUND,
             Json(serde_json::json!({
@@ -307,6 +349,17 @@ async fn handle_restore(
             })),
         )
     })?;
+
+    let b_type = match meta.backup_type {
+        BackupType::Full => "FULL BACKUP",
+        BackupType::Incremental => "INCREMENTAL BACKUP",
+    };
+    let name = meta.label.as_deref().unwrap_or(&payload.snapshot_id);
+    log_highlight(&format_restore_highlight(
+        b_type,
+        name,
+        payload.recovery_target_time.as_deref(),
+    ));
 
     info!(snapshot_id = %payload.snapshot_id, bytes = tar_bytes.len(), "Restoring PostgreSQL data directory");
     let cfg = state.config.read().await.clone();
@@ -1047,6 +1100,28 @@ async fn main() -> Result<()> {
                         if alive_nodes.len() >= quorum {
                             if let Some(&winner_id) = alive_nodes.first() {
                                 if winner_id == monitor_state.node_id {
+                                    let old_conninfo = monitor_state
+                                        .config
+                                        .read()
+                                        .await
+                                        .primary_conninfo
+                                        .clone()
+                                        .unwrap_or_default();
+                                    let old_node = extract_node_name(&old_conninfo);
+                                    let old_leader = if old_node == "unknown"
+                                        || old_node.is_empty()
+                                        || old_node == format!("node{}", monitor_state.node_id)
+                                    {
+                                        "node1".to_string()
+                                    } else {
+                                        old_node
+                                    };
+                                    let my_node = format!("node{}", monitor_state.node_id);
+                                    log_highlight(&format_become_leader_highlight(
+                                        &old_leader,
+                                        &my_node,
+                                    ));
+
                                     info!(
                                         node_id = monitor_state.node_id,
                                         "Quorum achieved and candidate ID matches: PROMOTING TO LEADER"

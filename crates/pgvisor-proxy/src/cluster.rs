@@ -63,7 +63,10 @@ impl ProxyClusterService {
         };
 
         for target in &targets {
-            let status_url = format!("{}/control/status", target.control_url.trim_end_matches('/'));
+            let status_url = format!(
+                "{}/control/status",
+                target.control_url.trim_end_matches('/')
+            );
             if let Ok(resp) = self.http_client.get(&status_url).send().await {
                 if let Ok(st) = resp.json::<NodeStatusResponse>().await {
                     if st.node_id == node_id {
@@ -73,7 +76,10 @@ impl ProxyClusterService {
             }
         }
 
-        Err(format!("Node #{} not found or sidecar not reachable", node_id))
+        Err(format!(
+            "Node #{} not found or sidecar not reachable",
+            node_id
+        ))
     }
 }
 
@@ -247,6 +253,14 @@ impl ClusterService for ProxyClusterService {
                 .await;
         }
 
+        let old_node = current_leader_id
+            .map(|id| format!("node{}", id))
+            .unwrap_or_else(|| "node1".to_string());
+        let new_node = format!("node{}", target_node_id);
+        pgvisor_core::log_highlight(&pgvisor_core::format_leader_down_highlight(
+            &old_node, &new_node,
+        ));
+
         Ok(SwitchoverResponse {
             status: "ok".into(),
             message: format!(
@@ -259,6 +273,7 @@ impl ClusterService for ProxyClusterService {
     }
 
     async fn start_node(&self, node_id: u64) -> Result<NodeActionResponse, String> {
+        pgvisor_core::log_highlight("START NODE");
         info!(node_id, "Executing start command on node");
         let (target, status) = self.find_target(node_id).await?;
         if status.status == "running" {
@@ -299,6 +314,7 @@ impl ClusterService for ProxyClusterService {
     }
 
     async fn stop_node(&self, node_id: u64) -> Result<NodeActionResponse, String> {
+        pgvisor_core::log_highlight("STOP NODE");
         info!(node_id, "Executing stop command on node");
         let (target, status) = self.find_target(node_id).await?;
         if status.status == "stopped" {
@@ -345,7 +361,10 @@ impl ClusterService for ProxyClusterService {
         info!(node_id, "Executing restart command on node");
         let (target, _status) = self.find_target(node_id).await?;
 
-        let restart_url = format!("{}/control/restart", target.control_url.trim_end_matches('/'));
+        let restart_url = format!(
+            "{}/control/restart",
+            target.control_url.trim_end_matches('/')
+        );
         let resp = self
             .http_client
             .post(&restart_url)

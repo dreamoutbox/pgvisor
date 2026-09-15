@@ -672,6 +672,18 @@ async fn main() -> Result<()> {
                 );
 
                 if leader_changed {
+                    if let Some(ref new_l) = discovered_leader {
+                        let old_node = current_leader
+                            .as_deref()
+                            .map(pgvisor_core::extract_node_name)
+                            .unwrap_or_else(|| "node1".to_string());
+                        let new_node = pgvisor_core::extract_node_name(new_l);
+                        if old_node != new_node {
+                            pgvisor_core::log_highlight(
+                                &pgvisor_core::format_leader_down_highlight(&old_node, &new_node),
+                            );
+                        }
+                    }
                     let mut l = leader_ref_monitor.write().await;
                     *l = discovered_leader.clone();
                 }
