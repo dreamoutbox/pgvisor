@@ -39,6 +39,7 @@ PROFILES = [
     ("timeline-divergence", "timeline-divergence", 7032, 9680, 10600, 10601),
     ("node-lifecycle", "node-lifecycle", 7132, 9780, 10700, 10701),
     ("restart-leader", "restart-leader", 7232, 9880, 10800, 10801),
+    ("promoted-restore", "promoted-restore", 7332, 9980, 10900, 10901),
 ]
 
 

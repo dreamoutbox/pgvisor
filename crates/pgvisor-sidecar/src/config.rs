@@ -207,4 +207,22 @@ mod tests {
         assert!(dir.path().join("recovery.signal").exists());
         assert!(!dir.path().join("standby.signal").exists());
     }
+
+    #[test]
+    fn test_write_primary_cleans_stale_standby_signal() {
+        let dir = tempdir().unwrap();
+        // Simulate pre-existing standby.signal
+        let standby_signal = dir.path().join("standby.signal");
+        fs::File::create(&standby_signal).unwrap();
+        assert!(standby_signal.exists());
+
+        let config = PostgresConfig {
+            port: 5432,
+            primary_conninfo: None,
+            ..Default::default()
+        };
+
+        ConfigGenerator::write_configs(dir.path(), &config).unwrap();
+        assert!(!standby_signal.exists());
+    }
 }

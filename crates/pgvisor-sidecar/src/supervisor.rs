@@ -219,6 +219,16 @@ impl PostgresSupervisor {
             )));
         }
 
+        // Clean up postgresql.auto.conf and standby.signal to ensure clean primary state
+        let auto_conf = self.data_dir.join("postgresql.auto.conf");
+        if auto_conf.exists() {
+            let _ = tokio::fs::remove_file(&auto_conf).await;
+        }
+        let standby_signal = self.data_dir.join("standby.signal");
+        if standby_signal.exists() {
+            let _ = tokio::fs::remove_file(&standby_signal).await;
+        }
+
         info!("PostgreSQL instance promoted to leader successfully");
         Ok(())
     }
@@ -289,6 +299,10 @@ impl PostgresSupervisor {
             match status {
                 Ok(s) if s.success() => {
                     info!("Postgres stopped immediately via pg_ctl");
+                    let mut active = self.active_child.lock().await;
+                    if let Some(mut child) = active.take() {
+                        let _ = child.wait().await;
+                    }
                 }
                 _ => {
                     // If pg_ctl fails, kill child process directly
@@ -337,7 +351,13 @@ impl PostgresSupervisor {
                 .await;
 
             match status {
-                Ok(s) if s.success() => info!("Postgres stopped cleanly"),
+                Ok(s) if s.success() => {
+                    info!("Postgres stopped cleanly");
+                    let mut active = self.active_child.lock().await;
+                    if let Some(mut child) = active.take() {
+                        let _ = child.wait().await;
+                    }
+                }
                 _ => {
                     let mut active = self.active_child.lock().await;
                     if let Some(mut child) = active.take() {
@@ -469,6 +489,19 @@ impl PostgresSupervisor {
 
         // 4. Configure restore settings including PITR target and restore_command
         let mut restore_config = config.clone();
+        // Restored node is always the cluster primary leader, never a standby replica
+        restore_config.primary_conninfo = None;
+
+        // Clean up any residual standby signal or auto configuration from snapshot
+        let standby_signal = self.data_dir.join("standby.signal");
+        if standby_signal.exists() {
+            let _ = tokio::fs::remove_file(&standby_signal).await;
+        }
+        let auto_conf = self.data_dir.join("postgresql.auto.conf");
+        if auto_conf.exists() {
+            let _ = tokio::fs::remove_file(&auto_conf).await;
+        }
+
         if let Some(target_time) = recovery_target_time {
             let sidecar_bin = std::env::current_exe()
                 .ok()
@@ -494,8 +527,12 @@ impl PostgresSupervisor {
 
         // 6. If targeted recovery was performed, clear recovery target settings now that Postgres is promoted
         if recovery_target_time.is_some() {
+            let mut post_restore_config = config.clone();
+            post_restore_config.primary_conninfo = None;
+            post_restore_config.recovery_target_time = None;
+            post_restore_config.recovery_target_action = None;
             // Intentionally ignore failure to rewrite configs post-promote as Postgres is already running
-            let _ = ConfigGenerator::write_configs(&self.data_dir, config);
+            let _ = ConfigGenerator::write_configs(&self.data_dir, &post_restore_config);
         }
 
         info!("PostgreSQL restore from snapshot completed");

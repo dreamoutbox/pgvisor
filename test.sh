@@ -85,6 +85,7 @@ TEST_SCRIPTS=(
     "test-timeline-divergence.sh"
     "test-node-lifecycle.sh"
     "test-restart-leader.sh"
+    "test-promoted-restore.sh"
 )
 
 TOTAL_TESTS="${#TEST_SCRIPTS[@]}"

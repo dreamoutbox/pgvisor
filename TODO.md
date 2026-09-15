@@ -139,8 +139,11 @@
 
 - [x] add log text to highligt `start/stop/backup/restore/listen to new leader` with input value 
 
-- [ ] config backup snapshots keep count. retention days.
-- [ ] CRON auto run backup
+- [x] fix cluster failure and recovery log spam when restoring snapshot on auto-promoted leader (verified in `test-promoted-restore.sh`) 
+
+- [ ] make following config-able: 
+      - backup snapshots keep count. retention days.
+      - CRON auto run full backup / incremental backup.
 - [ ] mutex lock on backup/restore prevent concurrent actions. like 2 users clicking backup/restore on web dashboard on the same time.
 - [ ] add test. assert restore perform on primary. backup perform on follower nodes to reduce the primary node load.
 

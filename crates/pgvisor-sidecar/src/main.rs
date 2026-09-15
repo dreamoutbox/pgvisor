@@ -362,7 +362,14 @@ async fn handle_restore(
     ));
 
     info!(snapshot_id = %payload.snapshot_id, bytes = tar_bytes.len(), "Restoring PostgreSQL data directory");
-    let cfg = state.config.read().await.clone();
+    {
+        let mut r = state.role.write().await;
+        *r = "leader".to_string();
+        let mut cfg = state.config.write().await;
+        cfg.primary_conninfo = None;
+    }
+    let mut cfg = state.config.read().await.clone();
+    cfg.primary_conninfo = None;
     state
         .supervisor
         .restore_from_snapshot(&tar_bytes, &cfg, payload.recovery_target_time.as_deref())
@@ -1132,6 +1139,8 @@ async fn main() -> Result<()> {
                                         {
                                             let mut r = monitor_state.role.write().await;
                                             *r = "leader".to_string();
+                                            let mut cfg = monitor_state.config.write().await;
+                                            cfg.primary_conninfo = None;
                                         }
                                         monitor_state
                                             .record_event(

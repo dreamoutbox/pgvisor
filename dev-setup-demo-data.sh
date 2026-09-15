@@ -5,7 +5,7 @@ set -euo pipefail
 # PgVisor: Demo Data Setup & Backup Script
 #
 # Sets up the demo schema/data, creates a full backup ('f1'),
-# slowly inserts additional records with a 3-second delay,
+# slowly inserts additional records with a delay,
 # and creates an incremental backup ('incr2').
 #
 # All output is strictly clean plain text (no ANSI escape codes).
@@ -21,7 +21,7 @@ ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
 NODE_CONTAINER="${PGVISOR_NODE_CONTAINER:-pgvisor-node1}"
 PGUSER="${PGUSER:-postgres}"
 PGDATABASE="${PGDATABASE:-postgres}"
-DELAY_SECONDS="${PGVISOR_DELAY_SECONDS:-2}"
+DELAY_SECONDS="${PGVISOR_DELAY_SECONDS:-1}"
 
 # CLI Arguments
 while [[ $# -gt 0 ]]; do
@@ -136,7 +136,8 @@ trigger_backup() {
 
 # Helper to flush and rotate WAL segment so changes are archived immediately
 switch_wal() {
-    run_sql "SELECT pg_switch_wal();" > /dev/null 2>&1 || true
+    run_sql "BEGIN; SELECT pg_switch_wal(); COMMIT;" > /dev/null 2>&1 || \
+        docker exec -i "${NODE_CONTAINER}" psql -U postgres -d postgres -t -A -c "SELECT pg_switch_wal();" > /dev/null 2>&1 || true
 }
 
 echo "============================================================="

@@ -10,7 +10,10 @@
 /// Formats a 3-line highlight banner with exactly 20 '=' delimiters and no padding on start of text.
 pub fn format_highlight_banner(text: &str) -> String {
     let clean = text.trim();
-    format!("====================\n{}\n====================", clean)
+    format!(
+        "========================================\n{}\n========================================",
+        clean
+    )
 }
 
 /// Prints a prominent 3-line banner to stdout without leading padding.
@@ -160,9 +163,9 @@ mod tests {
         let banner = format_highlight_banner("START NODE");
         let lines: Vec<&str> = banner.lines().collect();
         assert_eq!(lines.len(), 3);
-        assert_eq!(lines[0], "====================");
+        assert_eq!(lines[0], "========================================");
         assert_eq!(lines[1], "START NODE");
-        assert_eq!(lines[2], "====================");
+        assert_eq!(lines[2], "========================================");
         // Verify no leading whitespace
         assert!(!lines[1].starts_with(' '));
         assert!(!lines[1].starts_with('\t'));

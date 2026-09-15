@@ -72,7 +72,19 @@ impl TransactionTracker {
             .to_ascii_uppercase();
 
         match first_word.as_str() {
-            "SELECT" | "SHOW" | "EXPLAIN" => QueryKind::Read,
+            "SELECT" => {
+                let upper = trimmed.to_ascii_uppercase();
+                if upper.contains("PG_SWITCH_WAL")
+                    || upper.contains("PG_CREATE_RESTORE_POINT")
+                    || upper.contains("PG_BACKUP_START")
+                    || upper.contains("PG_BACKUP_STOP")
+                {
+                    QueryKind::Write
+                } else {
+                    QueryKind::Read
+                }
+            }
+            "SHOW" | "EXPLAIN" => QueryKind::Read,
             "INSERT" | "UPDATE" | "DELETE" | "CREATE" | "DROP" | "ALTER" | "TRUNCATE" => {
                 QueryKind::Write
             }
@@ -132,6 +144,8 @@ mod tests {
     fn test_routing_decisions() {
         let mut tracker = TransactionTracker::new();
         assert!(!tracker.requires_leader("SELECT 1"));
+        assert!(tracker.requires_leader("SELECT pg_switch_wal()"));
+        assert!(tracker.requires_leader("SELECT pg_create_restore_point('t1')"));
         assert!(tracker.requires_leader("INSERT INTO t VALUES (1)"));
         assert!(tracker.requires_leader("BEGIN"));
 

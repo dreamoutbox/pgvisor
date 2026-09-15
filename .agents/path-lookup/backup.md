@@ -30,3 +30,11 @@
 - `dev-dump-table.sh` = Developer table dump script querying user tables and storing state to `./debug/*`
 - `dev-setup-demo-data.sh` = Demo dataset initialization script invoking `dev-dump-table.sh`
 - `knowledges/pitr-snapshot-selection-and-forward-recovery.md` = Forward recovery mechanics and snapshot selection rules
+
+### If you want to modify restoring a snapshot on an auto-promoted leader, clearing standby primary_conninfo, or preventing recovery log spam, then check:
+
+- `crates/pgvisor-sidecar/src/supervisor.rs` = `restore_from_snapshot` clearing `primary_conninfo`, deleting residual `standby.signal` and `postgresql.auto.conf`, and reaping `active_child` in `stop()` / `fence()`
+- `crates/pgvisor-sidecar/src/main.rs` = Quorum auto-promotion clearing `cfg.primary_conninfo = None` and `handle_restore` setting role to leader and clearing `primary_conninfo`
+- `crates/pgvisor-proxy/src/main.rs` = Replication lag monitor using `CASE WHEN NOT pg_is_in_recovery()` to prevent WAL control errors during recovery
+- `crates/pgvisor-core/src/protocol/tracker.rs` = Query classifier routing `SELECT pg_switch_wal()` as `QueryKind::Write` to leader
+- `tests/test-promoted-restore.sh` = Automated regression test verifying leader failover, snapshot restore on promoted leader, absence of recovery spam, and standby re-sync

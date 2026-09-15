@@ -285,7 +285,7 @@ async fn main() -> Result<()> {
             // 1. Query active leader's pg_stat_replication to discover dynamic replicas and replication lag
             if let Ok(result) = executor_for_discovery
                 .execute(
-                    "SELECT client_addr::text, application_name, COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn), 0)::text FROM pg_stat_replication;",
+                    "SELECT client_addr::text, application_name, CASE WHEN NOT pg_is_in_recovery() THEN COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn), 0)::text ELSE '0' END FROM pg_stat_replication;",
                     50,
                 )
                 .await
