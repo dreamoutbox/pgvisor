@@ -46,7 +46,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "[0/8] Starting isolated test cluster ${PROJECT_NAME}..."
+echo "[0/9] Starting isolated test cluster ${PROJECT_NAME}..."
 cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
 cluster_up   "${PROJECT_NAME}" "${COMPOSE_FILE}"
 
@@ -102,10 +102,10 @@ restore_cluster_node() {
 }
 
 # ------------------------------------------------------------------------------
-# [1/8] Verify cluster connectivity
+# [1/9] Verify cluster connectivity
 # ------------------------------------------------------------------------------
 echo ""
-echo "[1/8] Verifying cluster connectivity..."
+echo "[1/9] Verifying cluster connectivity..."
 if ! run_sql "SELECT 1;" &> /dev/null; then
     echo "Error: Cannot connect to PostgreSQL cluster at ${PROXY_HOST}:${PROXY_PORT}"
     exit 1
@@ -113,10 +113,10 @@ fi
 echo "✓ PostgreSQL cluster proxy is reachable."
 
 # ------------------------------------------------------------------------------
-# [2/8] Create test table 't_pitr' and insert 'alpha' (T0)
+# [2/9] Create test table 't_pitr' and insert 'alpha' (T0)
 # ------------------------------------------------------------------------------
 echo ""
-echo "[2/8] Creating test table 't_pitr' and inserting 'alpha'..."
+echo "[2/9] Creating test table 't_pitr' and inserting 'alpha'..."
 run_sql "DROP TABLE IF EXISTS t_pitr; CREATE TABLE t_pitr (id int PRIMARY KEY, val text NOT NULL); INSERT INTO t_pitr (id, val) VALUES (1, 'alpha');"
 VAL_A=$(run_sql "SELECT val FROM t_pitr WHERE id = 1;")
 if [ "${VAL_A}" != "alpha" ]; then
@@ -126,10 +126,10 @@ fi
 echo "✓ Seeded row 1: val='alpha' (T0 state established)"
 
 # ------------------------------------------------------------------------------
-# [3/8] Trigger backup T0 (snapshot 0 with 'alpha')
+# [3/9] Trigger backup T0 (snapshot 0 with 'alpha')
 # ------------------------------------------------------------------------------
 echo ""
-echo "[3/8] Triggering basebackup T0 via API (POST ${DASHBOARD_URL}/api/backups)..."
+echo "[3/9] Triggering basebackup T0 via API (POST ${DASHBOARD_URL}/api/backups)..."
 RESP_T0=$(curl -s -f -X POST "${DASHBOARD_URL}/api/backups" \
     "${AUTH_HEADER[@]}" \
     -H "Content-Type: application/json" \
@@ -150,10 +150,10 @@ fi
 echo "✓ Snapshot T0 archive verified ($(wc -c < "${TMP_ARCHIVE_T0}") bytes)."
 
 # ------------------------------------------------------------------------------
-# [4/8] Insert 'beta' at T1 and switch WAL to force archiving
+# [4/9] Insert 'beta' at T1 and switch WAL to force archiving
 # ------------------------------------------------------------------------------
 echo ""
-echo "[4/8] Inserting row 2 ('beta') at T1 and archiving WAL..."
+echo "[4/9] Inserting row 2 ('beta') at T1 and archiving WAL..."
 run_sql "INSERT INTO t_pitr (id, val) VALUES (2, 'beta');"
 VAL_B=""
 for attempt in 1 2 3 4 5; do
@@ -176,10 +176,10 @@ run_sql "BEGIN; SELECT pg_switch_wal(); COMMIT;" > /dev/null 2>&1 || \
 sleep 1
 
 # ------------------------------------------------------------------------------
-# [5/8] Trigger backup T2 (snapshot 2 with 'alpha' + 'beta')
+# [5/9] Trigger backup T2 (snapshot 2 with 'alpha' + 'beta')
 # ------------------------------------------------------------------------------
 echo ""
-echo "[5/8] Triggering basebackup T2 via API..."
+echo "[5/9] Triggering basebackup T2 via API..."
 RESP_T2=$(curl -s -f -X POST "${DASHBOARD_URL}/api/backups" \
     "${AUTH_HEADER[@]}" \
     -H "Content-Type: application/json" \
@@ -200,10 +200,138 @@ fi
 echo "✓ Snapshot T2 archive verified ($(wc -c < "${TMP_ARCHIVE_T2}") bytes)."
 
 # ------------------------------------------------------------------------------
-# [6/8] Restore from T0 backup at T3 -> verify table has only 'alpha'
+# [6/9] Verify invalid PITR timestamps (future, too-old, malformed) do NOT fail cluster
 # ------------------------------------------------------------------------------
 echo ""
-echo "[6/8] Restoring from snapshot T0 (${SNAP_T0})..."
+echo "[6/9] Testing invalid PITR timestamps (future, too-old, malformed)..."
+
+# 1. Test future timestamp via restore API (POST /api/backups/:id/restore)
+echo "  [6.1] Testing future timestamp rejection via restore API..."
+HTTP_STATUS=$(curl -s -o /tmp/pitr_err_$$.txt -w "%{http_code}" -X POST "${DASHBOARD_URL}/api/backups/${SNAP_T0}/restore" \
+    "${AUTH_HEADER[@]}" \
+    -H "Content-Type: application/json" \
+    -d '{"recovery_target_time": "2099-01-01 00:00:00"}')
+ERR_BODY=$(cat /tmp/pitr_err_$$.txt)
+rm -f /tmp/pitr_err_$$.txt
+
+if [ "${HTTP_STATUS}" != "400" ]; then
+    echo "Expected HTTP 400 for future restore timestamp, got ${HTTP_STATUS}: ${ERR_BODY}"
+    exit 1
+fi
+if [[ "${ERR_BODY}" != *"cannot be in the future"* ]]; then
+    echo "Expected future timestamp error message, got: ${ERR_BODY}"
+    exit 1
+fi
+echo "  ✓ Future timestamp correctly rejected with 400 Bad Request."
+
+# 2. Test future timestamp via quick-restore API (POST /api/backups/quick-restore)
+echo "  [6.2] Testing future timestamp rejection via quick-restore API..."
+HTTP_STATUS=$(curl -s -o /tmp/pitr_err_$$.txt -w "%{http_code}" -X POST "${DASHBOARD_URL}/api/backups/quick-restore" \
+    "${AUTH_HEADER[@]}" \
+    -H "Content-Type: application/json" \
+    -d '{"recovery_target_time": "2099-01-01 00:00:00"}')
+ERR_BODY=$(cat /tmp/pitr_err_$$.txt)
+rm -f /tmp/pitr_err_$$.txt
+
+if [ "${HTTP_STATUS}" != "400" ]; then
+    echo "Expected HTTP 400 for quick-restore future timestamp, got ${HTTP_STATUS}: ${ERR_BODY}"
+    exit 1
+fi
+if [[ "${ERR_BODY}" != *"cannot be in the future"* ]]; then
+    echo "Expected future timestamp error message, got: ${ERR_BODY}"
+    exit 1
+fi
+echo "  ✓ Quick-restore future timestamp correctly rejected with 400 Bad Request."
+
+# 3. Test too-old timestamp via restore API (older than snapshot creation)
+echo "  [6.3] Testing too-old timestamp rejection via restore API..."
+HTTP_STATUS=$(curl -s -o /tmp/pitr_err_$$.txt -w "%{http_code}" -X POST "${DASHBOARD_URL}/api/backups/${SNAP_T2}/restore" \
+    "${AUTH_HEADER[@]}" \
+    -H "Content-Type: application/json" \
+    -d '{"recovery_target_time": "1999-01-01 00:00:00"}')
+ERR_BODY=$(cat /tmp/pitr_err_$$.txt)
+rm -f /tmp/pitr_err_$$.txt
+
+if [ "${HTTP_STATUS}" != "400" ]; then
+    echo "Expected HTTP 400 for too-old restore timestamp, got ${HTTP_STATUS}: ${ERR_BODY}"
+    exit 1
+fi
+if [[ "${ERR_BODY}" != *"earlier than snapshot"* && "${ERR_BODY}" != *"cannot roll backward"* ]]; then
+    echo "Expected too-old timestamp error message, got: ${ERR_BODY}"
+    exit 1
+fi
+echo "  ✓ Too-old timestamp correctly rejected with 400 Bad Request."
+
+# 4. Test too-old timestamp via quick-restore API (older than all snapshots)
+echo "  [6.4] Testing too-old timestamp rejection via quick-restore API..."
+HTTP_STATUS=$(curl -s -o /tmp/pitr_err_$$.txt -w "%{http_code}" -X POST "${DASHBOARD_URL}/api/backups/quick-restore" \
+    "${AUTH_HEADER[@]}" \
+    -H "Content-Type: application/json" \
+    -d '{"recovery_target_time": "1999-01-01 00:00:00"}')
+ERR_BODY=$(cat /tmp/pitr_err_$$.txt)
+rm -f /tmp/pitr_err_$$.txt
+
+if [ "${HTTP_STATUS}" != "400" ]; then
+    echo "Expected HTTP 400 for quick-restore too-old timestamp, got ${HTTP_STATUS}: ${ERR_BODY}"
+    exit 1
+fi
+if [[ "${ERR_BODY}" != *"No basebackup snapshot found prior to target time"* ]]; then
+    echo "Expected no-prior-snapshot error message, got: ${ERR_BODY}"
+    exit 1
+fi
+echo "  ✓ Quick-restore too-old timestamp correctly rejected with 400 Bad Request."
+
+# 5. Test malformed timestamp
+echo "  [6.5] Testing malformed timestamp rejection via restore API..."
+HTTP_STATUS=$(curl -s -o /tmp/pitr_err_$$.txt -w "%{http_code}" -X POST "${DASHBOARD_URL}/api/backups/${SNAP_T0}/restore" \
+    "${AUTH_HEADER[@]}" \
+    -H "Content-Type: application/json" \
+    -d '{"recovery_target_time": "not-a-valid-date"}')
+ERR_BODY=$(cat /tmp/pitr_err_$$.txt)
+rm -f /tmp/pitr_err_$$.txt
+
+if [ "${HTTP_STATUS}" != "400" ]; then
+    echo "Expected HTTP 400 for malformed timestamp, got ${HTTP_STATUS}: ${ERR_BODY}"
+    exit 1
+fi
+if [[ "${ERR_BODY}" != *"Invalid timestamp"* ]]; then
+    echo "Expected invalid timestamp error message, got: ${ERR_BODY}"
+    exit 1
+fi
+echo "  ✓ Malformed timestamp correctly rejected with 400 Bad Request."
+
+# 6. Verify cluster is NOT broken, still healthy, and fully operational
+echo "  [6.6] Verifying cluster health and read/write operational status..."
+if ! run_sql "SELECT 1;" > /dev/null; then
+    echo "Cluster failed to respond after invalid PITR requests!"
+    exit 1
+fi
+
+# Assert existing rows are intact
+COUNT_MID=$(run_sql "SELECT COUNT(*) FROM t_pitr;")
+if [ "${COUNT_MID}" != "2" ]; then
+    echo "Cluster data corrupted or lost after invalid PITR! Expected 2 rows, got '${COUNT_MID}'"
+    exit 1
+fi
+
+# Assert write capability works normally
+run_sql "INSERT INTO t_pitr (id, val) VALUES (99, 'probe');"
+PROBE_VAL=$(run_sql "SELECT val FROM t_pitr WHERE id = 99;")
+if [ "${PROBE_VAL}" != "probe" ]; then
+    echo "Failed to write probe row after invalid PITR requests! Got: '${PROBE_VAL}'"
+    exit 1
+fi
+run_sql "DELETE FROM t_pitr WHERE id = 99;"
+
+# Assert no nodes crashed or became unhealthy
+wait_for_healthy 10 "pgvisor-pitr-node1" "pgvisor-pitr-node2" "pgvisor-pitr-node3"
+echo "✓ Cluster remained 100% operational with zero node crashes or hung states."
+
+# ------------------------------------------------------------------------------
+# [7/9] Restore from T0 backup at T3 -> verify table has only 'alpha'
+# ------------------------------------------------------------------------------
+echo ""
+echo "[7/9] Restoring from snapshot T0 (${SNAP_T0})..."
 restore_cluster_node "${SNAP_T0}"
 # Ensure all containers and proxy are fully healthy and responsive before querying
 wait_for_healthy 60 "pgvisor-pitr-node1" "pgvisor-pitr-node2" "pgvisor-pitr-node3"
@@ -235,10 +363,10 @@ fi
 echo "✓ Snapshot T0 verified: exactly 1 row ('alpha' present, 'beta' absent)."
 
 # ------------------------------------------------------------------------------
-# [7/8] Restore from T2 backup at T4 -> verify table has both 'alpha' and 'beta'
+# [8/9] Restore from T2 backup at T4 -> verify table has both 'alpha' and 'beta'
 # ------------------------------------------------------------------------------
 echo ""
-echo "[7/8] Restoring from snapshot T2 (${SNAP_T2})..."
+echo "[8/9] Restoring from snapshot T2 (${SNAP_T2})..."
 restore_cluster_node "${SNAP_T2}"
 # Ensure all containers and proxy are fully healthy and responsive before querying
 wait_for_healthy 60 "pgvisor-pitr-node1" "pgvisor-pitr-node2" "pgvisor-pitr-node3"
@@ -274,10 +402,10 @@ fi
 echo "✓ Snapshot T2 verified: exactly 2 rows ('alpha' and 'beta' both present)."
 
 # ------------------------------------------------------------------------------
-# [8/8] Clean up test artifacts
+# [9/9] Clean up test artifacts
 # ------------------------------------------------------------------------------
 echo ""
-echo "[8/8] Cleaning up test artifacts..."
+echo "[9/9] Cleaning up test artifacts..."
 run_sql "DROP TABLE IF EXISTS t_pitr;" > /dev/null 2>&1 || true
 rm -f "${TMP_ARCHIVE_T0}" "${TMP_ARCHIVE_T2}"
 curl -s "${AUTH_HEADER[@]}" -X DELETE "${DASHBOARD_URL}/api/backups/${SNAP_T0}" > /dev/null 2>&1 || true

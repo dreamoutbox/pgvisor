@@ -2566,8 +2566,8 @@ mod tests {
         );
 
         // Standard format
-        let dt2 = parse_target_timestamp("2026-09-14 03:05:12")
-            .expect("Must parse standard timestamp");
+        let dt2 =
+            parse_target_timestamp("2026-09-14 03:05:12").expect("Must parse standard timestamp");
         assert_eq!(
             dt2.format("%Y-%m-%d %H:%M:%S").to_string(),
             "2026-09-14 03:05:12"
@@ -2579,5 +2579,79 @@ mod tests {
             .to_string();
         let err = parse_target_timestamp(&future_time).unwrap_err();
         assert!(err.contains("cannot be in the future"));
+    }
+
+    #[test]
+    fn test_parse_target_timestamp_malformed_and_empty() {
+        assert!(parse_target_timestamp("").is_err());
+        assert!(parse_target_timestamp("   ").is_err());
+        assert!(parse_target_timestamp("invalid-date").is_err());
+        assert!(parse_target_timestamp("2026-99-99 99:99:99").is_err());
+    }
+
+    #[test]
+    fn test_find_best_backup_snapshot_too_old_rejected() {
+        let snap_time = chrono::DateTime::parse_from_rfc3339("2026-09-15T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut meta = BasebackupMeta::new(
+            "snap-1000",
+            snap_time,
+            BackupType::Full,
+            "000000010000000000000001",
+            1024,
+        );
+        meta.label = Some("test-label".to_string());
+        meta.source_node = Some("pgvisor-node1".to_string());
+
+        let backups = vec![meta];
+
+        // Target time 1 hour before snapshot creation (too old)
+        let too_old_target = snap_time - chrono::Duration::hours(1);
+        let err = find_best_backup_snapshot(&backups, too_old_target).unwrap_err();
+        assert!(err.contains("No basebackup snapshot found prior to target time"));
+        assert!(err.contains("cannot roll backward"));
+    }
+
+    #[test]
+    fn test_find_best_backup_snapshot_selection_and_empty() {
+        // Empty backups list
+        let empty: Vec<BasebackupMeta> = vec![];
+        let now = Utc::now();
+        assert!(find_best_backup_snapshot(&empty, now).is_err());
+
+        let t1 = chrono::DateTime::parse_from_rfc3339("2026-09-15T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let t2 = chrono::DateTime::parse_from_rfc3339("2026-09-15T11:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let snap1 = BasebackupMeta::new(
+            "snap-1",
+            t1,
+            BackupType::Full,
+            "000000010000000000000001",
+            1024,
+        );
+        let snap2 = BasebackupMeta::new(
+            "snap-2",
+            t2,
+            BackupType::Incremental,
+            "000000010000000000000002",
+            512,
+        );
+
+        let backups = vec![snap1, snap2];
+
+        // Target between t1 and t2 selects snap-1
+        let target_mid = t1 + chrono::Duration::minutes(30);
+        let best = find_best_backup_snapshot(&backups, target_mid).unwrap();
+        assert_eq!(best.snapshot_id, "snap-1");
+
+        // Target after t2 selects snap-2
+        let target_after = t2 + chrono::Duration::minutes(15);
+        let best2 = find_best_backup_snapshot(&backups, target_after).unwrap();
+        assert_eq!(best2.snapshot_id, "snap-2");
     }
 }

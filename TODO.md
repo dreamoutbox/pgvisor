@@ -183,8 +183,6 @@
 
 - [ ] manage database and execute backup/restore with cli
 
-- [ ] single node mode. no quorum leader. no raft election
-
 - [ ] redesign when new node join cluster.
       - dynamic node discovery. use env ROLE / PEERS list as starter data.
       - new node send join cluster request to leader node

@@ -333,40 +333,7 @@ async fn handle_restore(
     State(state): State<SidecarState>,
     Json(payload): Json<RestorePayload>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    // Immediately transition supervisor status to Restoring so peers pause failover
-    state.supervisor.set_status(ProcessStatus::Restoring).await;
-
-    let bm = state.backup_manager.as_ref().ok_or_else(|| {
-        (
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": "BackupManager is not configured on this sidecar node"
-            })),
-        )
-    })?;
-
-    info!(snapshot_id = %payload.snapshot_id, "Fetching snapshot archive from storage");
-    let (meta, tar_bytes) = bm.get_basebackup(&payload.snapshot_id).await.map_err(|e| {
-        (
-            axum::http::StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": format!("Failed to fetch snapshot {}: {}", payload.snapshot_id, e)
-            })),
-        )
-    })?;
-
-    let b_type = match meta.backup_type {
-        BackupType::Full => "FULL BACKUP",
-        BackupType::Incremental => "INCREMENTAL BACKUP",
-    };
-    let name = meta.label.as_deref().unwrap_or(&payload.snapshot_id);
-    log_highlight(&format_restore_highlight(
-        b_type,
-        name,
-        payload.recovery_target_time.as_deref(),
-    ));
-
-    info!(snapshot_id = %payload.snapshot_id, bytes = tar_bytes.len(), "Restoring PostgreSQL data directory");
+    // Validate target time before transitioning supervisor status
     if let Some(target) = payload.recovery_target_time.as_deref() {
         let trimmed = target.trim();
         if !trimmed.is_empty() {
@@ -394,6 +361,41 @@ async fn handle_restore(
             }
         }
     }
+
+    let bm = state.backup_manager.as_ref().ok_or_else(|| {
+        (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "BackupManager is not configured on this sidecar node"
+            })),
+        )
+    })?;
+
+    info!(snapshot_id = %payload.snapshot_id, "Fetching snapshot archive from storage");
+    let (meta, tar_bytes) = bm.get_basebackup(&payload.snapshot_id).await.map_err(|e| {
+        (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("Failed to fetch snapshot {}: {}", payload.snapshot_id, e)
+            })),
+        )
+    })?;
+
+    // Transition supervisor status to Restoring only after validation and archive retrieval succeed
+    state.supervisor.set_status(ProcessStatus::Restoring).await;
+
+    let b_type = match meta.backup_type {
+        BackupType::Full => "FULL BACKUP",
+        BackupType::Incremental => "INCREMENTAL BACKUP",
+    };
+    let name = meta.label.as_deref().unwrap_or(&payload.snapshot_id);
+    log_highlight(&format_restore_highlight(
+        b_type,
+        name,
+        payload.recovery_target_time.as_deref(),
+    ));
+
+    info!(snapshot_id = %payload.snapshot_id, bytes = tar_bytes.len(), "Restoring PostgreSQL data directory");
 
     {
         let mut r = state.role.write().await;

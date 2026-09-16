@@ -40,6 +40,7 @@
 - `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::restore_backup` coordinating sidecar restore, future target validation, standby cancellation via `/control/cancel-restore` on failure, standby replica re-sync, and connection pool draining
 - `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor::restore_from_snapshot` cleaning up `recovery.signal` and resetting configs on failed targeted restore, and `is_running`
 - `crates/pgvisor-sidecar/src/main.rs` = `handle_restore` validating target timestamps and `handle_cancel_restore` (`POST /control/cancel-restore`) returning standbys to running state
+- `tests/test-incremental-pitr.sh` = Integration test verifying incremental PITR, forward recovery, and rejection of invalid PITR timestamps (future, too-old, malformed) without cluster failure
 - `dev-dump-table.sh` = Developer table dump script querying user tables and storing state to `./debug/*`
 - `dev-setup-demo-data.sh` = Demo dataset initialization script invoking `dev-dump-table.sh`
 - `knowledges/pitr-snapshot-selection-and-forward-recovery.md` = Forward recovery mechanics and snapshot selection rules

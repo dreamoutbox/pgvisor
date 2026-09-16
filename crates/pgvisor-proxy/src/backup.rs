@@ -343,6 +343,29 @@ impl BackupService for ProxyBackupService {
             "Executing cluster restore request"
         );
 
+        // Validate recovery target timestamp before notifying standbys or leader
+        if let Some(target) = target_time.as_deref() {
+            let trimmed = target.trim();
+            if !trimmed.is_empty() {
+                let parsed_dt = chrono::DateTime::parse_from_rfc3339(trimmed)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .or_else(|_| {
+                        chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S")
+                            .map(|ndt| chrono::DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
+                    });
+                if let Ok(dt) = parsed_dt {
+                    let now = Utc::now();
+                    if dt > now + chrono::Duration::seconds(10) {
+                        return Err(format!(
+                            "Recovery target timestamp ({}) cannot be in the future. Cluster current time is {}.",
+                            dt.format("%Y-%m-%d %H:%M:%S UTC"),
+                            now.format("%Y-%m-%d %H:%M:%S UTC")
+                        ));
+                    }
+                }
+            }
+        }
+
         // 1. Determine leader host
         let leader = self.leader_addr.read().await.clone();
         let leader_host = leader
@@ -385,22 +408,6 @@ impl BackupService for ProxyBackupService {
             "snapshot_id": snapshot_id,
             "recovery_target_time": target_time,
         });
-
-        if let Some(target) = target_time.as_deref() {
-            let trimmed = target.trim();
-            if !trimmed.is_empty() {
-                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(trimmed) {
-                    let now = Utc::now();
-                    if dt.with_timezone(&Utc) > now + chrono::Duration::seconds(10) {
-                        return Err(format!(
-                            "Recovery target timestamp ({}) cannot be in the future. Cluster current time is {}.",
-                            dt.format("%Y-%m-%d %H:%M:%S UTC"),
-                            now.format("%Y-%m-%d %H:%M:%S UTC")
-                        ));
-                    }
-                }
-            }
-        }
 
         let resp_result = self
             .http_client
