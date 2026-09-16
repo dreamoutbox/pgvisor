@@ -24,6 +24,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=tests/lib/cluster.sh
 source "${SCRIPT_DIR}/lib/cluster.sh"
+# shellcheck source=tests/lib/helper.sh
+source "${SCRIPT_DIR}/lib/helper.sh"
 
 # Pre-defined test port & project constants
 readonly TEST_PROXY_PORT=6532
@@ -84,12 +86,6 @@ run_proxy_sql() {
     return 1
 }
 
-# Helper: run a query directly on a specific node container (bypasses proxy).
-run_node_sql() {
-    local container="$1"
-    local query="$2"
-    docker exec -i "${container}" psql -U postgres -d postgres -t -A -c "${query}" 2>/dev/null || true
-}
 
 echo "========================================================="
 echo "  PgVisor Read/Write Routing Assertion Test"

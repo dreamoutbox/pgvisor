@@ -15,6 +15,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=tests/lib/cluster.sh
 source "${SCRIPT_DIR}/lib/cluster.sh"
+# shellcheck source=tests/lib/helper.sh
+source "${SCRIPT_DIR}/lib/helper.sh"
 
 readonly TEST_PROXY_PORT=7132
 readonly TEST_DASHBOARD_PORT=9780
@@ -79,30 +81,6 @@ run_proxy_sql() {
     return 1
 }
 
-# Helper to execute SQL directly on a container
-run_node_sql() {
-    local container="$1"
-    local query="$2"
-    docker exec -i "${container}" psql -U postgres -d postgres -t -A -c "${query}" 2>/dev/null || true
-}
-
-# Helper to query sidecar control status
-get_sidecar_status() {
-    local container="$1"
-    docker exec -i "${container}" curl -s http://localhost:8080/control/status 2>/dev/null || true
-}
-
-# Helper to extract JSON field
-json_extract() {
-    local field="$1"
-    if command -v jq &> /dev/null; then
-        jq -r ".${field} // empty"
-    elif command -v python3 &> /dev/null; then
-        python3 -c "import sys, json; data = json.load(sys.stdin); print(data.get('${field}', ''))"
-    else
-        grep -o "\"${field}\":[^,}]*" | head -n1 | cut -d':' -f2 | tr -d ' "{}'
-    fi
-}
 
 echo ""
 echo "[1/9] Verifying initial cluster topology..."

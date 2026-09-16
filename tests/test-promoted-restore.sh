@@ -28,6 +28,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=tests/lib/cluster.sh
 source "${SCRIPT_DIR}/lib/cluster.sh"
+# shellcheck source=tests/lib/helper.sh
+source "${SCRIPT_DIR}/lib/helper.sh"
 
 readonly TEST_PROXY_PORT=7332
 readonly TEST_DASHBOARD_PORT=9980
@@ -103,18 +105,6 @@ run_proxy_sql() {
     return 1
 }
 
-# Helper to execute SQL directly on a node container
-run_node_sql() {
-    local container="$1"
-    local query="$2"
-    docker exec -i "${container}" psql -U postgres -d postgres -t -A -c "${query}" 2>/dev/null || true
-}
-
-# Helper to query sidecar control status
-get_sidecar_status() {
-    local container="$1"
-    docker exec -i "${container}" curl -s http://localhost:8080/control/status 2>/dev/null || true
-}
 
 # ------------------------------------------------------------------------------
 # [1/7] Seed demo schema and initial records

@@ -177,6 +177,8 @@
 
 - [ ] make proxy and sidecar export opentelemetry data. to use with prometheus/grafana.
 
+- [ ] add wiki
+
 ---
 
 # Backlog
@@ -203,7 +205,7 @@
 
 # Chore
 
-- [ ] move duplicate helper functions in tests/*.sh to single place. search function by regex. move helper functions to tests/lib/helper.sh
+- [x] move duplicate helper functions in tests/*.sh to single place. search duplicated functions by regex. move to tests/lib/helper.sh
 
 - [ ] move rust tests to separate files/tests directory.
 

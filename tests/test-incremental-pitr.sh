@@ -11,6 +11,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=tests/lib/cluster.sh
 source "${SCRIPT_DIR}/lib/cluster.sh"
+# shellcheck source=tests/lib/helper.sh
+source "${SCRIPT_DIR}/lib/helper.sh"
 
 # Pre-defined test port & project constants
 readonly TEST_PROXY_PORT=5732
@@ -76,17 +78,6 @@ run_sql() {
     return 1
 }
 
-# Helper to parse JSON field using python3 or jq
-json_extract() {
-    local field="$1"
-    if command -v jq &> /dev/null; then
-        jq -r ".${field} // empty"
-    elif command -v python3 &> /dev/null; then
-        python3 -c "import sys, json; data = json.load(sys.stdin); print(data.get('${field}', ''))"
-    else
-        grep -o "\"${field}\":\"[^\"]*\"" | cut -d':' -f2 | tr -d '"'
-    fi
-}
 
 # Helper to restore a snapshot archive into the cluster
 restore_cluster_node() {

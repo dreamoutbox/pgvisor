@@ -46,6 +46,7 @@
 ### If you want to change test cluster startup, health check wait, or container cleanup, then check:
 
 - `tests/lib/cluster.sh` = shared library for `cluster_up` (`--progress quiet`), `cluster_down`, `wait_and_remove_minio_init`, `wait_for_healthy` (with fail-fast crash detection), and `wait_for_proxy_ready`.
+- `tests/lib/helper.sh` = shared test utilities for `run_node_sql`, `get_sidecar_status`, and `json_extract`.
 - `reset-docker-compose.sh` = developer cluster reset script with `pgvisor-minio-init` wait & removal and container healthcheck polling with timeout.
 - `tests/test-*.sh` = integration test scripts that invoke `cluster_up`, `wait_for_healthy`, and `cluster_down`.
 

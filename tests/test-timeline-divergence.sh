@@ -24,6 +24,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=tests/lib/cluster.sh
 source "${SCRIPT_DIR}/lib/cluster.sh"
+# shellcheck source=tests/lib/helper.sh
+source "${SCRIPT_DIR}/lib/helper.sh"
 
 # Test port & project constants
 readonly TEST_PROXY_PORT=7032
@@ -102,17 +104,6 @@ run_sql() {
     return 1
 }
 
-# Helper to extract JSON field using jq or python3
-json_extract() {
-    local field="$1"
-    if command -v jq &> /dev/null; then
-        jq -r ".${field} // empty"
-    elif command -v python3 &> /dev/null; then
-        python3 -c "import sys, json; data = json.load(sys.stdin); print(data.get('${field}', ''))" 2>/dev/null || true
-    else
-        grep -o "\"${field}\":\"[^\"]*\"" | head -n 1 | cut -d':' -f2 | tr -d '"'
-    fi
-}
 
 # Helper to trigger backup snapshot via Dashboard API
 trigger_backup() {

@@ -13,6 +13,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=tests/lib/cluster.sh
 source "${SCRIPT_DIR}/lib/cluster.sh"
+# shellcheck source=tests/lib/helper.sh
+source "${SCRIPT_DIR}/lib/helper.sh"
 
 # Pre-defined test port & project constants
 readonly TEST_PROXY1_PORT=6832
@@ -106,11 +108,6 @@ run_proxy2_sql() {
     run_proxy_sql "${PROXY2_PORT}" "${PROXY2_CONTAINER}" "$1" "${2:-10}"
 }
 
-run_node_sql() {
-    local container="$1"
-    local query="$2"
-    docker exec -i "${container}" psql -U postgres -d postgres -t -A -c "${query}" 2>/dev/null || true
-}
 
 echo ""
 echo "[1/6] Verifying baseline connectivity and cluster topology..."
