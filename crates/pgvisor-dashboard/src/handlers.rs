@@ -23,8 +23,8 @@ use crate::models::{
 };
 use crate::security::{SecurityError, SqlSecurityGuard};
 use crate::templates::{
-    AuditTemplate, BackupsTemplate, LoginTemplate, NodesTemplate, OverviewTemplate, TablesTemplate,
-    UsersTemplate,
+    AuditTemplate, BackupsTemplate, LoginTemplate, NodesTemplate, OverviewTemplate, PageItem,
+    TablesTemplate, UsersTemplate,
 };
 use pgvisor_core::audit::{AuditEventKind, AuditLog};
 
@@ -193,35 +193,91 @@ pub fn parse_target_timestamp(raw: &str) -> Result<chrono::DateTime<Utc>, String
         return Err("Recovery target timestamp cannot be empty".to_string());
     }
 
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(trimmed) {
-        return Ok(dt.with_timezone(&Utc));
-    }
+    let parsed = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(trimmed) {
+        dt.with_timezone(&Utc)
+    } else if let Ok(dt) = chrono::DateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S%z") {
+        dt.with_timezone(&Utc)
+    } else {
+        // Normalize potential single-digit hours/minutes/seconds e.g. "2026-09-16 00:35:0" -> "2026-09-16 00:35:00"
+        let normalized = {
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if parts.len() == 2 {
+                let date_part = parts[0];
+                let time_parts: Vec<&str> = parts[1].split(':').collect();
+                if time_parts.len() == 3 {
+                    let h = if time_parts[0].len() == 1 {
+                        format!("0{}", time_parts[0])
+                    } else {
+                        time_parts[0].to_string()
+                    };
+                    let m = if time_parts[1].len() == 1 {
+                        format!("0{}", time_parts[1])
+                    } else {
+                        time_parts[1].to_string()
+                    };
+                    let s = if time_parts[2].len() == 1 {
+                        format!("0{}", time_parts[2])
+                    } else {
+                        time_parts[2].to_string()
+                    };
+                    format!("{} {}:{}:{}", date_part, h, m, s)
+                } else if time_parts.len() == 2 {
+                    let h = if time_parts[0].len() == 1 {
+                        format!("0{}", time_parts[0])
+                    } else {
+                        time_parts[0].to_string()
+                    };
+                    let m = if time_parts[1].len() == 1 {
+                        format!("0{}", time_parts[1])
+                    } else {
+                        time_parts[1].to_string()
+                    };
+                    format!("{} {}:{}", date_part, h, m)
+                } else {
+                    trimmed.to_string()
+                }
+            } else {
+                trimmed.to_string()
+            }
+        };
 
-    if let Ok(dt) = chrono::DateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S%z") {
-        return Ok(dt.with_timezone(&Utc));
-    }
+        let formats = [
+            "%Y-%m-%d %H:%M:%S%.f",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S%.f",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%dT%H:%M",
+        ];
 
-    let formats = [
-        "%Y-%m-%d %H:%M:%S%.f",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S%.f",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%dT%H:%M",
-    ];
-
-    for fmt in &formats {
-        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(trimmed, fmt) {
-            return Ok(chrono::DateTime::<Utc>::from_naive_utc_and_offset(
-                naive, Utc,
-            ));
+        let mut matched = None;
+        for fmt in &formats {
+            if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&normalized, fmt) {
+                matched = Some(chrono::DateTime::<Utc>::from_naive_utc_and_offset(
+                    naive, Utc,
+                ));
+                break;
+            }
         }
+
+        matched.ok_or_else(|| {
+            format!(
+                "Invalid timestamp '{}'. Expected format: YYYY-MM-DD HH:MM:SS (UTC) or ISO-8601 (e.g. 2026-09-14 03:00:00)",
+                raw
+            )
+        })?
+    };
+
+    let now = Utc::now();
+    if parsed > now + chrono::Duration::seconds(10) {
+        return Err(format!(
+            "Recovery target timestamp ({}) cannot be in the future. Cluster current time is {}.",
+            parsed.format("%Y-%m-%d %H:%M:%S UTC"),
+            now.format("%Y-%m-%d %H:%M:%S UTC")
+        ));
     }
 
-    Err(format!(
-        "Invalid timestamp '{}'. Expected format: YYYY-MM-DD HH:MM:SS (UTC) or ISO-8601 (e.g. 2026-09-14 03:00:00)",
-        raw
-    ))
+    Ok(parsed)
 }
 
 /// Helper to select the best basebackup snapshot for forward Point-In-Time-Recovery.
@@ -1626,13 +1682,55 @@ pub async fn api_restore_backup(
     Path(snapshot_id): Path<String>,
     Json(payload): Json<RestoreBackupRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let target_time = if let Some(raw) = payload.recovery_target_time.as_deref() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            let parsed =
+                parse_target_timestamp(trimmed).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+
+            // Validate against snapshot creation date
+            let backups = state
+                .backup_service
+                .list_backups()
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+            if let Some(snap) = backups
+                .iter()
+                .find(|b| b.snapshot_id == snapshot_id || b.label.as_deref() == Some(&snapshot_id))
+            {
+                if parsed < snap.created_at - chrono::Duration::seconds(60) {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        format!(
+                            "Recovery target timestamp ({}) is earlier than snapshot creation time ({}). PostgreSQL forward recovery cannot roll backward.",
+                            parsed.format("%Y-%m-%d %H:%M:%S UTC"),
+                            snap.created_at.format("%Y-%m-%d %H:%M:%S UTC"),
+                        ),
+                    ));
+                }
+            }
+            Some(parsed.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+        }
+    } else {
+        None
+    };
+
     let msg = state
         .backup_service
-        .restore_backup(&snapshot_id, payload.recovery_target_time)
+        .restore_backup(&snapshot_id, target_time)
         .await
         .map_err(|e| {
             if e.contains("already in progress") {
                 (StatusCode::CONFLICT, e)
+            } else if e.contains("cannot be in the future")
+                || e.contains("cannot roll backward")
+                || e.contains("earlier than snapshot")
+                || e.contains("Invalid timestamp")
+            {
+                (StatusCode::BAD_REQUEST, e)
             } else {
                 (StatusCode::INTERNAL_SERVER_ERROR, e)
             }
@@ -2375,6 +2473,17 @@ pub async fn get_audit_logs_page(
         })
         .collect();
 
+    let start_item = if total == 0 { 0 } else { offset + 1 };
+    let end_item = (offset + views.len()).min(total);
+    let start_page = page.saturating_sub(2).max(1);
+    let end_page = (page + 2).min(total_pages);
+    let page_items: Vec<PageItem> = (start_page..=end_page)
+        .map(|num| PageItem {
+            num,
+            is_current: num == page,
+        })
+        .collect();
+
     let template = AuditTemplate {
         events: &views,
         stats: &stats,
@@ -2384,6 +2493,9 @@ pub async fn get_audit_logs_page(
         limit,
         total_pages,
         total_events: total,
+        start_item,
+        end_item,
+        page_items,
         auth_enabled: state.admin_token.is_some(),
     };
 
@@ -2437,4 +2549,35 @@ pub async fn api_list_audit_logs(
         dangerous_sql_count,
         latest_pitr_target,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_target_timestamp_normalization() {
+        // Single digit second normalization (e.g. user typed 00:35:0)
+        let dt = parse_target_timestamp("2026-09-14 03:00:0")
+            .expect("Must parse normalized single-digit second");
+        assert_eq!(
+            dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2026-09-14 03:00:00"
+        );
+
+        // Standard format
+        let dt2 = parse_target_timestamp("2026-09-14 03:05:12")
+            .expect("Must parse standard timestamp");
+        assert_eq!(
+            dt2.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2026-09-14 03:05:12"
+        );
+
+        // Future timestamp rejection
+        let future_time = (Utc::now() + chrono::Duration::hours(2))
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
+        let err = parse_target_timestamp(&future_time).unwrap_err();
+        assert!(err.contains("cannot be in the future"));
+    }
 }

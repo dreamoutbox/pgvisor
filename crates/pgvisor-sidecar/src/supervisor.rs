@@ -418,6 +418,19 @@ impl PostgresSupervisor {
         started.map(|t| t.elapsed().as_secs()).unwrap_or(0)
     }
 
+    /// Checks whether the PostgreSQL child process is actively running.
+    pub async fn is_running(&self) -> bool {
+        let mut active = self.active_child.lock().await;
+        if let Some(child) = active.as_mut() {
+            match child.try_wait() {
+                Ok(None) => true,
+                _ => false,
+            }
+        } else {
+            false
+        }
+    }
+
     /// Waits for child process to terminate.
     pub async fn wait(&self) -> Option<ExitStatus> {
         let mut active = self.active_child.lock().await;
@@ -533,8 +546,34 @@ impl PostgresSupervisor {
         self.start(&restore_config).await?;
         if self.child_pid() > 0 {
             if let Err(e) = self.wait_ready(config.port, 30).await {
+                warn!(
+                    ?e,
+                    "PostgreSQL failed to become ready after restoring snapshot"
+                );
                 let mut st = self.status.lock().await;
                 *st = ProcessStatus::Stopped;
+
+                // Stop or kill any remnant child process
+                let mut active = self.active_child.lock().await;
+                if let Some(mut child) = active.take() {
+                    let _ = child.kill().await;
+                }
+                self.child_pid.store(0, Ordering::SeqCst);
+
+                // Clean up recovery.signal and reset recovery_target_* configs so
+                // that an invalid target time does not leave the database permanently
+                // broken or unable to start.
+                let recovery_signal = self.data_dir.join("recovery.signal");
+                if recovery_signal.exists() {
+                    let _ = tokio::fs::remove_file(&recovery_signal).await;
+                    info!("Cleaned up recovery.signal after failed restore attempt");
+                }
+                let mut clean_config = config.clone();
+                clean_config.primary_conninfo = None;
+                clean_config.recovery_target_time = None;
+                clean_config.recovery_target_action = None;
+                let _ = ConfigGenerator::write_configs(&self.data_dir, &clean_config);
+
                 return Err(e);
             }
         }

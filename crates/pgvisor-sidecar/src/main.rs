@@ -367,6 +367,34 @@ async fn handle_restore(
     ));
 
     info!(snapshot_id = %payload.snapshot_id, bytes = tar_bytes.len(), "Restoring PostgreSQL data directory");
+    if let Some(target) = payload.recovery_target_time.as_deref() {
+        let trimmed = target.trim();
+        if !trimmed.is_empty() {
+            let parsed_dt = chrono::DateTime::parse_from_rfc3339(trimmed)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .or_else(|_| {
+                    chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S").map(|ndt| {
+                        chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(ndt, chrono::Utc)
+                    })
+                });
+            if let Ok(dt) = parsed_dt {
+                let now = chrono::Utc::now();
+                if dt > now + chrono::Duration::seconds(10) {
+                    return Err((
+                        axum::http::StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": format!(
+                                "Recovery target timestamp ({}) cannot be in the future. Current cluster time is {}.",
+                                dt.format("%Y-%m-%d %H:%M:%S UTC"),
+                                now.format("%Y-%m-%d %H:%M:%S UTC")
+                            )
+                        })),
+                    ));
+                }
+            }
+        }
+    }
+
     {
         let mut r = state.role.write().await;
         *r = "leader".to_string();
@@ -418,6 +446,29 @@ async fn handle_prepare_restore(
         "message": format!("Node {} prepared for restore", state.node_id),
         "node_id": state.node_id,
         "status_str": "restoring"
+    })))
+}
+
+async fn handle_cancel_restore(
+    State(state): State<SidecarState>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    info!(
+        node_id = state.node_id,
+        "Cancelling restoring state on node; returning to operational state"
+    );
+    let is_running = state.supervisor.is_running().await;
+    let new_status = if is_running {
+        ProcessStatus::Running
+    } else {
+        ProcessStatus::Stopped
+    };
+    state.supervisor.set_status(new_status).await;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "message": format!("Node {} restoring state cancelled", state.node_id),
+        "node_id": state.node_id,
+        "status_str": if is_running { "running" } else { "stopped" }
     })))
 }
 
@@ -944,6 +995,7 @@ async fn main() -> Result<()> {
         .route("/control/restart", post(handle_restart))
         .route("/control/restore", post(handle_restore))
         .route("/control/prepare-restore", post(handle_prepare_restore))
+        .route("/control/cancel-restore", post(handle_cancel_restore))
         .route("/control/resync", post(handle_resync))
         .route("/control/promote", post(handle_promote))
         .route("/control/fence", post(handle_fence))

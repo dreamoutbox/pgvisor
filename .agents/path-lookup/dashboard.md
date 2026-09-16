@@ -25,12 +25,12 @@
 
 ### If you want to modify cluster audit logs, dangerous SQL tracking, PITR recovery recommendations, or S3 audit event persistence:
 
-- `crates/pgvisor-core/src/audit.rs` = `AuditEventKind` enum, `AuditEvent` model, `AuditLog` ring buffer with background S3 persistence and startup loader
+- `crates/pgvisor-core/src/audit.rs` = `AuditEventKind` enum, `AuditEvent` model, `AuditLog` ring buffer with multi-event JSON batch persistence (`MAX_EVENTS_PER_BATCH`, `MAX_BATCH_BYTES`), size/count rotation, and backward-compatible startup loader
 - `crates/pgvisor-dashboard/src/models.rs` = `AuditEventView`, `AuditListResponse`, `AuditOverviewStats`
-- `crates/pgvisor-dashboard/src/templates.rs` = `AuditTemplate` Askama definition
-- `crates/pgvisor-dashboard/templates/audit.html` = Audit logs HTML dashboard page with search, filters, PITR timestamps, and responsive badges
+- `crates/pgvisor-dashboard/src/templates.rs` = `PageItem` struct and `AuditTemplate` Askama definition with `page_items`, `start_item`, `end_item`
+- `crates/pgvisor-dashboard/templates/audit.html` = Audit logs HTML dashboard page with search, filters, compact table density (`.audit-table`), compact badges and PITR box, rows-per-page selector, and full pagination navigation
 - `crates/pgvisor-dashboard/templates/base.html` = Sidebar navigation link and badge style formatting
-- `crates/pgvisor-dashboard/src/handlers.rs` = `/audit-logs` and `/api/audit-logs` Axum handlers, and audit event recording on user management actions
+- `crates/pgvisor-dashboard/src/handlers.rs` = `/audit-logs` and `/api/audit-logs` Axum handlers, pagination item computation, and audit event recording on user management actions
 - `crates/pgvisor-dashboard/src/lib.rs` = Route registration for `/audit-logs` and `/api/audit-logs`
 - `crates/pgvisor-proxy/src/session.rs` = Auditing dangerous SQL (DROP, TRUNCATE, DELETE) and user/permission SQL commands
 - `crates/pgvisor-proxy/src/backup.rs` = Auditing backup creation and restore operations

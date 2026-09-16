@@ -80,6 +80,12 @@ impl<'a> UsersTemplate<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageItem {
+    pub num: usize,
+    pub is_current: bool,
+}
+
 #[derive(Template)]
 #[template(path = "audit.html")]
 pub struct AuditTemplate<'a> {
@@ -91,6 +97,9 @@ pub struct AuditTemplate<'a> {
     pub limit: usize,
     pub total_pages: usize,
     pub total_events: usize,
+    pub start_item: usize,
+    pub end_item: usize,
+    pub page_items: Vec<PageItem>,
     pub auth_enabled: bool,
 }
 
@@ -137,6 +146,9 @@ mod tests {
             limit: 50,
             total_pages: 1,
             total_events: 2,
+            start_item: 1,
+            end_item: 2,
+            page_items: vec![PageItem { num: 1, is_current: true }],
             auth_enabled: false,
         };
 

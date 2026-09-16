@@ -20,6 +20,57 @@
     .val-ok {
         color: var(--success);
     }
+
+    .audit-table th,
+    .audit-table td {
+        padding: 7px 12px !important;
+        font-size: 0.82rem;
+    }
+
+    .badge-compact {
+        padding: 2px 7px;
+        font-size: 0.72rem;
+        border-radius: 4px;
+        display: inline-block;
+        font-weight: 500;
+    }
+
+    .pitr-box {
+        margin-top: 3px;
+        padding: 3px 8px;
+        background: rgba(0, 0, 0, 0.3);
+        border-left: 3px solid var(--warning);
+        border-radius: 4px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.76rem;
+    }
+
+    .pagination-link {
+        color: var(--text-main);
+        text-decoration: none;
+        padding: 4px 10px;
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        font-size: 0.8rem;
+        background: var(--bg-card-hover);
+        display: inline-flex;
+        align-items: center;
+        transition: all 0.15s ease;
+    }
+
+    .pagination-link:hover {
+        border-color: var(--primary);
+        color: var(--primary);
+    }
+
+    .pagination-link.active {
+        background: var(--primary);
+        color: #0f172a;
+        font-weight: 600;
+        border-color: var(--primary);
+    }
 </style>
 <div style="display: flex; flex-direction: column; gap: 24px;">
     <header style="margin-bottom: 0;">
@@ -100,7 +151,8 @@
                         Joined</option>
                     <option value="node_left" {% if active_kind==Some("node_left") %}selected{% endif %}>Worker Left
                     </option>
-                    <option value="user_permission" {% if active_kind==Some("user_permission") %}selected{% endif %}>User &amp; Permission Management
+                    <option value="user_permission" {% if active_kind==Some("user_permission") %}selected{% endif %}>
+                        User &amp; Permission Management
                     </option>
                 </select>
             </div>
@@ -125,11 +177,11 @@
 
     <!-- Audit Events Table -->
     <div style="border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg-card);">
-        <table>
+        <table class="audit-table">
             <thead>
                 <tr>
                     <th style="width: 170px;">Timestamp (UTC)</th>
-                    <th style="width: 220px; min-width: 200px;">Event Kind</th>
+                    <th style="width: 200px; min-width: 180px;">Event Kind</th>
                     <th style="width: 170px;">Node</th>
                     <th>Detail &amp; Disaster Recovery PITR Target</th>
                 </tr>
@@ -137,8 +189,8 @@
             <tbody>
                 {% if events.is_empty() %}
                 <tr>
-                    <td colspan="4" style="text-align: center; padding: 48px; color: var(--text-muted);">
-                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    <td colspan="4" style="text-align: center; padding: 36px; color: var(--text-muted);">
+                        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="1.5" style="margin-bottom: 8px; opacity: 0.5;">
                             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                             <polyline points="14 2 14 8 20 8" />
@@ -154,42 +206,46 @@
                 <tr class="{% if event.kind == " dangerous_sql" %}row-dangerous{% else if event.kind=="node_down"
                     %}row-down{% endif %}">
                     <td
-                        style="font-family: monospace; font-size: 0.82rem; color: var(--text-muted); white-space: nowrap;">
+                        style="font-family: monospace; font-size: 0.8rem; color: var(--text-muted); white-space: nowrap;">
                         {{ event.occurred_at }}
                     </td>
                     <td style="white-space: nowrap;">
                         {% if event.kind == "dangerous_sql" %}
-                        <span class="badge"
+                        <span class="badge badge-compact"
                             style="background: rgba(250, 204, 21, 0.2); color: var(--warning); border: 1px solid rgba(250, 204, 21, 0.3);">
                             {{ event.kind_display }}
                         </span>
                         {% else if event.kind == "node_up" %}
-                        <span class="badge badge-healthy">
+                        <span class="badge badge-compact badge-healthy">
                             {{ event.kind_display }}
                         </span>
                         {% else if event.kind == "node_down" %}
-                        <span class="badge badge-offline">
+                        <span class="badge badge-compact badge-offline">
                             {{ event.kind_display }}
                         </span>
                         {% else if event.kind == "backup_created" || event.kind == "backup_restored" %}
-                        <span class="badge" style="background: rgba(56, 189, 248, 0.2); color: var(--primary);">
+                        <span class="badge badge-compact"
+                            style="background: rgba(56, 189, 248, 0.2); color: var(--primary);">
                             {{ event.kind_display }}
                         </span>
                         {% else if event.kind == "election_result" %}
-                        <span class="badge" style="background: rgba(129, 140, 248, 0.2); color: var(--accent);">
+                        <span class="badge badge-compact"
+                            style="background: rgba(129, 140, 248, 0.2); color: var(--accent);">
                             {{ event.kind_display }}
                         </span>
                         {% else if event.kind == "user_permission" %}
-                        <span class="badge" style="background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3);">
+                        <span class="badge badge-compact"
+                            style="background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3);">
                             {{ event.kind_display }}
                         </span>
                         {% else %}
-                        <span class="badge" style="background: rgba(148, 163, 184, 0.2); color: var(--text-muted);">
+                        <span class="badge badge-compact"
+                            style="background: rgba(148, 163, 184, 0.2); color: var(--text-muted);">
                             {{ event.kind_display }}
                         </span>
                         {% endif %}
                     </td>
-                    <td style="font-size: 0.85rem;">
+                    <td style="font-size: 0.82rem;">
                         {% if let Some(addr) = event.node_address.as_ref() %}
                         <span style="font-family: monospace; color: var(--text-main);">
                             {% if let Some(nid) = event.node_id %}Node #{{ nid }} &middot; {% endif %}{{ addr }}
@@ -201,21 +257,21 @@
                         {% endif %}
                     </td>
                     <td>
-                        <div style="font-size: 0.9rem; line-height: 1.4; word-break: break-word;">
+                        <div style="font-size: 0.84rem; line-height: 1.35; word-break: break-word;">
                             {{ event.detail }}
                         </div>
                         {% if let Some(pitr) = event.pitr_target.as_ref() %}
-                        <div
-                            style="margin-top: 6px; padding: 6px 10px; background: rgba(0, 0, 0, 0.3); border-left: 3px solid var(--warning); border-radius: 4px; display: inline-flex; align-items: center; gap: 10px; font-size: 0.82rem;">
+                        <div class="pitr-box">
                             <span style="color: var(--warning); font-weight: 600;">PITR Restore Target:</span>
-                            <code style="font-family: monospace; color: var(--text-main);">{{ pitr }}</code>
+                            <code
+                                style="font-family: monospace; color: var(--text-main); font-size: 0.76rem;">{{ pitr }}</code>
                             <button
                                 onclick="navigator.clipboard.writeText('{{ pitr }}'); alert('Copied PITR target timestamp to clipboard: {{ pitr }}');"
-                                style="background: transparent; border: 1px solid var(--border); color: var(--text-muted); border-radius: 4px; padding: 2px 6px; font-size: 0.75rem; cursor: pointer;">
+                                style="background: transparent; border: 1px solid var(--border); color: var(--text-muted); border-radius: 4px; padding: 1px 5px; font-size: 0.72rem; cursor: pointer;">
                                 Copy
                             </button>
                             <a href="/backups"
-                                style="color: var(--primary); text-decoration: underline; font-size: 0.78rem;">
+                                style="color: var(--primary); text-decoration: underline; font-size: 0.75rem;">
                                 Restore Snapshot &rarr;
                             </a>
                         </div>
@@ -227,33 +283,72 @@
             </tbody>
         </table>
 
-        <!-- Pagination Controls -->
-        {% if total_pages > 1 %}
+        <!-- Enhanced Pagination Controls -->
         <div
-            style="display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; border-top: 1px solid var(--border); background: var(--bg-card);">
-            <div style="font-size: 0.85rem; color: var(--text-muted);">
-                Showing page {{ page }} of {{ total_pages }} ({{ total_events }} matching events)
+            style="display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; border-top: 1px solid var(--border); background: var(--bg-card); flex-wrap: wrap; gap: 12px;">
+            <div style="display: flex; align-items: center; gap: 16px;">
+                <div style="font-size: 0.82rem; color: var(--text-muted);">
+                    {% if total_events > 0 %}
+                    Showing {{ start_item }}–{{ end_item }} of {{ total_events }} matching events
+                    {% else %}
+                    0 matching events
+                    {% endif %}
+                </div>
+                <div
+                    style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; color: var(--text-muted);">
+                    <label for="limit-select">Rows per page:</label>
+                    <select id="limit-select" onchange="changeLimit(this.value)"
+                        style="background: var(--bg-main); color: var(--text-main); border: 1px solid var(--border); padding: 3px 8px; border-radius: 5px; font-size: 0.8rem; cursor: pointer;">
+                        <option value="10" {% if limit==10 %}selected{% endif %}>10</option>
+                        <option value="25" {% if limit==25 %}selected{% endif %}>25</option>
+                        <option value="50" {% if limit==50 %}selected{% endif %}>50</option>
+                        <option value="100" {% if limit==100 %}selected{% endif %}>100</option>
+                    </select>
+                </div>
             </div>
-            <div style="display: flex; gap: 8px;">
+
+            {% if total_pages > 1 %}
+            <div style="display: flex; gap: 4px; align-items: center;">
                 {% if page > 1 %}
-                <a href="/audit-logs?page={{ page - 1 }}&limit={{ limit }}{% if let Some(k) = active_kind %}&kind={{ k }}{% endif %}{% if let Some(q) = search_query %}&q={{ q }}{% endif %}"
-                    style="color: var(--text-main); text-decoration: none; padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem; background: var(--bg-card-hover);">
-                    &larr; Previous
-                </a>
+                <a class="pagination-link"
+                    href="/audit-logs?page=1&limit={{ limit }}{% if let Some(k) = active_kind %}&kind={{ k }}{% endif %}{% if let Some(q) = search_query %}&q={{ q }}{% endif %}"
+                    title="First Page">&laquo;</a>
+                <a class="pagination-link"
+                    href="/audit-logs?page={{ page - 1 }}&limit={{ limit }}{% if let Some(k) = active_kind %}&kind={{ k }}{% endif %}{% if let Some(q) = search_query %}&q={{ q }}{% endif %}">&larr;
+                    Prev</a>
                 {% endif %}
-                {% if page < total_pages %} <a
-                    href="/audit-logs?page={{ page + 1 }}&limit={{ limit }}{% if let Some(k) = active_kind %}&kind={{ k }}{% endif %}{% if let Some(q) = search_query %}&q={{ q }}{% endif %}"
-                    style="color: var(--text-main); text-decoration: none; padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem; background: var(--bg-card-hover);">
-                    Next &rarr;
-                    </a>
+
+                {% for p in page_items %}
+                {% if p.is_current %}
+                <span class="pagination-link active">{{ p.num }}</span>
+                {% else %}
+                <a class="pagination-link"
+                    href="/audit-logs?page={{ p.num }}&limit={{ limit }}{% if let Some(k) = active_kind %}&kind={{ k }}{% endif %}{% if let Some(q) = search_query %}&q={{ q }}{% endif %}">{{
+                    p.num }}</a>
+                {% endif %}
+                {% endfor %}
+
+                {% if page < total_pages %} <a class="pagination-link"
+                    href="/audit-logs?page={{ page + 1 }}&limit={{ limit }}{% if let Some(k) = active_kind %}&kind={{ k }}{% endif %}{% if let Some(q) = search_query %}&q={{ q }}{% endif %}">
+                    Next &rarr;</a>
+                    <a class="pagination-link"
+                        href="/audit-logs?page={{ total_pages }}&limit={{ limit }}{% if let Some(k) = active_kind %}&kind={{ k }}{% endif %}{% if let Some(q) = search_query %}&q={{ q }}{% endif %}"
+                        title="Last Page">&raquo;</a>
                     {% endif %}
             </div>
+            {% endif %}
         </div>
-        {% endif %}
     </div>
 </div>
 
 <script>
+    function changeLimit(newLimit) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('limit', newLimit);
+        url.searchParams.set('page', '1');
+        window.location.href = url.toString();
+    }
+
     // Optional auto-refresh every 30 seconds if page is idle
     setTimeout(() => {
         // Only reload if user hasn't focused on search input

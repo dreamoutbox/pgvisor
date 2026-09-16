@@ -93,6 +93,12 @@ pub struct AuditEvent {
     pub pitr_target: Option<String>,
 }
 
+/// Maximum number of audit events stored in a single rotated JSON batch file.
+pub const MAX_EVENTS_PER_BATCH: usize = 100;
+
+/// Maximum uncompressed bytes before rotating to a new audit JSON batch file (64 KB).
+pub const MAX_BATCH_BYTES: usize = 64 * 1024;
+
 /// Central in-memory audit log store with S3/OpenDAL persistence.
 pub struct AuditLog {
     cluster_name: String,
@@ -100,6 +106,8 @@ pub struct AuditLog {
     events: Arc<RwLock<VecDeque<AuditEvent>>>,
     next_id: AtomicU64,
     capacity: usize,
+    current_batch: Arc<RwLock<Vec<AuditEvent>>>,
+    current_batch_id: Arc<AtomicU64>,
 }
 
 impl AuditLog {
@@ -115,6 +123,8 @@ impl AuditLog {
             events: Arc::new(RwLock::new(VecDeque::with_capacity(capacity.min(1000)))),
             next_id: AtomicU64::new(1),
             capacity,
+            current_batch: Arc::new(RwLock::new(Vec::new())),
+            current_batch_id: Arc::new(AtomicU64::new(1)),
         }
     }
 
@@ -147,20 +157,35 @@ impl AuditLog {
         }
 
         if let Some(op) = self.operator.as_ref() {
-            // Operator is cheap Arc clone internally in OpenDAL
             let op = op.clone();
-            let key = format!("clusters/{}/audit/{:020}.json", self.cluster_name, id);
-            let payload = serde_json::to_vec(&event);
+            let cluster_name = self.cluster_name.clone();
+            let current_batch = self.current_batch.clone();
+            let current_batch_id = self.current_batch_id.clone();
+            let ev_clone = event.clone();
 
             tokio::spawn(async move {
+                let mut batch = current_batch.write().await;
+                batch.push(ev_clone);
+
+                let batch_id = current_batch_id.load(Ordering::SeqCst);
+                let key = format!(
+                    "clusters/{}/audit/audit_batch_{:08}.json",
+                    cluster_name, batch_id
+                );
+                let payload = serde_json::to_vec(&*batch);
+
                 match payload {
                     Ok(bytes) => {
+                        let size = bytes.len();
                         if let Err(err) = op.write(&key, bytes).await {
-                            warn!(?err, %key, "Failed to persist audit event to S3");
+                            warn!(?err, %key, "Failed to persist audit batch to S3");
+                        } else if batch.len() >= MAX_EVENTS_PER_BATCH || size >= MAX_BATCH_BYTES {
+                            batch.clear();
+                            current_batch_id.fetch_add(1, Ordering::SeqCst);
                         }
                     }
                     Err(err) => {
-                        warn!(?err, "Failed to serialize audit event for S3");
+                        warn!(?err, "Failed to serialize audit batch for S3");
                     }
                 }
             });
@@ -192,25 +217,51 @@ impl AuditLog {
 
         paths.sort();
 
-        // Only read up to capacity latest items to keep startup memory bound
-        let start_idx = if paths.len() > self.capacity {
-            paths.len() - self.capacity
-        } else {
-            0
-        };
-
         let mut loaded = Vec::new();
         let mut max_id = 0u64;
+        let mut max_batch_id = 0u64;
+        let mut latest_batch_events = Vec::new();
 
-        for path in &paths[start_idx..] {
-            if let Ok(data) = op.read(path).await {
-                if let Ok(event) = serde_json::from_slice::<AuditEvent>(&data.to_vec()) {
-                    if event.id > max_id {
-                        max_id = event.id;
+        for path in &paths {
+            if let Some(filename) = path.split('/').last() {
+                if let Some(rest) = filename.strip_prefix("audit_batch_") {
+                    if let Some(num_str) = rest.strip_suffix(".json") {
+                        if let Ok(bid) = num_str.parse::<u64>() {
+                            if bid > max_batch_id {
+                                max_batch_id = bid;
+                            }
+                        }
                     }
-                    loaded.push(event);
                 }
             }
+
+            if let Ok(data) = op.read(path).await {
+                let bytes = data.to_vec();
+                if let Ok(batch_events) = serde_json::from_slice::<Vec<AuditEvent>>(&bytes) {
+                    for ev in &batch_events {
+                        if ev.id > max_id {
+                            max_id = ev.id;
+                        }
+                    }
+                    if path.ends_with(&format!("audit_batch_{:08}.json", max_batch_id)) {
+                        latest_batch_events = batch_events.clone();
+                    }
+                    loaded.extend(batch_events);
+                } else if let Ok(single_event) = serde_json::from_slice::<AuditEvent>(&bytes) {
+                    if single_event.id > max_id {
+                        max_id = single_event.id;
+                    }
+                    loaded.push(single_event);
+                }
+            }
+        }
+
+        loaded.sort_by_key(|e| e.id);
+        loaded.dedup_by_key(|e| e.id);
+
+        if loaded.len() > self.capacity {
+            let drain_count = loaded.len() - self.capacity;
+            loaded.drain(0..drain_count);
         }
 
         let count = loaded.len();
@@ -221,6 +272,17 @@ impl AuditLog {
                 ring.push_back(ev);
             }
             self.next_id.store(max_id + 1, Ordering::SeqCst);
+        }
+
+        if max_batch_id > 0 {
+            if latest_batch_events.len() < MAX_EVENTS_PER_BATCH {
+                let mut batch = self.current_batch.write().await;
+                *batch = latest_batch_events;
+                self.current_batch_id.store(max_batch_id, Ordering::SeqCst);
+            } else {
+                self.current_batch_id
+                    .store(max_batch_id + 1, Ordering::SeqCst);
+            }
         }
 
         Ok(count)
@@ -393,5 +455,38 @@ mod tests {
         assert_eq!(total, 3);
         assert_eq!(dangerous_count, 2);
         assert_eq!(latest_pitr.as_deref(), Some("2026-09-09 11:00:00 UTC"));
+    }
+
+    #[test]
+    fn test_audit_batch_json_array_roundtrip() {
+        let events = vec![
+            AuditEvent {
+                id: 1,
+                occurred_at: Utc::now(),
+                kind: AuditEventKind::NodeUp,
+                node_id: Some(1),
+                node_address: Some("127.0.0.1:5432".to_string()),
+                detail: "Node up".to_string(),
+                pitr_target: None,
+            },
+            AuditEvent {
+                id: 2,
+                occurred_at: Utc::now(),
+                kind: AuditEventKind::BackupCreated,
+                node_id: Some(1),
+                node_address: None,
+                detail: "Backup created".to_string(),
+                pitr_target: None,
+            },
+        ];
+
+        let json = serde_json::to_string(&events).expect("Must serialize batch array");
+        assert!(json.starts_with('[') && json.ends_with(']'));
+
+        let decoded: Vec<AuditEvent> =
+            serde_json::from_str(&json).expect("Must deserialize batch array");
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0].id, 1);
+        assert_eq!(decoded[1].id, 2);
     }
 }

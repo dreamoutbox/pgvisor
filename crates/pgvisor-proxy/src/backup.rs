@@ -386,22 +386,60 @@ impl BackupService for ProxyBackupService {
             "recovery_target_time": target_time,
         });
 
-        let resp = self
+        if let Some(target) = target_time.as_deref() {
+            let trimmed = target.trim();
+            if !trimmed.is_empty() {
+                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(trimmed) {
+                    let now = Utc::now();
+                    if dt.with_timezone(&Utc) > now + chrono::Duration::seconds(10) {
+                        return Err(format!(
+                            "Recovery target timestamp ({}) cannot be in the future. Cluster current time is {}.",
+                            dt.format("%Y-%m-%d %H:%M:%S UTC"),
+                            now.format("%Y-%m-%d %H:%M:%S UTC")
+                        ));
+                    }
+                }
+            }
+        }
+
+        let resp_result = self
             .http_client
             .post(&leader_restore_url)
             .json(&restore_body)
             .send()
-            .await
-            .map_err(|e| {
-                format!(
+            .await;
+
+        let resp = match resp_result {
+            Ok(r) => r,
+            Err(e) => {
+                // Cancel Restoring state on standbys so they don't hang in degraded state
+                for standby_addr in &standbys {
+                    let standby_host = standby_addr.split(':').next().unwrap_or(standby_addr);
+                    let cancel_url = format!(
+                        "http://{}:{}/control/cancel-restore",
+                        standby_host, self.control_port
+                    );
+                    let _ = self.http_client.post(&cancel_url).send().await;
+                }
+                return Err(format!(
                     "Failed to connect to leader sidecar at {}: {}",
                     leader_restore_url, e
-                )
-            })?;
+                ));
+            }
+        };
 
         if !resp.status().is_success() {
             let status = resp.status();
             let err_text = resp.text().await.unwrap_or_default();
+            // Cancel Restoring state on standbys so they don't hang in degraded state
+            for standby_addr in &standbys {
+                let standby_host = standby_addr.split(':').next().unwrap_or(standby_addr);
+                let cancel_url = format!(
+                    "http://{}:{}/control/cancel-restore",
+                    standby_host, self.control_port
+                );
+                let _ = self.http_client.post(&cancel_url).send().await;
+            }
             return Err(format!(
                 "Leader sidecar restore returned error {}: {}",
                 status, err_text

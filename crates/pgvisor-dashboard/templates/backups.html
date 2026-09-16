@@ -509,6 +509,14 @@
         const btn = document.getElementById('btnSubmitRestore');
         const recoveryTime = document.getElementById('recoveryTime').value.trim();
 
+        if (recoveryTime) {
+            const parsedTime = Date.parse(recoveryTime.endsWith('Z') || recoveryTime.includes('+') ? recoveryTime : recoveryTime + ' UTC');
+            if (!isNaN(parsedTime) && parsedTime > Date.now() + 10000) {
+                showToast(`Recovery target timestamp (${recoveryTime}) cannot be in the future.`, true);
+                return;
+            }
+        }
+
         btn.disabled = true;
         btn.textContent = 'Executing Restore...';
 
@@ -522,8 +530,13 @@
             });
 
             if (!resp.ok) {
-                const err = await resp.text();
-                throw new Error(err || 'Restore failed');
+                let errText = await resp.text();
+                try {
+                    const parsed = JSON.parse(errText);
+                    if (parsed.error) errText = parsed.error;
+                    else if (typeof parsed === 'string') errText = parsed;
+                } catch (_) {}
+                throw new Error(errText || 'Restore failed');
             }
 
             closeRestoreModal();

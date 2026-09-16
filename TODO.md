@@ -156,7 +156,10 @@
 
 - [ ] user manually upload backup file to s3, then restore with web dashboard.
 
-- [ ] store multiple audit logs in a json file. rotate if too large.
+- [x] prevent invalid PITR input error make database can’t start (error → offline hang not restart). 
+
+- [x] store multiple audit logs in a json file. rotate if too large.
+- [x] add pagination to Cluster Audit Logs. make table row high smaller.
 
 - [x] demo PgVisor.
     - [x] setup.
@@ -164,7 +167,9 @@
     - [ ] backup/restore
     - [ ] testing node down.
 
-- [ ] prevent invalid PITR input error make database can’t start (error → offline hang not restart). 
+- [ ] split code into smaller files
+      - `crates/pgvisor-sidecar/src/main.rs`
+      - `crates/pgvisor-dashboard/src/handlers.rs`
 
 - [ ] TLS/SSL auto setup. write simple shell/python script to test SSL/TLS connection is working.
 

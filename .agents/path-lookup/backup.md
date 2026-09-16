@@ -33,11 +33,13 @@
 
 ### If you want to modify Point-In-Time Recovery (PITR), Quick Restore, or snapshot selection, then check:
 
-- `crates/pgvisor-dashboard/src/handlers.rs` = `find_best_backup_snapshot` (resolving closest prior basebackup snapshot to target), `parse_target_timestamp`, `BackupService::quick_restore`, `api_quick_restore`, and `api_find_best_backup`
+- `crates/pgvisor-dashboard/src/handlers.rs` = `find_best_backup_snapshot` (resolving closest prior basebackup snapshot to target), `parse_target_timestamp` (normalizing single-digit seconds and rejecting future timestamps), `BackupService::quick_restore`, `api_quick_restore`, and `api_restore_backup` validation
 - `crates/pgvisor-dashboard/src/models.rs` = `QuickRestoreRequest`, `QuickRestoreResponse`, `BestBackupQuery`, and `BestBackupResponse` models
 - `crates/pgvisor-dashboard/src/lib.rs` = Route registrations for `/api/backups/quick-restore` and `/api/backups/best`
-- `crates/pgvisor-dashboard/templates/backups.html` = Dashboard UI quick restore panel, real-time snapshot auto-match hint, and single-click restore confirmation modal
-- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::restore_backup` coordinating sidecar restore, standby replica re-sync, and connection pool draining
+- `crates/pgvisor-dashboard/templates/backups.html` = Dashboard UI quick restore panel, real-time snapshot auto-match hint, single-click restore confirmation modal, and client-side future time validation
+- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::restore_backup` coordinating sidecar restore, future target validation, standby cancellation via `/control/cancel-restore` on failure, standby replica re-sync, and connection pool draining
+- `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor::restore_from_snapshot` cleaning up `recovery.signal` and resetting configs on failed targeted restore, and `is_running`
+- `crates/pgvisor-sidecar/src/main.rs` = `handle_restore` validating target timestamps and `handle_cancel_restore` (`POST /control/cancel-restore`) returning standbys to running state
 - `dev-dump-table.sh` = Developer table dump script querying user tables and storing state to `./debug/*`
 - `dev-setup-demo-data.sh` = Demo dataset initialization script invoking `dev-dump-table.sh`
 - `knowledges/pitr-snapshot-selection-and-forward-recovery.md` = Forward recovery mechanics and snapshot selection rules
