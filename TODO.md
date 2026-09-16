@@ -163,9 +163,9 @@
 
 - [x] demo PgVisor.
     - [x] setup.
-    - [ ] adding new node.
-    - [ ] backup/restore
-    - [ ] testing node down.
+    - [x] adding new node.
+    - [x] backup/restore
+    - [x] testing node down.
 
 - [x] split code into smaller files
       - `crates/pgvisor-sidecar/src/main.rs`
