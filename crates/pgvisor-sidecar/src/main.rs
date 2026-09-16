@@ -333,6 +333,9 @@ async fn handle_restore(
     State(state): State<SidecarState>,
     Json(payload): Json<RestorePayload>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    // Immediately transition supervisor status to Restoring so peers pause failover
+    state.supervisor.set_status(ProcessStatus::Restoring).await;
+
     let bm = state.backup_manager.as_ref().ok_or_else(|| {
         (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
@@ -392,10 +395,38 @@ async fn handle_restore(
     })))
 }
 
+async fn handle_prepare_restore(
+    State(state): State<SidecarState>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    info!(
+        node_id = state.node_id,
+        "Preparing node for cluster restore; entering Restoring state to pause failover"
+    );
+    state.supervisor.set_status(ProcessStatus::Restoring).await;
+    state
+        .record_event(
+            "cluster_restore",
+            format!(
+                "Node {} entered Restoring state for cluster restore",
+                state.node_id
+            ),
+        )
+        .await;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "message": format!("Node {} prepared for restore", state.node_id),
+        "node_id": state.node_id,
+        "status_str": "restoring"
+    })))
+}
+
 async fn handle_resync(
     State(state): State<SidecarState>,
     payload: Option<Json<ResyncPayload>>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    state.supervisor.set_status(ProcessStatus::Restoring).await;
+
     let configured_conninfo = state.config.read().await.primary_conninfo.clone();
     let mut primary_conninfo = payload
         .and_then(|p| p.primary_conninfo.clone())
@@ -465,7 +496,7 @@ async fn start_postgres_safely(
             let url = format!("{}/control/status", peer.trim_end_matches('/'));
             if let Ok(resp) = client.get(&url).send().await {
                 if let Ok(st) = resp.json::<StatusResponse>().await {
-                    if st.role == "leader" && st.status == "running" {
+                    if st.role == "leader" && (st.status == "running" || st.status == "restoring") {
                         let conninfo = format!(
                             "host=pgvisor-node{} port=5432 user=postgres application_name=pgvisor-node{}",
                             st.node_id, state.node_id
@@ -912,6 +943,7 @@ async fn main() -> Result<()> {
         .route("/control/stop", post(handle_stop))
         .route("/control/restart", post(handle_restart))
         .route("/control/restore", post(handle_restore))
+        .route("/control/prepare-restore", post(handle_prepare_restore))
         .route("/control/resync", post(handle_resync))
         .route("/control/promote", post(handle_promote))
         .route("/control/fence", post(handle_fence))
@@ -1088,6 +1120,9 @@ async fn main() -> Result<()> {
                                 if st.role == "leader" {
                                     leader_found = true;
                                 }
+                            } else if st.role == "leader" {
+                                alive_nodes.push(st.node_id);
+                                leader_found = true;
                             }
                         }
                     }

@@ -339,6 +339,29 @@ impl BackupService for ProxyBackupService {
             .unwrap_or("pgvisor-node1")
             .to_string();
 
+        // 2. Determine standbys: union dynamic standbys and configured standbys
+        let mut standbys = self.standby_addrs.read().await.clone();
+        for s in &self.configured_standbys {
+            if !standbys.contains(s) {
+                standbys.push(s.clone());
+            }
+        }
+        standbys.retain(|s| {
+            let host = s.split(':').next().unwrap_or(s);
+            host != leader_host
+        });
+
+        // 3. Notify standbys to prepare for cluster restore (enters Restoring state to pause failover)
+        for standby_addr in &standbys {
+            let standby_host = standby_addr.split(':').next().unwrap_or(standby_addr);
+            let prepare_url = format!(
+                "http://{}:{}/control/prepare-restore",
+                standby_host, self.control_port
+            );
+            info!(%prepare_url, "Notifying standby replica to prepare for cluster restore");
+            let _ = self.http_client.post(&prepare_url).send().await;
+        }
+
         let leader_restore_url = format!(
             "http://{}:{}/control/restore",
             leader_host, self.control_port
@@ -374,18 +397,7 @@ impl BackupService for ProxyBackupService {
 
         info!("Leader successfully restored, now triggering re-sync on standbys");
 
-        // 2. Re-sync standbys: union dynamic standbys and configured standbys
-        let mut standbys = self.standby_addrs.read().await.clone();
-        for s in &self.configured_standbys {
-            if !standbys.contains(s) {
-                standbys.push(s.clone());
-            }
-        }
-        standbys.retain(|s| {
-            let host = s.split(':').next().unwrap_or(s);
-            host != leader_host
-        });
-
+        // 4. Re-sync standbys
         for standby_addr in standbys {
             let standby_host = standby_addr.split(':').next().unwrap_or(&standby_addr);
             let resync_url = format!(
@@ -398,9 +410,9 @@ impl BackupService for ProxyBackupService {
                 "primary_conninfo": format!("host={} port=5432 user=postgres", leader_host)
             });
 
-            // Retry re-sync up to 3 attempts with brief backoff to absorb transient sidecar readiness delays
+            // Retry re-sync up to 5 attempts with brief backoff to absorb transient sidecar readiness delays
             let mut resync_ok = false;
-            for attempt in 1..=3 {
+            for attempt in 1..=5 {
                 match self
                     .http_client
                     .post(&resync_url)

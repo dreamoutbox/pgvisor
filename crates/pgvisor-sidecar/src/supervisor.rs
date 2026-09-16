@@ -188,7 +188,9 @@ impl PostgresSupervisor {
             let mut active = self.active_child.lock().await;
             *active = Some(child);
             let mut st = self.status.lock().await;
-            *st = ProcessStatus::Running;
+            if *st != ProcessStatus::Restoring {
+                *st = ProcessStatus::Running;
+            }
             let mut started = self.started_at.lock().await;
             *started = Some(std::time::Instant::now());
         }
@@ -373,7 +375,9 @@ impl PostgresSupervisor {
         }
 
         let mut st = self.status.lock().await;
-        *st = ProcessStatus::Stopped;
+        if *st != ProcessStatus::Restoring {
+            *st = ProcessStatus::Stopped;
+        }
         let mut started = self.started_at.lock().await;
         *started = None;
         self.child_pid.store(0, Ordering::SeqCst);
@@ -448,12 +452,12 @@ impl PostgresSupervisor {
     ) -> Result<(), SupervisorError> {
         info!(dir = ?self.data_dir, "Initiating in-place cluster restore from snapshot");
 
-        // 1. Stop Postgres if running
-        let _ = self.stop().await;
+        // 1. Mark status as Restoring before stopping Postgres
         {
             let mut st = self.status.lock().await;
             *st = ProcessStatus::Restoring;
         }
+        let _ = self.stop().await;
 
         // 2. Clear old data directory
         if self.data_dir.exists() {
@@ -530,6 +534,10 @@ impl PostgresSupervisor {
                 return Err(e);
             }
         }
+        {
+            let mut st = self.status.lock().await;
+            *st = ProcessStatus::Running;
+        }
 
         // 6. If targeted recovery was performed, clear recovery target settings now that Postgres is promoted
         if recovery_target_time.is_some() {
@@ -553,12 +561,12 @@ impl PostgresSupervisor {
     ) -> Result<(), SupervisorError> {
         info!(dir = ?self.data_dir, primary_conninfo, "Re-syncing standby replica from primary");
 
-        // 1. Stop Postgres if running
-        let _ = self.stop().await;
+        // 1. Mark status as Restoring before stopping Postgres
         {
             let mut st = self.status.lock().await;
             *st = ProcessStatus::Restoring;
         }
+        let _ = self.stop().await;
 
         let res = self.resync_from_primary_inner(primary_conninfo, config).await;
         if res.is_err() {
@@ -635,6 +643,10 @@ impl PostgresSupervisor {
         self.start(&standby_config).await?;
         if self.child_pid() > 0 {
             self.wait_ready(config.port, 30).await?;
+        }
+        {
+            let mut st = self.status.lock().await;
+            *st = ProcessStatus::Running;
         }
 
         info!("Standby replica successfully re-synced and ready");

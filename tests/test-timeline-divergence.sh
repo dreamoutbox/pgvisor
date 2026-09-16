@@ -48,7 +48,18 @@ echo "  PgVisor Timeline Divergence & Multi-Restore Test"
 echo "  Project: ${PROJECT_NAME} | Port: ${PROXY_PORT}"
 echo "========================================================="
 
+TEST_SUCCESS=0
 cleanup() {
+    if [ "${TEST_SUCCESS:-0}" -ne 1 ]; then
+        echo "=== Dump on Failure: Node 1 ==="
+        docker logs --tail 80 "${PROJECT_NAME}-node1" 2>&1 || true
+        echo "=== Dump on Failure: Node 2 ==="
+        docker logs --tail 80 "${PROJECT_NAME}-node2" 2>&1 || true
+        echo "=== Dump on Failure: Node 3 ==="
+        docker logs --tail 80 "${PROJECT_NAME}-node3" 2>&1 || true
+        echo "=== Dump on Failure: Proxy ==="
+        docker logs --tail 80 "${PROJECT_NAME}-proxy" 2>&1 || true
+    fi
     echo "Tearing down cluster ${PROJECT_NAME}..."
     cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
 }
@@ -380,6 +391,7 @@ assert_tables_fast 5
 
 echo "✓ Step 3 verified: repeated PITR restore succeeded, 0 crashes, /tables loads fast."
 
+TEST_SUCCESS=1
 echo ""
 echo "========================================================="
 echo "  Timeline Divergence & Multi-Restore Test PASSED!       "

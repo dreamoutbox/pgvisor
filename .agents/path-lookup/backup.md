@@ -12,6 +12,13 @@
 - `knowledges/post-mortem-timeline-divergence-and-recovery-overrun.md` = Post-mortem detailing multi-timeline divergence on standby recovery, recovery target overrun FATAL error, proxy redirect-follow / self-restore bug, and dead pool timeout
 - `docker-compose.yml` = Local MinIO and S3 credentials configuration for local development
 
+### If you want to modify cluster restore synchronization, standby failover suppression during restore, or timeline divergence recovery, then check:
+
+- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::restore_backup` notifying standbys via `/control/prepare-restore`, restoring leader, and re-syncing standbys with retries
+- `crates/pgvisor-sidecar/src/main.rs` = `handle_prepare_restore`, `handle_restore`, and `handle_resync` setting `ProcessStatus::Restoring`, and heartbeat loop treating responding leader as alive
+- `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor` preserving `ProcessStatus::Restoring` across `start()`/`stop()`, and setting `Running` only after `wait_ready()` succeeds
+- `tests/test-timeline-divergence.sh` = Automated regression test verifying timeline branching, standby re-sync on divergent timelines, and repeated PITR restores
+
 ### If you want to modify backup metadata (labels, notes, WAL ranges), snapshot triggering, or backup table views, then check:
 
 - `crates/pgvisor-core/src/backup/manager.rs` = `BasebackupMeta` metadata struct (snapshot ID, label, created timestamp, backup type, WAL range, byte size) and OpenDAL storage manager
