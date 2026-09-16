@@ -25,6 +25,7 @@ pub struct ProxyClusterService {
     pool: ConnectionPool,
     http_client: reqwest::Client,
     audit_log: Option<Arc<AuditLog>>,
+    cluster_secret: Option<String>,
 }
 
 impl ProxyClusterService {
@@ -46,12 +47,32 @@ impl ProxyClusterService {
             pool,
             http_client,
             audit_log: None,
+            cluster_secret: None,
         }
     }
 
     /// Injects central audit log store into cluster service.
     pub fn with_audit_log(mut self, audit_log: Arc<AuditLog>) -> Self {
         self.audit_log = Some(audit_log);
+        self
+    }
+
+    /// Injects cluster shared secret for authenticating requests to sidecars.
+    pub fn with_cluster_secret(mut self, cluster_secret: Option<String>) -> Self {
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Some(secret) = cluster_secret.as_deref() {
+            if let Ok(val) = reqwest::header::HeaderValue::from_str(
+                &pgvisor_core::auth::make_auth_header_value(secret),
+            ) {
+                headers.insert(reqwest::header::AUTHORIZATION, val);
+            }
+        }
+        self.http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .default_headers(headers)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        self.cluster_secret = cluster_secret;
         self
     }
 

@@ -106,6 +106,12 @@ async fn main() -> Result<()> {
     let cluster_id =
         env::var("PGVISOR_CLUSTER_ID").unwrap_or_else(|_| "pgvisor-cluster".to_string());
     let admin_token = env::var("PGVISOR_ADMIN_TOKEN").ok();
+    let cluster_secret = pgvisor_core::auth::cluster_secret_from_env();
+    if cluster_secret.is_none() {
+        warn!("PGVISOR_CLUSTER_SECRET is not configured; proxy-to-sidecar communication is unauthenticated");
+    } else {
+        info!("Cluster authentication enabled for proxy-to-sidecar communication");
+    }
 
     // S3 and backup configuration for physical snapshots, automated CRON, and audit logs
     let backup_config = BackupScheduleConfig::from_env();
@@ -158,6 +164,7 @@ async fn main() -> Result<()> {
                         backup_config.keep_count,
                         control_port,
                     )
+                    .with_cluster_secret(cluster_secret.clone())
                     .with_audit_log(audit_log.clone()),
                 )
             } else {
@@ -180,6 +187,7 @@ async fn main() -> Result<()> {
                 standby_ref.clone(),
                 pool.clone(),
             )
+            .with_cluster_secret(cluster_secret.clone())
             .with_audit_log(audit_log.clone()),
         );
         dash_state_inner.cluster_service = cluster_service;
@@ -265,10 +273,21 @@ async fn main() -> Result<()> {
     let targets_monitor = targets.clone();
     let audit_monitor = audit_log.clone();
     let node_telemetry_monitor = node_telemetry.clone();
+    let cluster_secret_monitor = cluster_secret.clone();
 
     tokio::spawn(async move {
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Some(secret) = cluster_secret_monitor.as_deref() {
+            if let Ok(val) = reqwest::header::HeaderValue::from_str(
+                &pgvisor_core::auth::make_auth_header_value(secret),
+            ) {
+                headers.insert(reqwest::header::AUTHORIZATION, val);
+            }
+        }
+
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_millis(800))
+            .default_headers(headers)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 

@@ -30,3 +30,16 @@
 - `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor::set_status` and `resync_from_primary` resetting status on error
 - `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService::switchover` orchestrating demotion of current leader, promotion of target standby, and repointing of remaining standbys
 - `tests/test-switchover.sh` = Integration test verifying graceful switchover, demoted leader auto-rejoin, streaming replication, and second reverse switchover
+
+### If you want to modify proxy-to-sidecar or sidecar-to-sidecar cluster authentication, then check:
+
+- `crates/pgvisor-core/src/auth.rs` = HMAC-SHA256 bearer token derivation, header formatting, and constant-time validation functions
+- `crates/pgvisor-sidecar/src/control/auth.rs` = Axum middleware enforcing `PGVISOR_CLUSTER_SECRET` on control endpoints
+- `crates/pgvisor-sidecar/src/control/server.rs` = Axum control router applying cluster auth middleware
+- `crates/pgvisor-sidecar/src/control/state.rs` = `SidecarState.cluster_secret` field and constructor
+- `crates/pgvisor-sidecar/src/control/handlers.rs` = `start_postgres_safely` peer leader discovery client with auth header
+- `crates/pgvisor-sidecar/src/election.rs` = `spawn_election_monitor` peer heartbeat and repoint broadcast client with auth header
+- `crates/pgvisor-proxy/src/main.rs` = Proxy reading `PGVISOR_CLUSTER_SECRET` and configuring topology monitor client
+- `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService::with_cluster_secret` attaching auth header to switchover/node lifecycle calls
+- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::with_cluster_secret` attaching auth header to restore/resync calls
+- `docker-compose.yml` = `PGVISOR_CLUSTER_SECRET` environment variable distribution across cluster services

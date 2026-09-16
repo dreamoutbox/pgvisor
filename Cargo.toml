@@ -35,3 +35,7 @@ pgwire = { version = "0.41", default-features = false }
 croner = { version = "4.0", default-features = false, features = ["chrono"] }
 flate2 = "1.0"
 tar = "0.4"
+hmac = "0.12"
+sha2 = "0.10"
+subtle = "2"
+hex = "0.4"

@@ -1,4 +1,4 @@
-# Auto-generated test compose file for auto-rejoin profile
+# Auto-generated test compose file for cluster-auth profile
 # Generated from docker-compose.yml by scripts/generate_test_composes.py
 volumes:
   minio_data:
@@ -9,13 +9,13 @@ volumes:
 services:
   minio:
     image: rustfs/rustfs:latest
-    container_name: pgvisor-auto-rejoin-minio
+    container_name: pgvisor-cluster-auth-minio
     restart: unless-stopped
     cpus: 1
     mem_limit: 1g
     ports:
-      - "9500:9000"
-      - "9501:9001"
+      - "11100:9000"
+      - "11101:9001"
     environment:
       RUSTFS_ACCESS_KEY: minioadmin
       RUSTFS_SECRET_KEY: minioadmin
@@ -32,7 +32,7 @@ services:
 
   minio-init:
     image: rustfs/rustfs:latest
-    container_name: pgvisor-auto-rejoin-minio-init
+    container_name: pgvisor-cluster-auth-minio-init
     cpus: 1
     mem_limit: 1g
     depends_on:
@@ -47,7 +47,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     image: pgvisor-test-node:latest
-    container_name: pgvisor-auto-rejoin-node1
+    container_name: pgvisor-cluster-auth-node1
     restart: unless-stopped
     cpus: 1
     mem_limit: 1g
@@ -81,7 +81,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     image: pgvisor-test-node:latest
-    container_name: pgvisor-auto-rejoin-node2
+    container_name: pgvisor-cluster-auth-node2
     restart: unless-stopped
     cpus: 1
     mem_limit: 1g
@@ -116,7 +116,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     image: pgvisor-test-node:latest
-    container_name: pgvisor-auto-rejoin-node3
+    container_name: pgvisor-cluster-auth-node3
     restart: unless-stopped
     cpus: 1
     mem_limit: 1g
@@ -151,14 +151,14 @@ services:
       context: ..
       dockerfile: Dockerfile
     image: pgvisor-test-proxy:latest
-    container_name: pgvisor-auto-rejoin-proxy
+    container_name: pgvisor-cluster-auth-proxy
     entrypoint: [ "pgvisor-proxy" ]
     restart: unless-stopped
     cpus: 1
     mem_limit: 1g
     ports:
-      - "5932:5432"
-      - "8580:8080"
+      - "7532:5432"
+      - "10180:8080"
     environment:
       PGVISOR_PROXY_LISTEN: 0.0.0.0:5432
       PGVISOR_DASHBOARD_LISTEN: 0.0.0.0:8080

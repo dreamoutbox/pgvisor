@@ -136,6 +136,13 @@ async fn main() -> Result<()> {
             .collect(),
     );
 
+    let cluster_secret = pgvisor_core::auth::cluster_secret_from_env();
+    if cluster_secret.is_none() {
+        warn!("PGVISOR_CLUSTER_SECRET is not configured; sidecar control API is running in UNAUTHENTICATED mode");
+    } else {
+        info!("Cluster authentication enabled for sidecar control API");
+    }
+
     let control_state = SidecarState::new(
         supervisor.clone(),
         Arc::new(RwLock::new(config.clone())),
@@ -144,6 +151,7 @@ async fn main() -> Result<()> {
         role_ref.clone(),
         pg_version,
         peers.clone(),
+        cluster_secret,
     );
 
     // Log initial startup event

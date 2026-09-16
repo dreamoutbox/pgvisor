@@ -31,6 +31,7 @@ pub struct SidecarState {
     pub event_id: Arc<AtomicU64>,
     pub system_metrics: Arc<SystemMetricsCollector>,
     pub peers: Arc<Vec<String>>,
+    pub cluster_secret: Option<String>,
 }
 
 impl SidecarState {
@@ -42,6 +43,7 @@ impl SidecarState {
         role: Arc<RwLock<String>>,
         pg_version: String,
         peers: Arc<Vec<String>>,
+        cluster_secret: Option<String>,
     ) -> Self {
         Self {
             supervisor,
@@ -54,6 +56,7 @@ impl SidecarState {
             event_id: Arc::new(AtomicU64::new(1)),
             system_metrics: Arc::new(SystemMetricsCollector::new()),
             peers,
+            cluster_secret,
         }
     }
 

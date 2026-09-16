@@ -41,6 +41,7 @@ PROFILES = [
     ("restart-leader", "restart-leader", 7232, 9880, 10800, 10801),
     ("promoted-restore", "promoted-restore", 7332, 9980, 10900, 10901),
     ("load", "load", 7432, 10080, 11000, 11001),
+    ("cluster-auth", "cluster-auth", 7532, 10180, 11100, 11101),
 ]
 
 

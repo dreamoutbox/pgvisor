@@ -25,8 +25,9 @@
 - `tests/test-timeline-divergence.sh` = self-contained timeline divergence and recovery target overrun test (port 7032; PITR restore f1 -> incr2 -> re-restore f1, asserts no standby crash, no recovery overrun fatal, and fast /tables load).
 - `tests/test-node-lifecycle.sh` = self-contained node start/stop/restart verification test (port 7132; tests stopping standby, pool continuity, starting standby, restart, error handling 400/404, and audit events).
 - `tests/test-restart-leader.sh` = self-contained stopped leader restart and standby rejoin test (port 7232; stops leader Node 1, waits for standby failover, starts Node 1, asserts no split-brain crash, and verifies replication catch-up).
-- `tests/test-promoted-restore.sh` = self-contained promoted leader snapshot restore regression test (port 7332; stops leader Node 1, asserts Node 2 auto-promotes, restores incremental snapshot without PITR target time, asserts Node 2 boots as read-write primary with zero recovery spam, and verifies replica re-sync).
-- `dev-loadtest.sh` = standalone load testing and capacity benchmark runner using pgbench (port 7432; outputs markdown reports into `tests/load/`).
+- `tests/test-cluster-auth.sh` = cluster internal authentication security test; tests forged bad-guy requests (missing header, forged random token, wrong password, Basic auth, malicious repoint, malicious fence/demote) for both proxy->sidecar and sidecar->sidecar communication using isolated Docker Compose profile `pgvisor-cluster-auth`.
+- `composes/docker-compose.cluster-auth.yml` = isolated test compose file for cluster internal auth test (proxy port 7532, dashboard 10180, minio 11100/11101).
+- `scripts/derive-auth-token.py` = standalone script to compute deterministic HMAC-SHA256 bearer tokens for cluster authentication without inline python scripts.
 - `composes/docker-compose.load.yml` = isolated test compose file for load testing with 1 CPU and 1GB RAM limits.
 - `composes/docker-compose.proxy-failover-proxy2.yml` = compose overlay defining the second proxy (pgvisor-proxy2) on ports 6833/9481.
 - `reset-docker-compose.sh` = developer cluster reset script; builds images by default, supports `--no-build` and `-s`/`--silent`.

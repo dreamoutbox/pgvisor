@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod auth;
 pub mod backup;
 pub mod error;
 pub mod logging;
@@ -8,6 +9,10 @@ pub mod raft;
 pub mod storage;
 
 pub use audit::{AuditError, AuditEvent, AuditEventKind, AuditLog};
+pub use auth::{
+    cluster_secret_from_env, derive_bearer_token, make_auth_header_value, validate_bearer_token,
+    CLUSTER_SECRET_ENV,
+};
 pub use backup::{BackupError, BackupManager, BasebackupMeta};
 pub use error::StorageError;
 pub use logging::{

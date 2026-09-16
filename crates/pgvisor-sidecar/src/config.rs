@@ -68,7 +68,8 @@ impl ConfigGenerator {
             wal_level = replica\n\
             max_wal_senders = 10\n\
             wal_keep_size = '{wal_size}'\n\
-            hot_standby = on\n",
+            hot_standby = on\n\
+            unix_socket_directories = '/tmp'\n",
             port = config.port,
             max_conn = config.max_connections,
             buffers = config.shared_buffers,

@@ -13,8 +13,18 @@ pub fn spawn_election_monitor(monitor_state: SidecarState, peers: Arc<Vec<String
         return;
     }
 
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Some(secret) = monitor_state.cluster_secret.as_deref() {
+        if let Ok(val) = reqwest::header::HeaderValue::from_str(
+            &pgvisor_core::auth::make_auth_header_value(secret),
+        ) {
+            headers.insert(reqwest::header::AUTHORIZATION, val);
+        }
+    }
+
     let client = reqwest::Client::builder()
         .timeout(Duration::from_millis(800))
+        .default_headers(headers)
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
 

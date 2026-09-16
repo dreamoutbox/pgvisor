@@ -20,6 +20,10 @@ chrono = { workspace = true }
 pgwire = { workspace = true }
 flate2 = { workspace = true }
 tar = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+subtle = { workspace = true }
+hex = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.12"

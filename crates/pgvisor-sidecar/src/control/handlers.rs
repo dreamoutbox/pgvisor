@@ -465,8 +465,18 @@ pub async fn start_postgres_safely(
     // Probe peers to discover if an active leader is already operating in the cluster
     let mut peer_leader: Option<(u64, String)> = None;
     if !state.peers.is_empty() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Some(secret) = state.cluster_secret.as_deref() {
+            if let Ok(val) = reqwest::header::HeaderValue::from_str(
+                &pgvisor_core::auth::make_auth_header_value(secret),
+            ) {
+                headers.insert(reqwest::header::AUTHORIZATION, val);
+            }
+        }
+
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_millis(800))
+            .default_headers(headers)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
