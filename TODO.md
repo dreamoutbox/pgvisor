@@ -167,19 +167,21 @@
     - [ ] backup/restore
     - [ ] testing node down.
 
-- [ ] split code into smaller files
+- [x] split code into smaller files
       - `crates/pgvisor-sidecar/src/main.rs`
       - `crates/pgvisor-dashboard/src/handlers.rs`
 
-- [ ] TLS/SSL auto setup. write simple shell/python script to test SSL/TLS connection is working.
+- [ ] secure proxy to sidecar worker. when communication over network with password/private key. currently sidecar rust axum server not have any authentication.
 
-- [ ] secure proxy to sidecar worker. when communication over network with password/private key. currently I think sidecar rust axum not have any authentication.
+- [ ] TLS/SSL mode. auto setup. write simple shell/python script to test SSL/TLS connection is working.
 
 - [ ] make proxy and sidecar export opentelemetry data. to use with grafana / prometheus.
 
 ---
 
 # Backlog
+
+- [ ] web dashboard support multiple users.
 
 - [ ] manage database and execute backup/restore with cli
 
