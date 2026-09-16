@@ -129,6 +129,12 @@ fi
 echo "✓ Basebackup created successfully. Snapshot ID: ${SNAPSHOT_ID}"
 echo "  Backup source node: '${SOURCE_NODE}'"
 
+if [[ ! "${SNAPSHOT_ID}" =~ ^test-backup-restore-suite-snap- ]]; then
+    echo "FAILED: Snapshot ID '${SNAPSHOT_ID}' does not contain label prefix 'test-backup-restore-suite-snap-'!"
+    exit 1
+fi
+echo "✓ Verified snapshot ID includes label prefix: ${SNAPSHOT_ID}"
+
 # Assert that backup was performed on a follower node (node2 or node3) to reduce primary load
 if [ -n "${SOURCE_NODE}" ]; then
     if [ "${SOURCE_NODE}" = "pgvisor-backup-restore-node1" ]; then
@@ -191,6 +197,59 @@ fi
 
 ARCHIVE_SIZE=$(wc -c < "${TMP_ARCHIVE}")
 echo "✓ Snapshot archive verified and downloaded (${ARCHIVE_SIZE} bytes)."
+
+# ------------------------------------------------------------------------------
+# [4b/7] Verify archive contains metadata.json and excludes backup_label.old
+# ------------------------------------------------------------------------------
+echo ""
+echo "[4b/7] Verifying archive contents (metadata.json present, backup_label.old excluded)..."
+TAR_CONTENTS=$(tar -tzf "${TMP_ARCHIVE}")
+
+if ! echo "${TAR_CONTENTS}" | grep -q "^metadata.json$"; then
+    echo "FAILED: metadata.json not found in downloaded backup archive!"
+    exit 1
+fi
+echo "✓ Verified metadata.json is included in backup archive root."
+
+if echo "${TAR_CONTENTS}" | grep -q "backup_label.old"; then
+    echo "FAILED: backup_label.old was found in downloaded backup archive!"
+    exit 1
+fi
+echo "✓ Verified backup_label.old is excluded from backup archive."
+
+# Extract and inspect metadata.json
+EXTRACT_DIR="/tmp/pgvisor-meta-test-$$"
+mkdir -p "${EXTRACT_DIR}"
+tar -xzf "${TMP_ARCHIVE}" -C "${EXTRACT_DIR}" metadata.json
+
+META_BACKUP_ID=$(json_extract "backup_id" < "${EXTRACT_DIR}/metadata.json")
+META_LABEL=$(json_extract "label" < "${EXTRACT_DIR}/metadata.json")
+META_TYPE=$(json_extract "backup_type" < "${EXTRACT_DIR}/metadata.json")
+META_START_DATE=$(json_extract "backup_start_date" < "${EXTRACT_DIR}/metadata.json")
+META_TIMELINE=$(json_extract "timeline" < "${EXTRACT_DIR}/metadata.json")
+rm -rf "${EXTRACT_DIR}"
+
+if [ "${META_BACKUP_ID}" != "${SNAPSHOT_ID}" ]; then
+    echo "FAILED: metadata.json backup_id '${META_BACKUP_ID}' does not match snapshot_id '${SNAPSHOT_ID}'!"
+    exit 1
+fi
+if [ "${META_LABEL}" != "test-backup-restore-suite" ]; then
+    echo "FAILED: metadata.json label '${META_LABEL}' does not match expected 'test-backup-restore-suite'!"
+    exit 1
+fi
+if [ "${META_TYPE}" != "full" ]; then
+    echo "FAILED: metadata.json backup_type '${META_TYPE}' does not match expected 'full'!"
+    exit 1
+fi
+if [ -z "${META_START_DATE}" ]; then
+    echo "FAILED: metadata.json backup_start_date is missing!"
+    exit 1
+fi
+if [ -z "${META_TIMELINE}" ]; then
+    echo "FAILED: metadata.json timeline is missing!"
+    exit 1
+fi
+echo "✓ Verified metadata.json fields: backup_id='${META_BACKUP_ID}', label='${META_LABEL}', type='${META_TYPE}', start_date='${META_START_DATE}', timeline='${META_TIMELINE}'."
 
 # ------------------------------------------------------------------------------
 # [5/7] Simulate disaster: Drop table 't1'

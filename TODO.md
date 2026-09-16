@@ -151,7 +151,9 @@
 
 - [x] fix tests/test-switchover.sh
 
-- [ ] add backup metadata.json. inside backup dir. 
+- [x] make backup snapshot ID include the optional label.
+- [x] add backup metadata.json. inside backup dir.
+
 - [ ] user manually upload backup file to s3, then restore with web dashboard.
 
 - [ ] store multiple audit logs in a json file. rotate if too large.
@@ -166,7 +168,9 @@
 
 - [ ] TLS/SSL auto setup. write simple shell/python script to test SSL/TLS connection is working.
 
-- [ ] secure proxy to sidecar worker communication over network with password/private key
+- [ ] secure proxy to sidecar worker. when communication over network with password/private key. currently I think sidecar rust axum not have any authentication.
+
+- [ ] make proxy and sidecar export opentelemetry data. to use with grafana / prometheus.
 
 ---
 

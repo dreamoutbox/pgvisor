@@ -19,13 +19,17 @@
 - `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor` preserving `ProcessStatus::Restoring` across `start()`/`stop()`, and setting `Running` only after `wait_ready()` succeeds
 - `tests/test-timeline-divergence.sh` = Automated regression test verifying timeline branching, standby re-sync on divergent timelines, and repeated PITR restores
 
-### If you want to modify backup metadata (labels, notes, WAL ranges), snapshot triggering, or backup table views, then check:
+### If you want to modify backup metadata (labels, notes, WAL ranges, timeline), snapshot triggering, archive filtering, or backup table views, then check:
 
-- `crates/pgvisor-core/src/backup/manager.rs` = `BasebackupMeta` metadata struct (snapshot ID, label, created timestamp, backup type, WAL range, byte size) and OpenDAL storage manager
-- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::create_backup` passing optional label to `BasebackupMeta` and executing `pg_basebackup`
+- `crates/pgvisor-core/src/backup/archive.rs` = `generate_snapshot_id`, `parse_backup_label`, `process_basebackup_archive` excluding `backup_label.old` and injecting `metadata.json`, and `create_simulated_basebackup`
+- `crates/pgvisor-core/src/backup/mod.rs` = re-exports for archive processing and manager
+- `crates/pgvisor-core/src/backup/manager.rs` = `BasebackupMeta` metadata struct (`snapshot_id`, `backup_id`, `label`, `backup_start_date`, `backup_finish_date`, `timeline`, `start_lsn`, `checkpoint_location`, `backup_from`, `pg_version`) and OpenDAL storage manager
+- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::create_backup` formatting snapshot ID with label, running `pg_basebackup`, and invoking `process_basebackup_archive`
+- `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor::restore_from_snapshot` cleaning up `backup_label.old` defense-in-depth
 - `crates/pgvisor-dashboard/src/models.rs` = `CreateBackupRequest` and `BackupItemView` view models
 - `crates/pgvisor-dashboard/src/handlers.rs` = Backup creation and list endpoints (`/api/backups`) and page renderer mapping metadata to `BackupItemView`
 - `crates/pgvisor-dashboard/templates/backups.html` = Dashboard UI table displaying backup items (Snapshot ID, Type, Optional Label / Note, Created At, Size, WAL range, actions) and creation modal
+- `tests/test-backup-restore.sh` = Automated test asserting snapshot ID label prefix, `metadata.json` archive inclusion, and `backup_label.old` exclusion
 
 ### If you want to modify Point-In-Time Recovery (PITR), Quick Restore, or snapshot selection, then check:
 

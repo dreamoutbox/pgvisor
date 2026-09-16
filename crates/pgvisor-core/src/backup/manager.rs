@@ -163,15 +163,86 @@ impl BackupScheduleConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BasebackupMeta {
     pub snapshot_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub backup_type: BackupType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "start_date",
+        alias = "started_at"
+    )]
+    pub backup_start_date: Option<DateTime<Utc>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "finish_date",
+        alias = "finished_at"
+    )]
+    pub backup_finish_date: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<u64>,
     pub start_wal: String,
     pub stop_wal: Option<String>,
     pub total_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_node: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_lsn: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_location: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pg_version: Option<String>,
+}
+
+impl BasebackupMeta {
+    pub fn new(
+        snapshot_id: impl Into<String>,
+        created_at: DateTime<Utc>,
+        backup_type: BackupType,
+        start_wal: impl Into<String>,
+        total_bytes: u64,
+    ) -> Self {
+        let sid = snapshot_id.into();
+        Self {
+            backup_id: Some(sid.clone()),
+            snapshot_id: sid,
+            created_at,
+            backup_type,
+            label: None,
+            backup_start_date: Some(created_at),
+            backup_finish_date: None,
+            timeline: None,
+            start_wal: start_wal.into(),
+            stop_wal: None,
+            total_bytes,
+            source_node: None,
+            start_lsn: None,
+            checkpoint_location: None,
+            backup_from: None,
+            pg_version: None,
+        }
+    }
+
+    pub fn with_label(mut self, label: Option<String>) -> Self {
+        self.label = label;
+        self
+    }
+
+    pub fn with_source_node(mut self, source_node: Option<String>) -> Self {
+        self.source_node = source_node;
+        self
+    }
+
+    pub fn with_stop_wal(mut self, stop_wal: Option<String>) -> Self {
+        self.stop_wal = stop_wal;
+        self
+    }
 }
 
 /// Continuous WAL archiving and basebackup snapshot pipeline powered by OpenDAL.
@@ -258,7 +329,11 @@ impl BackupManager {
         info!(snapshot_id = %meta.snapshot_id, bytes = tar_data.len(), "Uploading basebackup to OpenDAL");
         self.operator.write(&backup_key, tar_data).await?;
 
-        let meta_json = serde_json::to_vec_pretty(meta)?;
+        let mut enriched = meta.clone();
+        if enriched.backup_id.is_none() {
+            enriched.backup_id = Some(enriched.snapshot_id.clone());
+        }
+        let meta_json = serde_json::to_vec_pretty(&enriched)?;
         self.operator.write(&meta_key, meta_json).await?;
         info!(snapshot_id = %meta.snapshot_id, "Basebackup metadata saved");
         Ok(())
@@ -512,27 +587,26 @@ mod tests {
 
         let manager = BackupManager::new("test_cluster", op);
 
-        let meta1 = BasebackupMeta {
-            snapshot_id: "snap-1".into(),
-            created_at: Utc::now() - chrono::Duration::hours(2),
-            backup_type: BackupType::Incremental,
-            label: Some("test-label-1".into()),
-            start_wal: "000000010000000000000001".into(),
-            stop_wal: Some("000000010000000000000002".into()),
-            total_bytes: 1024,
-            source_node: Some("node-2".into()),
-        };
+        let meta1 = BasebackupMeta::new(
+            "snap-1",
+            Utc::now() - chrono::Duration::hours(2),
+            BackupType::Incremental,
+            "000000010000000000000001",
+            1024,
+        )
+        .with_label(Some("test-label-1".into()))
+        .with_stop_wal(Some("000000010000000000000002".into()))
+        .with_source_node(Some("node-2".into()));
 
-        let meta2 = BasebackupMeta {
-            snapshot_id: "snap-2".into(),
-            created_at: Utc::now() - chrono::Duration::hours(1),
-            backup_type: BackupType::Full,
-            label: None,
-            start_wal: "000000010000000000000003".into(),
-            stop_wal: Some("000000010000000000000004".into()),
-            total_bytes: 2048,
-            source_node: Some("node-1".into()),
-        };
+        let meta2 = BasebackupMeta::new(
+            "snap-2",
+            Utc::now() - chrono::Duration::hours(1),
+            BackupType::Full,
+            "000000010000000000000003",
+            2048,
+        )
+        .with_stop_wal(Some("000000010000000000000004".into()))
+        .with_source_node(Some("node-1".into()));
 
         manager
             .save_basebackup(&meta1, vec![1, 2, 3])
@@ -591,36 +665,32 @@ mod tests {
         let manager = BackupManager::new("retention_cluster", op);
 
         // Create 3 snapshots: 10 days old, 5 days old, and 1 hour old
-        let old_snap = BasebackupMeta {
-            snapshot_id: "snap-old".into(),
-            created_at: Utc::now() - chrono::Duration::days(10),
-            backup_type: BackupType::Full,
-            label: None,
-            start_wal: "000000010000000000000001".into(),
-            stop_wal: None,
-            total_bytes: 100,
-            source_node: Some("node-2".into()),
-        };
-        let mid_snap = BasebackupMeta {
-            snapshot_id: "snap-mid".into(),
-            created_at: Utc::now() - chrono::Duration::days(5),
-            backup_type: BackupType::Incremental,
-            label: None,
-            start_wal: "000000010000000000000002".into(),
-            stop_wal: None,
-            total_bytes: 100,
-            source_node: Some("node-2".into()),
-        };
-        let new_snap = BasebackupMeta {
-            snapshot_id: "snap-new".into(),
-            created_at: Utc::now() - chrono::Duration::hours(1),
-            backup_type: BackupType::Incremental,
-            label: None,
-            start_wal: "000000010000000000000003".into(),
-            stop_wal: None,
-            total_bytes: 100,
-            source_node: Some("node-3".into()),
-        };
+        let old_snap = BasebackupMeta::new(
+            "snap-old",
+            Utc::now() - chrono::Duration::days(10),
+            BackupType::Full,
+            "000000010000000000000001",
+            100,
+        )
+        .with_source_node(Some("node-2".into()));
+
+        let mid_snap = BasebackupMeta::new(
+            "snap-mid",
+            Utc::now() - chrono::Duration::days(5),
+            BackupType::Incremental,
+            "000000010000000000000002",
+            100,
+        )
+        .with_source_node(Some("node-2".into()));
+
+        let new_snap = BasebackupMeta::new(
+            "snap-new",
+            Utc::now() - chrono::Duration::hours(1),
+            BackupType::Incremental,
+            "000000010000000000000003",
+            100,
+        )
+        .with_source_node(Some("node-3".into()));
 
         manager.save_basebackup(&old_snap, vec![1]).await.unwrap();
         manager.save_basebackup(&mid_snap, vec![2]).await.unwrap();

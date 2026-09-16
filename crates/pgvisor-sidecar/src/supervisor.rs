@@ -511,6 +511,10 @@ impl PostgresSupervisor {
         if auto_conf.exists() {
             let _ = tokio::fs::remove_file(&auto_conf).await;
         }
+        let old_label = self.data_dir.join("backup_label.old");
+        if old_label.exists() {
+            let _ = tokio::fs::remove_file(&old_label).await;
+        }
 
         if let Some(target_time) = recovery_target_time {
             let sidecar_bin = std::env::current_exe()
@@ -568,7 +572,9 @@ impl PostgresSupervisor {
         }
         let _ = self.stop().await;
 
-        let res = self.resync_from_primary_inner(primary_conninfo, config).await;
+        let res = self
+            .resync_from_primary_inner(primary_conninfo, config)
+            .await;
         if res.is_err() {
             let mut st = self.status.lock().await;
             *st = ProcessStatus::Fenced;

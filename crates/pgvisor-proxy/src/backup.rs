@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use pgvisor_core::audit::{AuditEventKind, AuditLog};
-use pgvisor_core::backup::{BackupManager, BackupType, BasebackupMeta};
+use pgvisor_core::backup::{
+    create_simulated_basebackup, generate_snapshot_id, process_basebackup_archive, BackupManager,
+    BackupType, BasebackupMeta,
+};
 use pgvisor_dashboard::handlers::BackupService;
 use tempfile::tempdir;
 use tokio::fs;
@@ -112,7 +115,8 @@ impl ProxyBackupService {
             );
             (h, p, true)
         } else {
-            let (h, p) = if let Some(ref addr) = leader.as_ref().or(self.configured_leader.as_ref()) {
+            let (h, p) = if let Some(ref addr) = leader.as_ref().or(self.configured_leader.as_ref())
+            {
                 let parts: Vec<&str> = addr.split(':').collect();
                 let h = parts[0].to_string();
                 let p = parts
@@ -157,9 +161,19 @@ impl BackupService for ProxyBackupService {
 
         let (host, port, is_follower) = self.select_backup_target().await;
 
-        let now = Utc::now();
-        let snapshot_id = format!("snap-{}", now.format("%Y%m%d-%H%M%S"));
+        let start_time = Utc::now();
+        let snapshot_id = generate_snapshot_id(label.as_deref(), start_time);
         info!(snapshot_id = %snapshot_id, %host, port, is_follower, ?backup_type, ?label, "Initiating physical basebackup");
+
+        let mut meta = BasebackupMeta::new(
+            &snapshot_id,
+            start_time,
+            backup_type,
+            "000000010000000000000001",
+            0,
+        )
+        .with_label(label.clone())
+        .with_source_node(Some(host.clone()));
 
         // Attempt physical execution via pg_basebackup
         let tmp_dir = tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
@@ -179,31 +193,39 @@ impl BackupService for ProxyBackupService {
             .arg("-D")
             .arg(&tmp_path);
 
-        let (tar_data, start_wal, stop_wal) = match cmd.status().await {
+        let (tar_data, meta) = match cmd.status().await {
             Ok(status) if status.success() => {
                 let base_tar = tmp_path.join("base.tar.gz");
                 if base_tar.exists() {
                     let bytes = fs::read(&base_tar)
                         .await
                         .map_err(|e| format!("Failed to read base.tar.gz: {}", e))?;
+                    meta.backup_finish_date = Some(Utc::now());
+
+                    let mut final_tar = Vec::new();
+                    process_basebackup_archive(bytes.as_slice(), &mut final_tar, &mut meta)
+                        .map_err(|e| format!("Failed to process basebackup archive: {}", e))?;
+
+                    meta.total_bytes = final_tar.len() as u64;
+                    if meta.stop_wal.is_none() {
+                        meta.stop_wal = Some(meta.start_wal.clone());
+                    }
+
                     info!(
-                        bytes = bytes.len(),
+                        bytes = meta.total_bytes,
                         is_follower,
-                        "Captured physical basebackup from {}",
+                        timeline = ?meta.timeline,
+                        "Captured, filtered, and enriched physical basebackup from {}",
                         if is_follower { "follower replica" } else { "primary leader" }
                     );
-                    (
-                        bytes,
-                        "000000010000000000000001".to_string(),
-                        Some("000000010000000000000002".to_string()),
-                    )
+                    (final_tar, meta)
                 } else {
                     warn!("base.tar.gz not found after pg_basebackup success, generating fallback snapshot");
-                    (
-                        vec![0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff],
-                        "000000010000000000000001".to_string(),
-                        Some("000000010000000000000002".to_string()),
-                    )
+                    meta.backup_finish_date = Some(Utc::now());
+                    let final_tar = create_simulated_basebackup(&mut meta)
+                        .map_err(|e| format!("Failed to create simulated basebackup: {}", e))?;
+                    meta.total_bytes = final_tar.len() as u64;
+                    (final_tar, meta)
                 }
             }
             Ok(status) => {
@@ -211,32 +233,20 @@ impl BackupService for ProxyBackupService {
                     ?status,
                     "pg_basebackup exited non-zero, creating simulated dev snapshot"
                 );
-                (
-                    vec![0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff],
-                    "000000010000000000000001".to_string(),
-                    Some("000000010000000000000002".to_string()),
-                )
+                meta.backup_finish_date = Some(Utc::now());
+                let final_tar = create_simulated_basebackup(&mut meta)
+                    .map_err(|e| format!("Failed to create simulated basebackup: {}", e))?;
+                meta.total_bytes = final_tar.len() as u64;
+                (final_tar, meta)
             }
             Err(e) => {
                 warn!(?e, "pg_basebackup command not available in current environment, using simulated snapshot");
-                (
-                    vec![0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff],
-                    "000000010000000000000001".to_string(),
-                    Some("000000010000000000000002".to_string()),
-                )
+                meta.backup_finish_date = Some(Utc::now());
+                let final_tar = create_simulated_basebackup(&mut meta)
+                    .map_err(|e| format!("Failed to create simulated basebackup: {}", e))?;
+                meta.total_bytes = final_tar.len() as u64;
+                (final_tar, meta)
             }
-        };
-
-        let total_bytes = tar_data.len() as u64;
-        let meta = BasebackupMeta {
-            snapshot_id: snapshot_id.clone(),
-            created_at: now,
-            backup_type,
-            label,
-            start_wal,
-            stop_wal,
-            total_bytes,
-            source_node: Some(host.clone()),
         };
 
         self.backup_manager
@@ -258,9 +268,12 @@ impl BackupService for ProxyBackupService {
             BackupType::Incremental => "INCREMENTAL BACKUP",
         };
         let backup_name = meta.label.as_deref().unwrap_or(&meta.snapshot_id);
-        pgvisor_core::log_highlight(&pgvisor_core::format_backup_highlight(b_type_str, backup_name));
+        pgvisor_core::log_highlight(&pgvisor_core::format_backup_highlight(
+            b_type_str,
+            backup_name,
+        ));
 
-        info!(snapshot_id = %meta.snapshot_id, bytes = total_bytes, "Basebackup saved and registered successfully");
+        info!(snapshot_id = %meta.snapshot_id, bytes = meta.total_bytes, "Basebackup saved and registered successfully");
 
         if let Some(audit) = self.audit_log.as_ref() {
             let label_str = meta.label.as_deref().unwrap_or("none");
@@ -290,17 +303,25 @@ impl BackupService for ProxyBackupService {
         let _guard = self.operation_lock.try_lock().map_err(|_| {
             "A backup or restore operation is already in progress. Please wait for the current operation to complete.".to_string()
         })?;
-        let (b_type_str, backup_name) = if let Ok(list) = self.backup_manager.list_basebackups().await {
-            if let Some(m) = list
-                .iter()
-                .find(|b| b.snapshot_id == snapshot_id || b.label.as_deref() == Some(snapshot_id))
-            {
-                let t = match m.backup_type {
-                    BackupType::Full => "FULL BACKUP",
-                    BackupType::Incremental => "INCREMENTAL BACKUP",
-                };
-                let name = m.label.as_deref().unwrap_or(&m.snapshot_id).to_string();
-                (t, name)
+        let (b_type_str, backup_name) =
+            if let Ok(list) = self.backup_manager.list_basebackups().await {
+                if let Some(m) = list.iter().find(|b| {
+                    b.snapshot_id == snapshot_id || b.label.as_deref() == Some(snapshot_id)
+                }) {
+                    let t = match m.backup_type {
+                        BackupType::Full => "FULL BACKUP",
+                        BackupType::Incremental => "INCREMENTAL BACKUP",
+                    };
+                    let name = m.label.as_deref().unwrap_or(&m.snapshot_id).to_string();
+                    (t, name)
+                } else {
+                    let t = if snapshot_id.contains("incr") {
+                        "INCREMENTAL BACKUP"
+                    } else {
+                        "FULL BACKUP"
+                    };
+                    (t, snapshot_id.to_string())
+                }
             } else {
                 let t = if snapshot_id.contains("incr") {
                     "INCREMENTAL BACKUP"
@@ -308,15 +329,7 @@ impl BackupService for ProxyBackupService {
                     "FULL BACKUP"
                 };
                 (t, snapshot_id.to_string())
-            }
-        } else {
-            let t = if snapshot_id.contains("incr") {
-                "INCREMENTAL BACKUP"
-            } else {
-                "FULL BACKUP"
             };
-            (t, snapshot_id.to_string())
-        };
 
         pgvisor_core::log_highlight(&pgvisor_core::format_restore_highlight(
             b_type_str,
@@ -571,10 +584,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_mutex_concurrency_lock() {
-        let (service, _dir) = build_test_service(
-            Some("node1:5432".into()),
-            vec!["node2:5432".into()],
-        );
+        let (service, _dir) =
+            build_test_service(Some("node1:5432".into()), vec!["node2:5432".into()]);
 
         // Manually acquire lock simulating an ongoing long backup/restore
         let lock = service.operation_lock();

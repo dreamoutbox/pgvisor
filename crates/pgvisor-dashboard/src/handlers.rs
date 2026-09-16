@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::Json;
 use chrono::Utc;
-use pgvisor_core::backup::{BackupType, BasebackupMeta};
+use pgvisor_core::backup::{generate_snapshot_id, BackupType, BasebackupMeta};
 use serde::Deserialize;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
@@ -284,7 +284,12 @@ pub trait BackupService: Send + Sync {
         snapshot_id: &str,
     ) -> Result<(BasebackupMeta, Vec<u8>), String>;
     fn storage_info(&self) -> (String, String, u32, Option<usize>) {
-        ("http://127.0.0.1:9000".into(), "pgvisor-backups".into(), 7, Some(10))
+        (
+            "http://127.0.0.1:9000".into(),
+            "pgvisor-backups".into(),
+            7,
+            Some(10),
+        )
     }
 }
 
@@ -299,26 +304,25 @@ pub struct StandaloneBackupService {
 impl StandaloneBackupService {
     pub fn new() -> Self {
         let initial = vec![
-            BasebackupMeta {
-                snapshot_id: "snap-20260904-200000".into(),
-                created_at: Utc::now() - chrono::Duration::hours(5),
-                backup_type: BackupType::Full,
-                label: Some("pre-migration-snapshot".into()),
-                start_wal: "000000010000000000000001".into(),
-                stop_wal: Some("000000010000000000000002".into()),
-                total_bytes: 14_850_000,
-                source_node: Some("pgvisor-node2".into()),
-            },
-            BasebackupMeta {
-                snapshot_id: "snap-20260904-210000".into(),
-                created_at: Utc::now() - chrono::Duration::hours(4),
-                backup_type: BackupType::Incremental,
-                label: None,
-                start_wal: "000000010000000000000003".into(),
-                stop_wal: Some("000000010000000000000004".into()),
-                total_bytes: 2_450_000,
-                source_node: Some("pgvisor-node3".into()),
-            },
+            BasebackupMeta::new(
+                "snap-20260904-200000",
+                Utc::now() - chrono::Duration::hours(5),
+                BackupType::Full,
+                "000000010000000000000001",
+                14_850_000,
+            )
+            .with_label(Some("pre-migration-snapshot".into()))
+            .with_stop_wal(Some("000000010000000000000002".into()))
+            .with_source_node(Some("pgvisor-node2".into())),
+            BasebackupMeta::new(
+                "snap-20260904-210000",
+                Utc::now() - chrono::Duration::hours(4),
+                BackupType::Incremental,
+                "000000010000000000000003",
+                2_450_000,
+            )
+            .with_stop_wal(Some("000000010000000000000004".into()))
+            .with_source_node(Some("pgvisor-node3".into())),
         ];
         Self {
             backups: Arc::new(RwLock::new(initial)),
@@ -353,19 +357,23 @@ impl BackupService for StandaloneBackupService {
         })?;
 
         let now = Utc::now();
-        let meta = BasebackupMeta {
-            snapshot_id: format!("snap-{}", now.format("%Y%m%d-%H%M%S")),
-            created_at: now,
-            backup_type,
-            label,
-            start_wal: "000000010000000000000010".into(),
-            stop_wal: Some("000000010000000000000011".into()),
-            total_bytes: match backup_type {
-                BackupType::Full => 15_200_000,
-                BackupType::Incremental => 1_850_000,
-            },
-            source_node: Some("pgvisor-node2".into()),
+        let snapshot_id = generate_snapshot_id(label.as_deref(), now);
+        let bytes = match backup_type {
+            BackupType::Full => 15_200_000,
+            BackupType::Incremental => 1_850_000,
         };
+        let mut meta = BasebackupMeta::new(
+            snapshot_id,
+            now,
+            backup_type,
+            "000000010000000000000010",
+            bytes,
+        )
+        .with_label(label)
+        .with_stop_wal(Some("000000010000000000000011".into()))
+        .with_source_node(Some("pgvisor-node2".into()));
+        meta.backup_finish_date = Some(now);
+        meta.timeline = Some(1);
 
         let mut lock = self.backups.write().await;
         lock.push(meta.clone());
@@ -1497,7 +1505,8 @@ pub async fn get_backups_page(
         .list_backups()
         .await
         .unwrap_or_default();
-    let (storage_endpoint, storage_bucket, retention_days, keep_count) = state.backup_service.storage_info();
+    let (storage_endpoint, storage_bucket, retention_days, keep_count) =
+        state.backup_service.storage_info();
 
     let total_bytes: u64 = list.iter().map(|b| b.total_bytes).sum();
     let latest_backup = list
