@@ -130,5 +130,5 @@ The proxy (`pgvisor-proxy`) has its own TLS endpoint facing clients:
 ---
 
 ## Important Security Rules
-- **Private Key Permissions**: PostgreSQL strictly rejects private key files with permissions more permissive than `0600` (`u=rw,g=,o=`). Always ensure mounted keys are owned by or readable by user `postgres` with mode `0600`.
+- **Private Key Permissions**: PostgreSQL strictly rejects private key files with permissions more permissive than `0600` (`u=rw,g=,o=`) or keys not owned by the database user or root. In Docker environments, host bind mounts retain host ownership (e.g. UID 1000). Host keys should be readable (e.g. mode `0644`), and `pgvisor-sidecar` automatically stages them into `$PGDATA/server.key` with strict `0600` permissions owned by container user `postgres`.
 - **Backend TLS Mode**: The proxy connection pool connects to backends using `sslmode=require` semantics, encrypting all intra-cluster query traffic.

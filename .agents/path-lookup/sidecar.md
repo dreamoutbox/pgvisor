@@ -48,5 +48,6 @@
 
 - `crates/pgvisor-core/src/tls.rs` = `TlsCertPair` self-signed cert generation via `rcgen`, certificate and key file persistence with 0600 permissions
 - `crates/pgvisor-sidecar/src/config.rs` = `PostgresConfig` `ssl`, `ssl_cert_file`, `ssl_key_file` fields, and `write_configs` appending `ssl = on/off` to `postgresql.conf`
-- `crates/pgvisor-sidecar/src/main.rs` = Reading `PGVISOR_TLS_ENABLED`, `PGVISOR_TLS_CERT_FILE`, `PGVISOR_TLS_KEY_FILE`, loading/generating node certificates, and configuring replication `sslmode=prefer`
+- `crates/pgvisor-sidecar/src/main.rs` = Reading `PGVISOR_TLS_ENABLED`, `PGVISOR_TLS_CERT_FILE`, `PGVISOR_TLS_KEY_FILE`, staging external/mounted keys to `$PGDATA/server.key` with 0600 mode for PostgreSQL compatibility, loading/generating node certificates, and configuring replication `sslmode=prefer`
 - `docker-compose.yml` = `PGVISOR_TLS_ENABLED`, `PGVISOR_TLS_CERT_FILE`, and `PGVISOR_TLS_KEY_FILE` environment variables on sidecar node services
+- `docker-compose.with-tls.yml` = Standalone cluster compose definition with end-to-end TLS enabled and volume mounts for node/proxy certificates

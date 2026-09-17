@@ -8,6 +8,7 @@ pub mod wal;
 
 use std::env;
 use std::net::SocketAddr;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -114,9 +115,35 @@ async fn main() -> Result<()> {
             node_host.clone(),
         ];
 
-        pgvisor_core::tls::TlsCertPair::load_or_generate(
+        let pair = pgvisor_core::tls::TlsCertPair::load_or_generate(
             &cert_path, &key_path, &node_host, &alt_names,
         )?;
+
+        // If custom external certificates/keys are provided (e.g. mounted from host),
+        // PostgreSQL strictly requires the private key file to be owned by the postgres database user
+        // and have mode 0600. Host bind mounts retain host ownership (e.g. UID 1000),
+        // which causes PostgreSQL to fail startup.
+        // Therefore, stage the key and cert into data_dir owned by postgres with 0600 mode.
+        let default_cert = data_dir.join("server.crt");
+        let default_key = data_dir.join("server.key");
+        let (active_cert_path, active_key_path) = if key_path != default_key {
+            std::fs::write(&default_cert, &pair.cert_pem)?;
+            std::fs::set_permissions(&default_cert, std::fs::Permissions::from_mode(0o644))?;
+
+            std::fs::write(&default_key, &pair.key_pem)?;
+            std::fs::set_permissions(&default_key, std::fs::Permissions::from_mode(0o600))?;
+
+            info!(
+                source_cert = ?cert_path,
+                source_key = ?key_path,
+                staged_cert = ?default_cert,
+                staged_key = ?default_key,
+                "Staged TLS certificate and private key into data_dir with 0600 permissions"
+            );
+            (default_cert, default_key)
+        } else {
+            (cert_path, key_path)
+        };
 
         if let Some(conn) = primary_conninfo.as_mut() {
             if !conn.contains("sslmode=") {
@@ -125,14 +152,14 @@ async fn main() -> Result<()> {
         }
 
         info!(
-            ?cert_path,
-            ?key_path,
+            cert_path = ?active_cert_path,
+            key_path = ?active_key_path,
             "TLS enabled and certificates initialized for PostgreSQL"
         );
         (
             true,
-            Some(cert_path.to_string_lossy().to_string()),
-            Some(key_path.to_string_lossy().to_string()),
+            Some(active_cert_path.to_string_lossy().to_string()),
+            Some(active_key_path.to_string_lossy().to_string()),
         )
     } else {
         (false, None, None)

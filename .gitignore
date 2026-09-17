@@ -9,3 +9,4 @@ plans/
 __pycache__/
 *.pyc
 certs/
+.playwright-mcp/

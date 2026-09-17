@@ -100,7 +100,7 @@ generate_signed_cert() {
         -copy_extensions copy > /dev/null 2>&1
 
     rm -f "${csr_file}"
-    chmod 600 "${key_file}"
+    chmod 644 "${key_file}"
     chmod 644 "${crt_file}"
 }
 
@@ -112,9 +112,9 @@ openssl req -x509 -newkey "rsa:${KEY_BITS}" -nodes \
     -days "${DAYS}" \
     -subj "/CN=PgVisor Dev Root CA/O=PgVisor" > /dev/null 2>&1
 
-chmod 600 "${OUT_DIR}/ca.key"
+chmod 644 "${OUT_DIR}/ca.key"
 chmod 644 "${OUT_DIR}/ca.crt"
-echo "  Created: ca.crt, ca.key (CA private key permissions: 0600)"
+echo "  Created: ca.crt, ca.key (CA private key permissions: 0644)"
 
 # 2. Proxy Certificate
 echo "[2/5] Generating Proxy certificate..."
@@ -161,7 +161,7 @@ echo "  - server.crt / server.key: Shared cluster node cert"
 echo "  - node1..3/server.crt / server.key: Node-specific certificates"
 echo "  - client.crt / client.key: Client cert (CN=postgres)"
 echo ""
-echo "All private keys (*.key) are set to permissions 0600."
+echo "All private keys (*.key) are set to permissions 0644 for container volume mount compatibility."
 echo ""
 echo "Usage Examples:"
 echo "  1. Enable TLS in docker-compose.yml:"
