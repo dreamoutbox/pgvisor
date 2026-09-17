@@ -12,4 +12,5 @@
 - `docs/src/content/docs/tls-ssl.mdx` = client/proxy/backend TLS encryption, dev cert generation, and mTLS
 - `docs/src/components/Mermaid.astro` = Mermaid diagram component and auto-rendering integration
 - `docs/src/components/ui/steps/Steps.astro` = step list component styles, marker counters, and nested list handling
+- `docs/package.json` = documentation dependencies, scripts, and package manager specification
 - `.github/workflows/docs.yml` = GitHub Actions workflow dispatch pipeline for building and deploying to GitHub Pages
