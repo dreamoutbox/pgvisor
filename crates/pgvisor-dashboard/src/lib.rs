@@ -17,8 +17,8 @@ use crate::handlers::{
     api_drop_user, api_execute_sql, api_find_best_backup, api_get_privileges, api_get_user,
     api_grant_membership, api_list_audit_logs, api_list_backups, api_list_tables, api_list_users,
     api_metrics_history, api_metrics_snapshot, api_node_action, api_nodes, api_quick_restore,
-    api_restart_node, api_restore_backup, api_revoke_membership, api_set_privilege,
-    api_start_node, api_status, api_stop_node, api_switchover, api_table_data, api_table_schema,
+    api_restart_node, api_restore_backup, api_revoke_membership, api_set_privilege, api_start_node,
+    api_status, api_stop_node, api_switchover, api_table_data, api_table_schema,
     get_audit_logs_page, get_backups_page, get_login_page, get_logout, get_nodes, get_overview,
     get_sql_console, get_tables_page, get_users_page, post_login, DashboardState,
 };

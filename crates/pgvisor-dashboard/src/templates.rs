@@ -148,7 +148,10 @@ mod tests {
             total_events: 2,
             start_item: 1,
             end_item: 2,
-            page_items: vec![PageItem { num: 1, is_current: true }],
+            page_items: vec![PageItem {
+                num: 1,
+                is_current: true,
+            }],
             auth_enabled: false,
         };
 

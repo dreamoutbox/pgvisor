@@ -33,11 +33,12 @@ pub fn make_auth_header_value(secret: &str) -> String {
 /// Validates an incoming Authorization header value against the expected cluster secret using constant-time comparison.
 pub fn validate_bearer_token(secret: &str, header_val: &str) -> bool {
     let header_val = header_val.trim();
-    let provided_token = if header_val.len() > 7 && header_val[..7].eq_ignore_ascii_case(BEARER_PREFIX) {
-        header_val[7..].trim()
-    } else {
-        return false;
-    };
+    let provided_token =
+        if header_val.len() > 7 && header_val[..7].eq_ignore_ascii_case(BEARER_PREFIX) {
+            header_val[7..].trim()
+        } else {
+            return false;
+        };
 
     let expected_token = derive_bearer_token(secret);
 
@@ -46,7 +47,10 @@ pub fn validate_bearer_token(secret: &str, header_val: &str) -> bool {
         return false;
     }
 
-    provided_token.as_bytes().ct_eq(expected_token.as_bytes()).into()
+    provided_token
+        .as_bytes()
+        .ct_eq(expected_token.as_bytes())
+        .into()
 }
 
 #[cfg(test)]

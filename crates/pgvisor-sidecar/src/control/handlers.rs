@@ -751,9 +751,6 @@ pub async fn handle_release_backup_lock(
                 serde_json::json!({ "status": "ok", "message": "Token mismatch; lock not released" }),
             )
         }
-        None => {
-            Json(serde_json::json!({ "status": "ok", "message": "Lock was already free" }))
-        }
+        None => Json(serde_json::json!({ "status": "ok", "message": "Lock was already free" })),
     }
 }
-

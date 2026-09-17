@@ -176,7 +176,10 @@ async fn main() -> Result<()> {
 
         // Start automated background backup scheduler if enabled
         if backup_config.cron_enabled {
-            let scheduler = Arc::new(BackupScheduler::new(backup_service.clone(), backup_config.clone()));
+            let scheduler = Arc::new(BackupScheduler::new(
+                backup_service.clone(),
+                backup_config.clone(),
+            ));
             scheduler.start();
         }
 

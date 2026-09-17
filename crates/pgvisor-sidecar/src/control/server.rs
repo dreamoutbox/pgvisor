@@ -28,15 +28,20 @@ pub fn build_control_router(state: SidecarState) -> Router {
         .route("/control/fence", post(handle_fence))
         .route("/control/demote", post(handle_demote))
         .route("/control/repoint", post(handle_repoint))
-        .route("/control/backup-lock/acquire", post(handle_acquire_backup_lock))
-        .route("/control/backup-lock/release", post(handle_release_backup_lock))
+        .route(
+            "/control/backup-lock/acquire",
+            post(handle_acquire_backup_lock),
+        )
+        .route(
+            "/control/backup-lock/release",
+            post(handle_release_backup_lock),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             cluster_auth_middleware,
         ))
         .with_state(state)
 }
-
 
 /// Spawns the HTTP control server task in the background.
 pub fn spawn_control_server(addr: SocketAddr, app: Router) {
@@ -55,9 +60,9 @@ pub fn spawn_control_server(addr: SocketAddr, app: Router) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use std::sync::Arc;
     use tokio::sync::RwLock;
     use tower::ServiceExt;
 
@@ -315,4 +320,3 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
     }
 }
-

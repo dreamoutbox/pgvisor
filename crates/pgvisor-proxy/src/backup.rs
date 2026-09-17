@@ -844,4 +844,3 @@ mod tests {
         assert_eq!(token2, "test-token-1234");
     }
 }
-
