@@ -17,3 +17,4 @@
 - `scripts/test-tls.sh` = Standalone script testing client TLS connections via `openssl s_client` and `psql sslmode=require`
 - `tests/test-tls.sh` = Integration test verifying cert creation, key permissions, unencrypted rejection, and encrypted query execution
 - `dev-generate-ssl.sh` = Developer helper script generating local CA, proxy, node, and client certificates with 0600 key permissions
+- `knowledges/tls-certificate-deployment-models.md` = Documentation of shared cluster vs per-node certificate deployment and renewal models
