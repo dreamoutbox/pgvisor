@@ -1,0 +1,89 @@
+---
+interface Props {
+  code?: string;
+  class?: string;
+}
+
+const { code, class: className } = Astro.props;
+---
+
+<div class:list={["mermaid-diagram my-6 flex justify-center p-4 rounded-xl border border-border bg-card shadow-sm overflow-x-auto", className]}>
+  <pre class="mermaid-source hidden"><slot>{code}</slot></pre>
+  <div class="mermaid-target w-full flex justify-center"></div>
+</div>
+
+<script>
+  import mermaid from "mermaid";
+
+  async function renderMermaid() {
+    const isDark =
+      document.documentElement.dataset.nbState === "dark" ||
+      document.documentElement.classList.contains("dark");
+
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: isDark ? "dark" : "neutral",
+      securityLevel: "loose",
+      fontFamily: "Inter, system-ui, sans-serif",
+    });
+
+    // 1. Render custom <Mermaid> components
+    const containers = document.querySelectorAll<HTMLElement>(".mermaid-diagram");
+    for (const container of containers) {
+      if (container.dataset.rendered === "true") continue;
+      const source = container.querySelector(".mermaid-source");
+      const target = container.querySelector(".mermaid-target");
+      if (!source || !target) continue;
+
+      const code = source.textContent?.trim() || "";
+      if (!code) continue;
+
+      container.dataset.rendered = "true";
+      const id = `mermaid-cmp-${Math.random().toString(36).slice(2, 9)}`;
+      try {
+        const { svg } = await mermaid.render(id, code);
+        target.innerHTML = svg;
+      } catch (e) {
+        console.error("Mermaid error:", e);
+        target.innerHTML = `<pre class="text-xs text-destructive p-2">${code}</pre>`;
+      }
+    }
+
+    // 2. Also transform markdown code fences ```mermaid
+    const figures = document.querySelectorAll<HTMLElement>(
+      'figure[data-nb-lang="mermaid"], pre[data-language="mermaid"]'
+    );
+    for (const figure of figures) {
+      if (figure.dataset.rendered === "true") continue;
+      figure.dataset.rendered = "true";
+      const code = figure.querySelector("code")?.textContent?.trim() || figure.textContent?.trim() || "";
+      if (!code) continue;
+
+      const wrap = document.createElement("div");
+      wrap.className = "mermaid-diagram my-6 flex justify-center p-4 rounded-xl border border-border bg-card shadow-sm overflow-x-auto";
+      const id = `mermaid-code-${Math.random().toString(36).slice(2, 9)}`;
+      try {
+        const { svg } = await mermaid.render(id, code);
+        wrap.innerHTML = svg;
+        figure.replaceWith(wrap);
+      } catch (e) {
+        console.error("Mermaid code fence error:", e);
+      }
+    }
+  }
+
+  // Render on initial execution and on client-side router navigation
+  renderMermaid();
+  document.addEventListener("astro:page-load", renderMermaid);
+  document.addEventListener("astro:after-swap", renderMermaid);
+
+  // Re-render when theme toggles
+  const observer = new MutationObserver(() => {
+    // Reset rendered flags and re-render with updated theme
+    document.querySelectorAll<HTMLElement>(".mermaid-diagram").forEach((el) => {
+      delete el.dataset.rendered;
+    });
+    renderMermaid();
+  });
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-nb-state", "class"] });
+</script>

@@ -1,0 +1,191 @@
+---
+title: Quick Start
+description: Deploy a resilient 3-node PostgreSQL HA cluster with L7 proxy and S3 backups in under 2 minutes.
+sidebar:
+  order: 1
+---
+
+**PgVisor** delivers production-ready PostgreSQL 18 High Availability (HA) without the operational complexity of Patroni, PgBouncer, Consul, and pgBackRest.
+
+In this quick start guide, you will bootstrap a complete local 3-node HA cluster with automatic Raft consensus failover, continuous S3/MinIO backup archiving, and an embedded web dashboard.
+
+---
+
+## Prerequisites
+
+Before starting, ensure your system has:
+
+- [Docker Engine](https://docs.docker.com/get-docker/) (v24.0 or newer)
+- [Docker Compose](https://docs.docker.com/compose/) (v2.0 or newer)
+- *(Optional)* `psql` command-line client for direct database interaction
+
+---
+
+## One-Command Cluster Bootstrap
+
+PgVisor includes a bootstrap script that orchestrates the entire cluster setup:
+
+<Steps>
+  <Step title="Clone and Navigate">
+    Clone the PgVisor repository and change into the examples directory:
+
+    ```bash
+    git clone https://github.com/dreamoutbox/pgvisor.git
+    cd pgvisor/examples
+    ```
+  </Step>
+
+  <Step title="Run the Bootstrap Script">
+    Execute `setup.sh` to initialize environment variables, start containers, and verify health checks:
+
+    ```bash
+    ./setup.sh
+    ```
+  </Step>
+
+  <Step title="Verify Service Initialization">
+    The bootstrap script automatically executes the following steps:
+    1. Copies `examples/.env.example` to `examples/.env` if not already present.
+    2. Starts **MinIO** object storage on port `9000` and provisions the `pgvisor-backups` bucket.
+    3. Starts **pgvisor-node1** as initial Raft Leader.
+    4. Bootstraps **pgvisor-node2** and **pgvisor-node3** as streaming standby replicas.
+    5. Starts **pgvisor-proxy** on port `5432` and the **Web Dashboard** on port `8080`.
+    6. Polls health endpoints until all nodes and services report ready.
+  </Step>
+</Steps>
+
+<Aside type="tip" title="Starting via Docker Compose Directly">
+If you prefer running Docker Compose directly without the helper script, you can run:
+
+```bash
+docker compose -f examples/docker-compose.yml up -d
+docker compose -f examples/docker-compose.yml ps
+```
+</Aside>
+
+---
+
+## Connecting to the Cluster
+
+Applications and database clients connect directly to the **PgVisor L7 Proxy** on port `5432`.
+
+### Using `psql` CLI
+
+```bash
+psql -h localhost -p 5432 -U postgres -d postgres
+```
+
+When prompted for password, enter `postgres` (default password configured in `.env`).
+
+### Application Connection String
+
+Configure your application database pool or ORM with the standard PostgreSQL connection URI:
+
+```text
+postgresql://postgres:postgres@localhost:5432/postgres
+```
+
+---
+
+## Transparent Read/Write Splitting
+
+PgVisor's L7 proxy inspects PostgreSQL 3.0 wire protocol messages in real time to provide automatic read/write splitting without application code changes:
+
+- **Mutating Queries & DDL**: Any `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `DROP`, `ALTER`, or explicit transaction block (`BEGIN ... COMMIT`) is forwarded strictly to the active Raft leader (`pgvisor-node1`).
+- **Read Queries**: Standalone `SELECT`, `SHOW`, and `EXPLAIN` statements are load-balanced across healthy standby replicas (`pgvisor-node2`, `pgvisor-node3`).
+
+### Try It Out
+
+Connect with `psql` and execute a write followed by reads:
+
+```sql
+-- Creates table on the Raft leader
+CREATE TABLE users (id serial PRIMARY KEY, username text);
+
+-- Inserts record on the Raft leader
+INSERT INTO users (username) VALUES ('alice'), ('bob');
+
+-- Routed to a standby replica with connection pooling
+SELECT * FROM users;
+```
+
+---
+
+## Testing Zero-Downtime Failover Buffering
+
+PgVisor includes transparent failover query buffering. If the leader fails mid-flight, client connections do not crash; the proxy buffers requests in memory while OpenRaft elects and promotes a new leader.
+
+<Steps>
+  <Step title="Stop the Current Leader Node">
+    In a separate terminal, stop `pgvisor-node1`:
+
+    ```bash
+    docker compose -f examples/docker-compose.yml stop pgvisor-node1
+    ```
+  </Step>
+
+  <Step title="Observe Consensus Election">
+    The remaining nodes (`pgvisor-node2` and `pgvisor-node3`) detect leader loss. Within **1,500ms**, OpenRaft concludes an election, and the new leader is promoted via `pg_ctl promote`.
+  </Step>
+
+  <Step title="Query Continuously">
+    Your active `psql` connection remains open and queries automatically route to the newly elected leader without connection resets:
+
+    ```sql
+    INSERT INTO users (username) VALUES ('charlie');
+    SELECT * FROM users;
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Management Commands
+
+The `setup.sh` script provides lifecycle helpers:
+
+<Tabs>
+  <TabItem label="Logs">
+    ```bash
+    # View all cluster logs
+    ./setup.sh logs
+
+    # View logs for a specific container
+    ./setup.sh logs pgvisor-proxy
+    ./setup.sh logs pgvisor-node1
+    ```
+  </TabItem>
+
+  <TabItem label="Status">
+    ```bash
+    # Check health and container states
+    ./setup.sh status
+    ```
+  </TabItem>
+
+  <TabItem label="Lifecycle">
+    ```bash
+    # Restart all containers
+    ./setup.sh restart
+
+    # Stop cluster (volumes preserved)
+    ./setup.sh down
+
+    # Wipe volumes and start clean
+    ./setup.sh clean
+    ```
+  </TabItem>
+</Tabs>
+
+---
+
+## Next Steps
+
+<CardGrid>
+  <Card title="Architecture" icon="ph:cpu">
+    Learn how OpenRaft consensus, Quorum Lease fencing, and L7 proxying work under the hood.
+  </Card>
+  <Card title="Web Dashboard" icon="ph:gauge">
+    Explore the embedded monitoring UI, manual switchover controls, and guarded SQL console.
+  </Card>
+</CardGrid>

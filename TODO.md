@@ -175,9 +175,11 @@
 
 - [x] TLS/SSL mode. auto setup. write simple shell/python script to test SSL/TLS connection is working.
 
-- [ ] add wiki
+- [x] add wiki
 
 - [ ] demo: simple app connect and use pgvisor
+
+- [ ] inspect each node postgresql config with web dashboard
 
 ---
 

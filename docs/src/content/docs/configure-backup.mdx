@@ -1,0 +1,147 @@
+---
+title: Configure Backup
+description: Configure multi-cloud storage backends, WAL streaming, and automated snapshot schedules using Apache OpenDAL.
+sidebar:
+  order: 5
+---
+
+**PgVisor** features continuous backup archiving and Point-In-Time-Recovery (PITR) powered by **Apache OpenDAL**, providing a unified storage interface across cloud providers and on-premise object stores.
+
+---
+
+## Supported Storage Backends
+
+Currently, PgVisor **officially supports S3-compatible storage backends** via Apache OpenDAL:
+
+- **AWS S3**: Amazon Simple Storage Service
+- **MinIO**: High-performance S3-compatible self-hosted object storage
+- **Cloudflare R2**: S3-compatible zero-egress cloud object storage
+- **RustFS / S3 Compatible**: Any standard S3 API provider (Wasabi, DigitalOcean Spaces, Ceph)
+
+---
+
+## Planned Storage Backends (TODO)
+
+Support for the following native storage drivers is on the project roadmap:
+
+- [ ] **Google Cloud Storage (GCS)** (native driver)
+- [ ] **Azure Blob Storage** (native driver)
+- [ ] **Local / Shared POSIX Filesystem** (`fs` driver)
+- [ ] **SFTP / Network Mounts**
+
+---
+
+## Environment Variables Reference
+
+Configure backup storage by defining these environment variables across your cluster nodes:
+
+| Variable | Required | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `PGVISOR_STORAGE_BACKEND` | Yes | `s3` | Storage backend type: `s3`, `gcs`, `azblob`, `fs` |
+| `PGVISOR_STORAGE_BUCKET` | Yes | `pgvisor-backups` | Target bucket or container name |
+| `PGVISOR_STORAGE_ENDPOINT` | No | — | Custom API endpoint (e.g. `http://minio:9000` or Cloudflare R2 URL) |
+| `PGVISOR_STORAGE_REGION` | No | `us-east-1` | Cloud storage region |
+| `PGVISOR_STORAGE_ACCESS_KEY_ID` | Conditional | — | Access key / Client ID for authentication |
+| `PGVISOR_STORAGE_SECRET_ACCESS_KEY`| Conditional | — | Secret access key for authentication |
+| `PGVISOR_STORAGE_ROOT` | No | `/` | Root path prefix within the storage bucket |
+
+---
+
+## Storage Provider Examples
+
+<Tabs>
+  <TabItem label="MinIO (Local / On-Premise)">
+    ```yaml
+    environment:
+      - PGVISOR_STORAGE_BACKEND=s3
+      - PGVISOR_STORAGE_BUCKET=pgvisor-backups
+      - PGVISOR_STORAGE_ENDPOINT=http://minio:9000
+      - PGVISOR_STORAGE_REGION=us-east-1
+      - PGVISOR_STORAGE_ACCESS_KEY_ID=minioadmin
+      - PGVISOR_STORAGE_SECRET_ACCESS_KEY=minioadmin
+    ```
+  </TabItem>
+
+  <TabItem label="AWS S3">
+    ```yaml
+    environment:
+      - PGVISOR_STORAGE_BACKEND=s3
+      - PGVISOR_STORAGE_BUCKET=my-production-pgvisor-backups
+      - PGVISOR_STORAGE_REGION=us-west-2
+      - PGVISOR_STORAGE_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+      - PGVISOR_STORAGE_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+    ```
+  </TabItem>
+
+  <TabItem label="Cloudflare R2">
+    ```yaml
+    environment:
+      - PGVISOR_STORAGE_BACKEND=s3
+      - PGVISOR_STORAGE_BUCKET=pgvisor-r2-backups
+      - PGVISOR_STORAGE_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+      - PGVISOR_STORAGE_REGION=auto
+      - PGVISOR_STORAGE_ACCESS_KEY_ID=<r2-access-key-id>
+      - PGVISOR_STORAGE_SECRET_ACCESS_KEY=<r2-secret-access-key>
+    ```
+  </TabItem>
+
+  <TabItem label="RustFS / Generic S3">
+    ```yaml
+    environment:
+      - PGVISOR_STORAGE_BACKEND=s3
+      - PGVISOR_STORAGE_BUCKET=pgvisor-backups
+      - PGVISOR_STORAGE_ENDPOINT=http://rustfs:9000
+      - PGVISOR_STORAGE_REGION=us-east-1
+      - PGVISOR_STORAGE_ACCESS_KEY_ID=rustfsadmin
+      - PGVISOR_STORAGE_SECRET_ACCESS_KEY=rustfsadmin
+    ```
+  </TabItem>
+</Tabs>
+
+---
+
+## WAL Archiving Configuration
+
+PostgreSQL WAL (Write-Ahead Logging) archiving is automatically configured by the sidecar supervisor:
+
+```ini
+# Auto-generated inside postgresql.conf by pgvisor-sidecar
+wal_level = replica
+archive_mode = on
+archive_command = 'pgvisor-sidecar archive %p %f'
+archive_timeout = 300
+```
+
+- `%p`: The absolute filepath to the completed 16MB WAL segment on disk.
+- `%f`: The filename of the segment (e.g., `000000010000000000000001`).
+- `archive_timeout`: Ensures partially filled WAL segments are rotated and archived at least every 300 seconds, limiting maximum recovery point objective (RPO) during quiet periods.
+
+---
+
+## Scheduling & Retention Policies
+
+PgVisor includes a built-in backup scheduler to automate continuous physical basebackups and retention cleanup:
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `PGVISOR_BACKUP_INCREMENTAL_INTERVAL_SECS` | `3600` | Frequency in seconds for incremental snapshot checks (default 1 hour). |
+| `PGVISOR_BACKUP_FULL_HOUR_UTC` | `1` | Hour in UTC when daily full physical basebackup runs (01:00 UTC). |
+| `PGVISOR_BACKUP_RETENTION_DAYS` | `7` | Retention window in days. Snapshots and obsolete WAL segments older than this threshold are automatically pruned. |
+
+<Aside type="note" title="Storage Hierarchy">
+All backup artifacts are stored under the cluster identifier in your bucket:
+
+```text
+pgvisor-backups/
+└── clusters/
+    └── default-cluster/
+        ├── snapshots/
+        │   ├── snapshot-2026-09-17T010000Z.tar.gz
+        │   └── snapshot-2026-09-18T010000Z.tar.gz
+        ├── wal/
+        │   ├── 000000010000000000000001
+        │   ├── 000000010000000000000002
+        │   └── ...
+        └── manifest.json
+```
+</Aside>

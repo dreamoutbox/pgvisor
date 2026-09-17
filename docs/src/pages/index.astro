@@ -1,0 +1,146 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Header from "../components/Header.astro";
+import Icon from "@cloudflare/nimbus-docs/components/Icon.astro";
+import { config } from "virtual:nimbus/config";
+import { withBase } from "@cloudflare/nimbus-docs/runtime";
+
+export const prerender = true;
+
+const docsLinks = [
+  {
+    href: withBase("/quick-start", import.meta.env.BASE_URL),
+    title: "Quick Start",
+    desc: "Bootstrap a 3-node HA cluster with L7 proxy and backups in under 2 minutes.",
+    icon: "ph:rocket-launch",
+    badge: "Start Here",
+  },
+  {
+    href: withBase("/architecture", import.meta.env.BASE_URL),
+    title: "Architecture",
+    desc: "Understand the unified Rust supervisor, OpenRaft consensus, and L7 wire proxy.",
+    icon: "ph:cpu",
+    badge: "Core",
+  },
+  {
+    href: withBase("/web-dashboard", import.meta.env.BASE_URL),
+    title: "Web Dashboard",
+    desc: "Real-time topology, manual switchover controls, and guarded SQL console.",
+    icon: "ph:gauge",
+    badge: "Console",
+  },
+  {
+    href: withBase("/adding-new-node", import.meta.env.BASE_URL),
+    title: "Adding New Node",
+    desc: "Scale cluster horizontally by dynamically provisioning standby replicas.",
+    icon: "ph:plus-circle",
+    badge: "Scaling",
+  },
+  {
+    href: withBase("/configure-backup", import.meta.env.BASE_URL),
+    title: "Configure Backup",
+    desc: "Setup Apache OpenDAL for S3, MinIO, Cloudflare R2, GCS, and Azure Blob.",
+    icon: "ph:gear",
+    badge: "Storage",
+  },
+  {
+    href: withBase("/backup", import.meta.env.BASE_URL),
+    title: "Backup & WAL",
+    desc: "Continuous WAL segment shipping and non-blocking basebackup snapshots.",
+    icon: "ph:cloud-arrow-up",
+    badge: "Safety",
+  },
+  {
+    href: withBase("/restore", import.meta.env.BASE_URL),
+    title: "Restore & PITR",
+    desc: "Coordinated cluster restore and second-precision Point-In-Time-Recovery.",
+    icon: "ph:arrow-counter-clockwise",
+    badge: "Recovery",
+  },
+  {
+    href: withBase("/tls-ssl", import.meta.env.BASE_URL),
+    title: "TLS / SSL Setup",
+    desc: "Configure end-to-end TLS encryption for clients, L7 proxy, and cluster nodes.",
+    icon: "ph:shield-check",
+    badge: "Security",
+  },
+];
+---
+
+<BaseLayout title={config.title} description={config.description}>
+  <div class="flex flex-col min-h-screen">
+    <Header />
+    <main id="main-content" tabindex="-1" class="flex-1 mx-auto max-w-5xl w-full px-6 py-16">
+      <!-- Hero Section -->
+      <div class="text-center max-w-3xl mx-auto">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-primary/30 bg-primary/10 text-primary text-xs font-semibold mb-6">
+          <Icon name="ph:shield-check" class="w-4 h-4" />
+          Production-Ready PostgreSQL High Availability in Pure Rust
+        </div>
+
+        <h1 class="text-4xl sm:text-5xl font-extrabold tracking-tight text-foreground">
+          PgVisor
+        </h1>
+
+        <p class="mt-4 text-lg text-muted-foreground leading-relaxed">
+          A lightweight, friendly PostgreSQL HA cluster supervisor, L7 connection proxy, and continuous cloud backup pipeline. Replaces Patroni, PgBouncer, and other complex setup.
+        </p>
+
+        <!-- Quick Terminal Action -->
+        <div class="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
+          <div class="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-border bg-card/60 font-mono text-sm text-foreground shadow-sm">
+            <span class="text-primary select-none">$</span>
+            <code>git clone https://github.com/dreamoutbox/pgvisor && cd pgvisor/examples && ./setup.sh</code>
+          </div>
+          <a
+            href={withBase("/quick-start", import.meta.env.BASE_URL)}
+            class="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-primary text-primary-foreground font-medium text-sm hover:opacity-90 transition-opacity no-underline shadow-sm"
+          >
+            Get Started
+            <Icon name="ph:arrow-right" class="w-4 h-4" />
+          </a>
+        </div>
+      </div>
+
+
+      <!-- Documentation Guides Grid -->
+      <div class="mt-12">
+        <h2 class="text-xl font-bold text-foreground mb-6 flex items-center gap-2">
+          <Icon name="ph:book-open" class="w-5 h-5 text-primary" />
+          Documentation Guides
+        </h2>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {docsLinks.map((doc) => (
+            <a
+              href={doc.href}
+              class="group relative rounded-xl border border-border bg-card p-5 transition-all duration-200 hover:border-primary/50 hover:shadow-md no-underline flex flex-col justify-between"
+            >
+              <div>
+                <div class="flex items-center justify-between gap-2 mb-3">
+                  <div class="w-9 h-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center transition-colors group-hover:bg-primary group-hover:text-primary-foreground">
+                    <Icon name={doc.icon} class="w-5 h-5" />
+                  </div>
+                  <span class="text-[11px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-accent text-muted-foreground">
+                    {doc.badge}
+                  </span>
+                </div>
+                <h3 class="text-base font-semibold text-foreground group-hover:text-primary transition-colors">
+                  {doc.title}
+                </h3>
+                <p class="mt-1.5 text-sm text-muted-foreground leading-relaxed">
+                  {doc.desc}
+                </p>
+              </div>
+
+              <div class="mt-4 flex items-center gap-1 text-xs font-semibold text-primary">
+                Read Guide
+                <Icon name="ph:arrow-right" class="w-3.5 h-3.5 transition-transform group-hover:translate-x-1" />
+              </div>
+            </a>
+          ))}
+        </div>
+      </div>
+    </main>
+  </div>
+</BaseLayout>

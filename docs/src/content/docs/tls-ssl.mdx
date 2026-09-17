@@ -1,0 +1,215 @@
+---
+title: TLS / SSL Setup
+description: Configure end-to-end TLS encryption for clients, proxy connection pooling, and cluster backends.
+sidebar:
+  order: 8
+---
+
+**PgVisor** supports full end-to-end TLS encryption, protecting database traffic against interception, eavesdropping, and man-in-the-middle (MITM) attacks.
+
+TLS can be enabled both on the **client-facing proxy listener** and on the **backend connections** between the proxy and PostgreSQL cluster nodes.
+
+---
+
+## TLS Encryption Architecture
+
+```mermaid
+flowchart LR
+    Client["Client App / psql"] -->|"TLS 1.2 / 1.3 (SSLRequest)"| Proxy["pgvisor-proxy (Port 5432)"]
+
+    subgraph Cluster ["Encrypted PostgreSQL Cluster"]
+        Proxy -->|"TLS Backend (sslmode=require)"| Node1["Node 1 (Leader)"]
+        Proxy -->|"TLS Backend (sslmode=require)"| Node2["Node 2 (Standby)"]
+        Proxy -->|"TLS Backend (sslmode=require)"| Node3["Node 3 (Standby)"]
+
+        Node1 -.->|"Encrypted Replication"| Node2
+        Node1 -.->|"Encrypted Replication"| Node3
+    end
+```
+
+- **Client-to-Proxy**: Clients negotiate TLS via standard PostgreSQL `SSLRequest` packets before transmitting authentication credentials or SQL queries.
+- **Proxy-to-Node**: The proxy initiates encrypted connections to database backends using `sslmode=require` or verified certificates.
+- **Enforcement Mode**: Unencrypted plaintext connections can be optionally forbidden by setting `PGVISOR_TLS_REQUIRED=true`.
+
+---
+
+## Generating Development Certificates
+
+PgVisor includes a development certificate generator script (`dev-generate-ssl.sh`) that provisions a self-signed Root CA, proxy certificates with Subject Alternative Names (SANs), cluster node certificates, and client certificates with secure `0600` private key permissions:
+
+<Steps>
+  <Step title="Run the Certificate Generator">
+    Execute the generator script from the repository root:
+
+    ```bash
+    ./dev-generate-ssl.sh --dir ./certs
+    ```
+  </Step>
+
+  <Step title="Inspect Generated Certificates">
+    The script generates the following files inside `./certs`:
+
+    | File | Purpose |
+    | :--- | :--- |
+    | `ca.crt` / `ca.key` | Development Root CA certificate and private key |
+    | `proxy.crt` / `proxy.key` | Proxy TLS server certificate (CN: `pgvisor-proxy`, SAN: `localhost`, `127.0.0.1`) |
+    | `server.crt` / `server.key` | Shared cluster node certificate |
+    | `node1/` .. `node3/` | Individual node-specific certificates |
+    | `client.crt` / `client.key` | Client certificate for user `postgres` (mTLS authentication) |
+  </Step>
+</Steps>
+
+---
+
+## Environment Variables Reference
+
+Configure TLS by defining these environment variables across your services:
+
+| Variable | Target | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `PGVISOR_TLS_ENABLED` | Proxy / Node | `false` | Enables TLS listener on port `5432` and sidecars |
+| `PGVISOR_TLS_REQUIRED` | Proxy | `false` | When `true`, strictly rejects unencrypted plaintext client connections |
+| `PGVISOR_BACKEND_TLS` | Proxy | Matches `TLS_ENABLED` | Enables TLS encryption when proxy connects to PostgreSQL nodes (`sslmode=require`) |
+| `PGVISOR_TLS_CERT_DIR` | Proxy / Node | `/var/lib/postgresql/tls` | Directory scanned for `server.crt` and `server.key` (or `proxy.crt`/`proxy.key`) |
+| `PGVISOR_TLS_CERT_FILE` | Proxy / Node | — | Explicit path to TLS certificate file |
+| `PGVISOR_TLS_KEY_FILE` | Proxy / Node | — | Explicit path to TLS private key file |
+
+---
+
+## Docker Compose Configuration Example
+
+Enable TLS across your cluster by mounting certificates and setting the environment variables:
+
+```yaml
+services:
+  pgvisor-proxy:
+    image: dreamoutbox/pgvisor:latest
+    container_name: pgvisor-proxy
+    environment:
+      - PGVISOR_TLS_ENABLED=true
+      - PGVISOR_TLS_REQUIRED=true
+      - PGVISOR_BACKEND_TLS=true
+      - PGVISOR_TLS_CERT_FILE=/etc/pgvisor/tls/proxy.crt
+      - PGVISOR_TLS_KEY_FILE=/etc/pgvisor/tls/proxy.key
+    volumes:
+      - ./certs/proxy.crt:/etc/pgvisor/tls/proxy.crt:ro
+      - ./certs/proxy.key:/etc/pgvisor/tls/proxy.key:ro
+    ports:
+      - "5432:5432"
+      - "8080:8080"
+
+  pgvisor-node1:
+    image: dreamoutbox/pgvisor:latest
+    container_name: pgvisor-node1
+    environment:
+      - PGVISOR_NODE_ID=1
+      - PGVISOR_ROLE=leader
+      - PGVISOR_TLS_ENABLED=true
+      - PGVISOR_TLS_CERT_FILE=/etc/pgvisor/tls/server.crt
+      - PGVISOR_TLS_KEY_FILE=/etc/pgvisor/tls/server.key
+    volumes:
+      - ./certs/node1/server.crt:/etc/pgvisor/tls/server.crt:ro
+      - ./certs/node1/server.key:/etc/pgvisor/tls/server.key:ro
+      - node1_data:/var/lib/postgresql/data
+```
+
+---
+
+## Connecting with TLS
+
+<Aside type="caution" title="Prerequisite: Enable TLS on the Proxy First">
+By default in `docker-compose.yml`, TLS is disabled (`PGVISOR_TLS_ENABLED=false`). If you run `psql` with `sslmode=require` or `sslmode=verify-full` against an unencrypted cluster, you will get:
+
+```text
+psql: error: connection to server at "localhost" (127.0.0.1), port 5432 failed: server does not support SSL, but SSL was required
+```
+
+To enable TLS before connecting:
+
+1. Generate development certificates:
+   ```bash
+   ./dev-generate-ssl.sh --dir ./certs
+   ```
+2. Start or restart the cluster with `PGVISOR_TLS_ENABLED=true` and your certificates mounted (or set in your `.env`):
+   ```bash
+   PGVISOR_TLS_ENABLED=true \
+   PGVISOR_TLS_CERT_FILE=./certs/proxy.crt \
+   PGVISOR_TLS_KEY_FILE=./certs/proxy.key \
+   docker compose up -d
+   ```
+</Aside>
+
+<Tabs>
+  <TabItem label="psql CLI (Verified CA)">
+    To connect securely with full certificate and hostname verification:
+
+    ```bash
+    psql "host=localhost port=5432 user=postgres dbname=postgres sslmode=verify-full sslrootcert=./certs/ca.crt"
+    ```
+  </TabItem>
+
+  <TabItem label="psql CLI (Quick Encrypted Test)">
+    To encrypt the connection without verifying the certificate chain (useful for local self-signed dev certs):
+
+    ```bash
+    psql "host=localhost port=5432 user=postgres dbname=postgres sslmode=require"
+    ```
+  </TabItem>
+
+  <TabItem label="psql CLI (Mutual TLS / mTLS)">
+    If client certificate authentication is enforced:
+
+    ```bash
+    psql "host=localhost port=5432 user=postgres dbname=postgres sslmode=verify-full sslrootcert=./certs/ca.crt sslcert=./certs/client.crt sslkey=./certs/client.key"
+    ```
+  </TabItem>
+
+  <TabItem label="Application Connection URI">
+    Pass standard PostgreSQL SSL parameters in your connection string:
+
+    ```text
+    postgresql://postgres:postgres@localhost:5432/postgres?sslmode=verify-full&sslrootcert=./certs/ca.crt
+    ```
+  </TabItem>
+</Tabs>
+
+---
+
+## Verifying Active Encryption
+
+### 1. In `psql` via `\conninfo` (Recommended)
+
+When connected via `psql`, the simplest way to check client-to-proxy TLS encryption is the native `\conninfo` meta-command:
+
+```text
+postgres=> \conninfo
+You are connected to database "postgres" as user "postgres" on host "localhost" (address "127.0.0.1") at port "5432" with SSL encryption (Cipher: TLS_AES_256_GCM_SHA384, Bits: 256).
+```
+
+### 2. Native PostgreSQL Built-in View (`pg_stat_ssl`)
+
+To check connection encryption via SQL **without installing any extensions**, query PostgreSQL's core `pg_stat_ssl` catalog view for the current backend PID:
+
+```sql
+SELECT pid, ssl, version, cipher, bits, client_dn
+FROM pg_stat_ssl
+WHERE pid = pg_backend_pid();
+```
+
+Output:
+```text
+  pid  | ssl | version |         cipher          | bits | client_dn
+-------+-----+---------+-------------------------+------+-----------
+ 14321 | t   | TLSv1.3 | TLS_AES_256_GCM_SHA384  |  256 |
+(1 row)
+```
+
+<Aside type="note" title="Note on ssl_is_used() and the Web Dashboard">
+- Functions such as `ssl_is_used()`, `ssl_version()`, and `ssl_cipher()` are **not** core PostgreSQL built-ins. They belong to the optional [`sslinfo`](https://www.postgresql.org/docs/current/sslinfo.html) extension and require running `CREATE EXTENSION IF NOT EXISTS sslinfo;` first.
+- The **Web Dashboard SQL Console** executes queries via the proxy's internal backend pool connection to PostgreSQL (not through a direct client SSL socket). To verify your client's TLS handshake, use `psql \conninfo` or inspect the proxy logs (`docker logs pgvisor-proxy`).
+</Aside>
+
+<Aside type="tip" title="Automatic Certificate Fallback">
+If `PGVISOR_TLS_ENABLED=true` is set without providing custom certificate paths, `pgvisor-proxy` automatically generates an ephemeral self-signed development certificate on startup, allowing encrypted connections via `sslmode=require` out of the box.
+</Aside>
+

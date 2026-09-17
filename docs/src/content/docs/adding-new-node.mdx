@@ -1,0 +1,116 @@
+---
+title: Adding New Node
+description: Scale your PostgreSQL cluster horizontally by provisioning and bootstrapping additional standby replicas.
+sidebar:
+  order: 8
+---
+
+**PgVisor** supports horizontal scaling by dynamically adding new standby replicas to an active cluster without taking the database offline or restarting existing nodes.
+
+---
+
+## Scaling Architecture: Voters vs Learners
+
+PgVisor uses **OpenRaft** for cluster membership. When scaling a cluster, nodes operate in two roles:
+
+- **Learners**: A new node starts as a Learner. It replicates the Raft log and database data from the leader but does not participate in quorum voting. This prevents an un-synced node from blocking cluster consensus.
+- **Voters**: Once the new node has cloned the database state and caught up on WAL streaming replication, it can be promoted to a full voting member of the Raft quorum.
+
+---
+
+## Step-by-Step: Adding a 4th Node
+
+Follow these steps to add `pgvisor-node4` to a running 3-node cluster.
+
+### 1. Define Container Configuration
+
+Add the new node service to your `docker-compose.yml` or production manifest:
+
+```yaml
+  pgvisor-node4:
+    image: dreamoutbox/pgvisor:latest
+    container_name: pgvisor-node4
+    environment:
+      - PGVISOR_NODE_ID=4
+      - PGVISOR_ROLE=standby
+      - PGVISOR_RAFT_ADDR=0.0.0.0:8001
+      - PGVISOR_PEERS=1=pgvisor-node1:8001,2=pgvisor-node2:8001,3=pgvisor-node3:8001,4=pgvisor-node4:8001
+      - PGVISOR_PG_PORT=5432
+      - PGVISOR_STORAGE_BACKEND=s3
+      - PGVISOR_STORAGE_BUCKET=pgvisor-backups
+      - PGVISOR_STORAGE_ENDPOINT=http://minio:9000
+      - PGVISOR_STORAGE_ACCESS_KEY_ID=minioadmin
+      - PGVISOR_STORAGE_SECRET_ACCESS_KEY=minioadmin
+    volumes:
+      - node4_data:/var/lib/postgresql/data
+    networks:
+      - pgvisor-net
+```
+
+### 2. Sidecar Automated Bootstrap Lifecycle
+
+When the new container starts, `pgvisor-sidecar` (running as PID 1) automatically carries out the replica bootstrapping process:
+
+<Steps>
+  <Step title="Data Directory Detection">
+    The sidecar inspects `/var/lib/postgresql/data`. Finding an empty directory, it identifies that initial bootstrapping is required.
+  </Step>
+
+  <Step title="Base Clone from Leader">
+    The sidecar discovers the active Raft leader and executes `pg_basebackup`:
+
+    ```bash
+    pg_basebackup -h pgvisor-node1 -p 5432 -U replicator -D /var/lib/postgresql/data -Fp -Xs -P -R
+    ```
+  </Step>
+
+  <Step title="Configuration Generation">
+    The sidecar generates runtime configurations:
+    - `standby.signal`: Instructs PostgreSQL 18 to start in standby recovery mode.
+    - `postgresql.conf`: Configured with `primary_conninfo = 'host=pgvisor-node1 port=5432 user=replicator password=...'`.
+    - `pg_hba.conf`: Configured with replication trust rules.
+  </Step>
+
+  <Step title="Streaming Replication Boot">
+    The sidecar launches PostgreSQL. PostgreSQL connects to the leader's replication slot and begins replaying WAL in real time.
+  </Step>
+</Steps>
+
+---
+
+## 3. Automatic Cluster Join
+
+PgVisor nodes **automatically join the cluster on boot**. There is no need to manually add the node via the Web Dashboard or API:
+
+- **Self-Discovery**: The sidecar parses `PGVISOR_PEERS` on startup and immediately connects to the peer network.
+- **Auto-Bootstrapping**: As shown in Step 2, finding an empty data directory triggers the sidecar to automatically clone data from the active leader via `pg_basebackup`.
+- **Quorum Synchronization**: Once local replication connects and is healthy, the node automatically announces itself to the Raft leader and begins participating in heartbeats as a standby replica.
+- **Proxy Discovery**: `pgvisor-proxy` health checks automatically discover the new standby node and immediately include it in the read-query load balancing pool.
+
+---
+
+## 4. Verification
+
+Verify that the new node is active and receiving traffic:
+
+<Steps>
+  <Step title="Inspect Dashboard Topology">
+    Open `http://localhost:8080`. Verify that `pgvisor-node4` is listed under the cluster nodes with role `Standby` and status `Healthy`.
+  </Step>
+
+  <Step title="Verify Read Query Load Balancing">
+    Execute multiple `SELECT` queries through the L7 proxy (port `5432`):
+
+    ```bash
+    for i in {1..10}; do
+      psql -h localhost -p 5432 -U postgres -d postgres -c "SELECT inet_server_addr();"
+    done
+    ```
+
+    The proxy's connection pool will automatically distribute queries across all standby replicas, including `pgvisor-node4`.
+  </Step>
+</Steps>
+
+<Aside type="tip" title="Zero-Downtime Maintenance">
+To decommission or replace a node, you can demote the node to Learner and remove it via `DELETE /control/peers/4` before stopping the container.
+</Aside>
