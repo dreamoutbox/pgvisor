@@ -8,3 +8,4 @@ knowledges/how-new-node-join-cluster.md
 plans/
 __pycache__/
 *.pyc
+certs/

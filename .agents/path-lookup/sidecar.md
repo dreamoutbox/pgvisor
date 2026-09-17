@@ -43,3 +43,10 @@
 - `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService::with_cluster_secret` attaching auth header to switchover/node lifecycle calls
 - `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::with_cluster_secret` attaching auth header to restore/resync calls
 - `docker-compose.yml` = `PGVISOR_CLUSTER_SECRET` environment variable distribution across cluster services
+
+### If you want to modify sidecar TLS/SSL certificate generation or PostgreSQL SSL settings, then check:
+
+- `crates/pgvisor-core/src/tls.rs` = `TlsCertPair` self-signed cert generation via `rcgen`, certificate and key file persistence with 0600 permissions
+- `crates/pgvisor-sidecar/src/config.rs` = `PostgresConfig` `ssl`, `ssl_cert_file`, `ssl_key_file` fields, and `write_configs` appending `ssl = on/off` to `postgresql.conf`
+- `crates/pgvisor-sidecar/src/main.rs` = Reading `PGVISOR_TLS_ENABLED`, `PGVISOR_TLS_CERT_FILE`, `PGVISOR_TLS_KEY_FILE`, loading/generating node certificates, and configuring replication `sslmode=prefer`
+- `docker-compose.yml` = `PGVISOR_TLS_ENABLED`, `PGVISOR_TLS_CERT_FILE`, and `PGVISOR_TLS_KEY_FILE` environment variables on sidecar node services

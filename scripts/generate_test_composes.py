@@ -42,6 +42,7 @@ PROFILES = [
     ("promoted-restore", "promoted-restore", 7332, 9980, 10900, 10901),
     ("load", "load", 7432, 10080, 11000, 11001),
     ("cluster-auth", "cluster-auth", 7532, 10180, 11100, 11101),
+    ("tls", "tls", 7632, 10280, 11200, 11201),
 ]
 
 
@@ -89,6 +90,10 @@ def generate_profiles():
         content = re.sub(r'"9001:9001"', f'"{minio_c_p}:9001"', content)
         content = re.sub(r'"5432:5432"', f'"{proxy_p}:5432"', content)
         content = re.sub(r'"8080:8080"', f'"{dash_p}:8080"', content)
+
+        if name == "tls":
+            content = content.replace("PGVISOR_TLS_ENABLED: ${PGVISOR_TLS_ENABLED:-false}", 'PGVISOR_TLS_ENABLED: "true"')
+            content = content.replace("PGVISOR_TLS_REQUIRED: ${PGVISOR_TLS_REQUIRED:-false}", 'PGVISOR_TLS_REQUIRED: "true"')
 
         out_file = OUTPUT_DIR / f"docker-compose.{name}.yml"
         with open(out_file, "w", encoding="utf-8") as f:

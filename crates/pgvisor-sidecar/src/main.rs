@@ -91,11 +91,61 @@ async fn main() -> Result<()> {
     let archive_cmd = format!("{sidecar_bin} archive %p %f");
     let restore_cmd = format!("{sidecar_bin} restore %f %p");
 
+    let tls_enabled = env::var("PGVISOR_TLS_ENABLED")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false);
+
+    let (ssl, ssl_cert_file, ssl_key_file) = if tls_enabled {
+        let cert_path = env::var("PGVISOR_TLS_CERT_FILE")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| data_dir.join("server.crt"));
+        let key_path = env::var("PGVISOR_TLS_KEY_FILE")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| data_dir.join("server.key"));
+
+        let node_host = format!("pgvisor-node{}", node_id);
+        let alt_names = vec![
+            "localhost".to_string(),
+            "127.0.0.1".to_string(),
+            node_host.clone(),
+        ];
+
+        pgvisor_core::tls::TlsCertPair::load_or_generate(
+            &cert_path, &key_path, &node_host, &alt_names,
+        )?;
+
+        if let Some(conn) = primary_conninfo.as_mut() {
+            if !conn.contains("sslmode=") {
+                conn.push_str(" sslmode=prefer");
+            }
+        }
+
+        info!(
+            ?cert_path,
+            ?key_path,
+            "TLS enabled and certificates initialized for PostgreSQL"
+        );
+        (
+            true,
+            Some(cert_path.to_string_lossy().to_string()),
+            Some(key_path.to_string_lossy().to_string()),
+        )
+    } else {
+        (false, None, None)
+    };
+
     let config = PostgresConfig {
         port,
         primary_conninfo,
         archive_command: Some(archive_cmd),
         restore_command: Some(restore_cmd),
+        ssl,
+        ssl_cert_file,
+        ssl_key_file,
         ..Default::default()
     };
 

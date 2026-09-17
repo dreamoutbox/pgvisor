@@ -7,6 +7,7 @@ pub mod metrics;
 pub mod protocol;
 pub mod raft;
 pub mod storage;
+pub mod tls;
 
 pub use audit::{AuditError, AuditEvent, AuditEventKind, AuditLog};
 pub use auth::{

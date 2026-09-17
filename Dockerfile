@@ -38,8 +38,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /var/lib/postgresql/data \
-    && chown -R postgres:postgres /var/lib/postgresql
+    && mkdir -p /var/lib/postgresql/data /var/lib/postgresql/tls /var/lib/pgvisor/tls \
+    && chown -R postgres:postgres /var/lib/postgresql /var/lib/pgvisor
 
 # Copy compiled PgVisor binaries
 COPY --from=builder /app/target/release/pgvisor-sidecar /usr/local/bin/

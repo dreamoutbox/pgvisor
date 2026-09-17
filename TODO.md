@@ -173,15 +173,17 @@
 
 - [x] secure proxy to sidecar & sidecar to sidecar communication. when communication over network with password. currently sidecar rust axum server not have any authentication.
 
-- [ ] TLS/SSL mode. auto setup. write simple shell/python script to test SSL/TLS connection is working.
-
-- [ ] make proxy and sidecar export opentelemetry data. to use with prometheus/grafana.
+- [x] TLS/SSL mode. auto setup. write simple shell/python script to test SSL/TLS connection is working.
 
 - [ ] add wiki
+
+- [ ] demo: simple app connect and use pgvisor
 
 ---
 
 # Backlog
+
+- [ ] make proxy and sidecar export opentelemetry data. to use with prometheus/grafana.
 
 - [ ] web dashboard support multiple users.
 

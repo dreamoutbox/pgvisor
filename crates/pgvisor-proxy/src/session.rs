@@ -8,9 +8,11 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio_rustls::TlsAcceptor;
 use tracing::{debug, info, warn};
 
 use crate::pool::{BackendRole, ConnectionPool, FailoverConfig, PooledConnection};
+use crate::tls::ClientStream;
 
 #[derive(Debug, Error)]
 pub enum SessionError {
@@ -26,7 +28,7 @@ pub enum SessionError {
 
 /// Manages a single client frontend session with transaction-level backend pooling.
 pub struct ClientSession {
-    client_stream: TcpStream,
+    client_stream: Option<ClientStream>,
     pool: ConnectionPool,
     tracker: TransactionTracker,
     active_backend: Option<PooledConnection>,
@@ -34,12 +36,14 @@ pub struct ClientSession {
     failover_config: FailoverConfig,
     audit_log: Option<Arc<AuditLog>>,
     metrics: Option<Arc<crate::metrics::ProxyMetricsStore>>,
+    tls_acceptor: Option<Arc<TlsAcceptor>>,
+    tls_required: bool,
 }
 
 impl ClientSession {
     pub fn new(client_stream: TcpStream, pool: ConnectionPool) -> Self {
         Self {
-            client_stream,
+            client_stream: Some(ClientStream::Plain(client_stream)),
             pool,
             tracker: TransactionTracker::new(),
             active_backend: None,
@@ -47,7 +51,21 @@ impl ClientSession {
             failover_config: FailoverConfig::default(),
             audit_log: None,
             metrics: None,
+            tls_acceptor: None,
+            tls_required: false,
         }
+    }
+
+    /// Sets the TLS acceptor for upgrading client connections.
+    pub fn with_tls_acceptor(mut self, acceptor: Arc<TlsAcceptor>) -> Self {
+        self.tls_acceptor = Some(acceptor);
+        self
+    }
+
+    /// Enforces TLS requirement, rejecting unencrypted client connections.
+    pub fn with_tls_required(mut self, required: bool) -> Self {
+        self.tls_required = required;
+        self
     }
 
     /// Sets the proxy metrics store for tracking query routing counts.
@@ -73,26 +91,81 @@ impl ClientSession {
         self.startup_params.as_ref()
     }
 
+    fn stream_mut(&mut self) -> Result<&mut ClientStream, SessionError> {
+        self.client_stream.as_mut().ok_or_else(|| {
+            SessionError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "Client connection closed",
+            ))
+        })
+    }
+
     /// Drives the client session through handshake and query execution loop.
     pub async fn run(&mut self) -> Result<(), SessionError> {
         let mut buf = BytesMut::with_capacity(4096);
 
         // 1. Initial Handshake phase
         loop {
-            if self.client_stream.read_buf(&mut buf).await? == 0 {
+            if self.stream_mut()?.read_buf(&mut buf).await? == 0 {
                 return Ok(()); // Client disconnected
             }
 
             if let Some(initial_msg) = InitialClientMessage::decode(&mut buf)? {
                 match initial_msg {
                     InitialClientMessage::SslRequest => {
-                        debug!("Client requested SSL, responding with 'N' (SSL unencrypted)");
-                        self.client_stream.write_all(b"N").await?;
+                        if let Some(acceptor) = self.tls_acceptor.clone() {
+                            debug!("Client requested SSL, responding with 'S' and initiating TLS handshake");
+                            self.stream_mut()?.write_all(b"S").await?;
+
+                            let stream = self.client_stream.take().ok_or_else(|| {
+                                SessionError::Io(std::io::Error::new(
+                                    std::io::ErrorKind::NotConnected,
+                                    "Client connection closed",
+                                ))
+                            })?;
+
+                            match stream {
+                                ClientStream::Plain(tcp_stream) => {
+                                    let tls_stream =
+                                        acceptor.accept(tcp_stream).await.map_err(|e| {
+                                            SessionError::Protocol(format!(
+                                                "TLS handshake failed: {}",
+                                                e
+                                            ))
+                                        })?;
+                                    self.client_stream = Some(ClientStream::Tls(tls_stream));
+                                    debug!("TLS handshake with client completed successfully");
+                                }
+                                ClientStream::Tls(_) => {
+                                    return Err(SessionError::Protocol(
+                                        "Unexpected nested SSLRequest over established TLS stream"
+                                            .into(),
+                                    ));
+                                }
+                            }
+                        } else {
+                            debug!("Client requested SSL, responding with 'N' (SSL unencrypted)");
+                            self.stream_mut()?.write_all(b"N").await?;
+                        }
                     }
                     InitialClientMessage::Startup(startup) => {
+                        if self.tls_required {
+                            if let Some(ClientStream::Plain(_)) = self.client_stream.as_ref() {
+                                warn!("Rejecting unencrypted client connection because TLS is required");
+                                let mut resp = BytesMut::new();
+                                BackendMessage::ErrorResponse {
+                                    message: "FATAL: TLS/SSL is required to connect to this server"
+                                        .into(),
+                                }
+                                .encode(&mut resp);
+                                self.stream_mut()?.write_all(&resp).await?;
+                                return Ok(());
+                            }
+                        }
                         info!(
                             user = ?startup.user(),
                             database = ?startup.database(),
+                            is_tls = matches!(self.client_stream, Some(ClientStream::Tls(_))),
                             "Client handshake initialized"
                         );
                         self.startup_params = Some(startup);
@@ -138,7 +211,7 @@ impl ClientSession {
                             status: TransactionStatus::Idle,
                         }
                         .encode(&mut resp);
-                        self.client_stream.write_all(&resp).await?;
+                        self.stream_mut()?.write_all(&resp).await?;
                         break;
                     }
                     InitialClientMessage::CancelRequest { process_id, .. } => {
@@ -151,7 +224,7 @@ impl ClientSession {
 
         // 2. Command processing loop
         loop {
-            if self.client_stream.read_buf(&mut buf).await? == 0 {
+            if self.stream_mut()?.read_buf(&mut buf).await? == 0 {
                 debug!("Client closed connection");
                 break;
             }
@@ -209,8 +282,16 @@ impl ClientSession {
             BackendRole::Standby
         };
 
-        let user = self.startup_params.as_ref().and_then(|s| s.user());
-        let database = self.startup_params.as_ref().and_then(|s| s.database());
+        let user = self
+            .startup_params
+            .as_ref()
+            .and_then(|s| s.user().map(String::from));
+        let database = self
+            .startup_params
+            .as_ref()
+            .and_then(|s| s.database().map(String::from));
+        let user_ref = user.as_deref();
+        let db_ref = database.as_deref();
 
         // Audit dangerous SQL statements (DROP TABLE, TRUNCATE, and DELETE)
         if let Some(audit) = self.audit_log.as_ref() {
@@ -241,8 +322,8 @@ impl ClientSession {
                 let pitr_candidate = (now - chrono::Duration::seconds(1))
                     .format("%Y-%m-%d %H:%M:%S UTC")
                     .to_string();
-                let u = user.unwrap_or("unknown");
-                let db = database.unwrap_or("unknown");
+                let u = user_ref.unwrap_or("unknown");
+                let db = db_ref.unwrap_or("unknown");
                 let snippet = if sql.len() > 300 {
                     format!("{}...", &sql[..300])
                 } else {
@@ -271,8 +352,8 @@ impl ClientSession {
                 || upper.starts_with("REVOKE ");
 
             if is_user_permission {
-                let u = user.unwrap_or("unknown");
-                let db = database.unwrap_or("unknown");
+                let u = user_ref.unwrap_or("unknown");
+                let db = db_ref.unwrap_or("unknown");
                 let snippet = if sql.len() > 300 {
                     format!("{}...", &sql[..300])
                 } else {
@@ -292,7 +373,7 @@ impl ClientSession {
         if self.active_backend.is_none() {
             match self
                 .pool
-                .acquire_with_retry(role, &self.failover_config, user, database)
+                .acquire_with_retry(role, &self.failover_config, user_ref, db_ref)
                 .await
             {
                 Ok(backend) => {
@@ -312,7 +393,7 @@ impl ClientSession {
                         status: TransactionStatus::Idle,
                     }
                     .encode(&mut err_resp);
-                    self.client_stream.write_all(&err_resp).await?;
+                    self.stream_mut()?.write_all(&err_resp).await?;
                     return Ok(());
                 }
             }
@@ -336,7 +417,7 @@ impl ClientSession {
             // Discard broken backend and attempt transparent failover retry
             match self
                 .pool
-                .acquire_with_retry(role, &self.failover_config, user, database)
+                .acquire_with_retry(role, &self.failover_config, user_ref, db_ref)
                 .await
             {
                 Ok(mut new_backend) => {
@@ -353,7 +434,7 @@ impl ClientSession {
                         status: TransactionStatus::Idle,
                     }
                     .encode(&mut err_resp);
-                    self.client_stream.write_all(&err_resp).await?;
+                    self.stream_mut()?.write_all(&err_resp).await?;
                     return Ok(());
                 }
             }
@@ -381,7 +462,7 @@ impl ClientSession {
                     info!("Backend terminated before sending response; retrying query on newly promoted leader");
                     match self
                         .pool
-                        .acquire_with_retry(role, &self.failover_config, user, database)
+                        .acquire_with_retry(role, &self.failover_config, user_ref, db_ref)
                         .await
                     {
                         Ok(mut new_backend) => {
@@ -400,7 +481,7 @@ impl ClientSession {
                                 status: TransactionStatus::Idle,
                             }
                             .encode(&mut err_resp);
-                            self.client_stream.write_all(&err_resp).await?;
+                            self.stream_mut()?.write_all(&err_resp).await?;
                             return Ok(());
                         }
                     }
@@ -417,7 +498,7 @@ impl ClientSession {
                         status: TransactionStatus::Idle,
                     }
                     .encode(&mut err_resp);
-                    self.client_stream.write_all(&err_resp).await?;
+                    self.stream_mut()?.write_all(&err_resp).await?;
                     return Ok(());
                 }
             }
@@ -437,7 +518,7 @@ impl ClientSession {
                 }
 
                 client_bytes_written += frame.len();
-                self.client_stream.write_all(&frame).await?;
+                self.stream_mut()?.write_all(&frame).await?;
 
                 if ready_for_query_received {
                     break;

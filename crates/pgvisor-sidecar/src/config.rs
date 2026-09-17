@@ -25,6 +25,9 @@ pub struct PostgresConfig {
     pub primary_conninfo: Option<String>,
     pub recovery_target_time: Option<String>,
     pub recovery_target_action: Option<String>,
+    pub ssl: bool,
+    pub ssl_cert_file: Option<String>,
+    pub ssl_key_file: Option<String>,
 }
 
 impl Default for PostgresConfig {
@@ -39,6 +42,9 @@ impl Default for PostgresConfig {
             primary_conninfo: None,
             recovery_target_time: None,
             recovery_target_action: None,
+            ssl: false,
+            ssl_cert_file: None,
+            ssl_key_file: None,
         }
     }
 }
@@ -98,6 +104,18 @@ impl ConfigGenerator {
 
         if let Some(target_action) = &config.recovery_target_action {
             conf_content.push_str(&format!("recovery_target_action = '{target_action}'\n"));
+        }
+
+        if config.ssl {
+            conf_content.push_str("ssl = on\n");
+            if let Some(cert_file) = &config.ssl_cert_file {
+                conf_content.push_str(&format!("ssl_cert_file = '{cert_file}'\n"));
+            }
+            if let Some(key_file) = &config.ssl_key_file {
+                conf_content.push_str(&format!("ssl_key_file = '{key_file}'\n"));
+            }
+        } else {
+            conf_content.push_str("ssl = off\n");
         }
 
         // Targeted recovery indicator file
@@ -225,5 +243,23 @@ mod tests {
 
         ConfigGenerator::write_configs(dir.path(), &config).unwrap();
         assert!(!standby_signal.exists());
+    }
+
+    #[test]
+    fn test_write_ssl_config() {
+        let dir = tempdir().unwrap();
+        let config = PostgresConfig {
+            port: 5432,
+            ssl: true,
+            ssl_cert_file: Some("/data/server.crt".into()),
+            ssl_key_file: Some("/data/server.key".into()),
+            ..Default::default()
+        };
+
+        ConfigGenerator::write_configs(dir.path(), &config).unwrap();
+        let conf = fs::read_to_string(dir.path().join("postgresql.conf")).unwrap();
+        assert!(conf.contains("ssl = on"));
+        assert!(conf.contains("ssl_cert_file = '/data/server.crt'"));
+        assert!(conf.contains("ssl_key_file = '/data/server.key'"));
     }
 }

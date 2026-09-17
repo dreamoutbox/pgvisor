@@ -5,6 +5,7 @@ pub mod metrics;
 pub mod pool;
 pub mod scheduler;
 pub mod session;
+pub mod tls;
 
 use metrics::{NodeTelemetry, ProxyMetricsService, ProxyMetricsStore};
 use scheduler::BackupScheduler;
@@ -51,7 +52,53 @@ async fn main() -> Result<()> {
 
     info!(%listen_addr, ?leader_addr, ?standby_addrs, "pgvisor-proxy service starting up");
 
-    let pool = ConnectionPool::new(10);
+    let tls_enabled = env::var("PGVISOR_TLS_ENABLED")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false);
+
+    let tls_required = env::var("PGVISOR_TLS_REQUIRED")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false);
+
+    let backend_tls = env::var("PGVISOR_BACKEND_TLS")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(tls_enabled);
+
+    let tls_acceptor = if tls_enabled {
+        let cert_dir = env::var("PGVISOR_TLS_CERT_DIR")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                if std::path::Path::new("/var/lib/postgresql").exists() {
+                    std::path::PathBuf::from("/var/lib/postgresql/tls")
+                } else {
+                    std::path::PathBuf::from("./tls")
+                }
+            });
+        let custom_cert = env::var("PGVISOR_TLS_CERT_FILE")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(std::path::PathBuf::from);
+        let custom_key = env::var("PGVISOR_TLS_KEY_FILE")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(std::path::PathBuf::from);
+
+        let (cert_p, key_p) = tls::load_or_generate_proxy_certs(cert_dir, custom_cert, custom_key)?;
+        let acceptor = tls::build_client_acceptor(&cert_p, &key_p)?;
+        info!(cert = ?cert_p, key = ?key_p, tls_required, "pgvisor-proxy TLS client listener initialized");
+        Some(Arc::new(acceptor))
+    } else {
+        None
+    };
+
+    let mut pool = ConnectionPool::new(10);
+    if backend_tls {
+        let connector = tls::build_backend_connector()?;
+        info!("pgvisor-proxy backend connection TLS enabled (sslmode=require)");
+        pool = pool.with_tls_connector(Arc::new(connector));
+    }
     pool.update_topology(leader_addr.clone(), standby_addrs.clone())
         .await;
 
@@ -733,6 +780,7 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind(&listen_addr).await?;
     info!(%listen_addr, "Listening for PostgreSQL client connections");
 
+    let session_tls_acceptor = tls_acceptor.clone();
     loop {
         let (socket, peer_addr) = listener.accept().await?;
         info!(%peer_addr, "Accepted incoming PostgreSQL client connection");
@@ -740,10 +788,17 @@ async fn main() -> Result<()> {
         let pool_clone = pool.clone();
         let session_audit = audit_log.clone();
         let session_metrics = metrics_store.clone();
+        let acceptor_clone = session_tls_acceptor.clone();
         tokio::spawn(async move {
             let mut session = ClientSession::new(socket, pool_clone)
                 .with_audit_log(session_audit)
                 .with_metrics(session_metrics);
+            if let Some(acceptor) = acceptor_clone {
+                session = session.with_tls_acceptor(acceptor);
+            }
+            if tls_required {
+                session = session.with_tls_required(true);
+            }
             if let Err(err) = session.run().await {
                 error!(%peer_addr, %err, "Session terminated with error");
             }

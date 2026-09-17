@@ -27,3 +27,7 @@ serde_json = { workspace = true }
 pgwire = { workspace = true }
 croner = { workspace = true }
 opendal = { workspace = true }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+rustls-pemfile = { workspace = true }

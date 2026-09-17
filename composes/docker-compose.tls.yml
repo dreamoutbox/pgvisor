@@ -1,4 +1,4 @@
-# Auto-generated test compose file for users-permissions profile
+# Auto-generated test compose file for tls profile
 # Generated from docker-compose.yml by scripts/generate_test_composes.py
 volumes:
   minio_data:
@@ -10,13 +10,13 @@ volumes:
 services:
   minio:
     image: rustfs/rustfs:latest
-    container_name: pgvisor-users-permissions-minio
+    container_name: pgvisor-tls-minio
     restart: unless-stopped
     cpus: 1
     mem_limit: 1g
     ports:
-      - "9900:9000"
-      - "9901:9001"
+      - "11200:9000"
+      - "11201:9001"
     environment:
       RUSTFS_ACCESS_KEY: minioadmin
       RUSTFS_SECRET_KEY: minioadmin
@@ -33,7 +33,7 @@ services:
 
   minio-init:
     image: rustfs/rustfs:latest
-    container_name: pgvisor-users-permissions-minio-init
+    container_name: pgvisor-tls-minio-init
     cpus: 1
     mem_limit: 1g
     depends_on:
@@ -48,7 +48,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     image: pgvisor-test-node:latest
-    container_name: pgvisor-users-permissions-node1
+    container_name: pgvisor-tls-node1
     restart: unless-stopped
     cpus: 1
     mem_limit: 1g
@@ -65,7 +65,7 @@ services:
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
       PGVISOR_CLUSTER_SECRET: ${PGVISOR_CLUSTER_SECRET:-}
-      PGVISOR_TLS_ENABLED: ${PGVISOR_TLS_ENABLED:-false}
+      PGVISOR_TLS_ENABLED: "true"
       PGVISOR_TLS_CERT_FILE: ${PGVISOR_TLS_CERT_FILE:-}
       PGVISOR_TLS_KEY_FILE: ${PGVISOR_TLS_KEY_FILE:-}
       RUST_LOG: info
@@ -85,7 +85,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     image: pgvisor-test-node:latest
-    container_name: pgvisor-users-permissions-node2
+    container_name: pgvisor-tls-node2
     restart: unless-stopped
     cpus: 1
     mem_limit: 1g
@@ -103,7 +103,7 @@ services:
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
       PGVISOR_CLUSTER_SECRET: ${PGVISOR_CLUSTER_SECRET:-}
-      PGVISOR_TLS_ENABLED: ${PGVISOR_TLS_ENABLED:-false}
+      PGVISOR_TLS_ENABLED: "true"
       PGVISOR_TLS_CERT_FILE: ${PGVISOR_TLS_CERT_FILE:-}
       PGVISOR_TLS_KEY_FILE: ${PGVISOR_TLS_KEY_FILE:-}
       RUST_LOG: info
@@ -123,7 +123,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     image: pgvisor-test-node:latest
-    container_name: pgvisor-users-permissions-node3
+    container_name: pgvisor-tls-node3
     restart: unless-stopped
     cpus: 1
     mem_limit: 1g
@@ -141,7 +141,7 @@ services:
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
       PGVISOR_CLUSTER_SECRET: ${PGVISOR_CLUSTER_SECRET:-}
-      PGVISOR_TLS_ENABLED: ${PGVISOR_TLS_ENABLED:-false}
+      PGVISOR_TLS_ENABLED: "true"
       PGVISOR_TLS_CERT_FILE: ${PGVISOR_TLS_CERT_FILE:-}
       PGVISOR_TLS_KEY_FILE: ${PGVISOR_TLS_KEY_FILE:-}
       RUST_LOG: info
@@ -161,14 +161,14 @@ services:
       context: ..
       dockerfile: Dockerfile
     image: pgvisor-test-proxy:latest
-    container_name: pgvisor-users-permissions-proxy
+    container_name: pgvisor-tls-proxy
     entrypoint: [ "pgvisor-proxy" ]
     restart: unless-stopped
     cpus: 1
     mem_limit: 1g
     ports:
-      - "6332:5432"
-      - "8980:8080"
+      - "7632:5432"
+      - "10280:8080"
     environment:
       PGVISOR_PROXY_LISTEN: 0.0.0.0:5432
       PGVISOR_DASHBOARD_LISTEN: 0.0.0.0:8080
@@ -187,8 +187,8 @@ services:
       PGVISOR_BACKUP_INCREMENTAL_CRON: "0 * * * *"
       RUST_LOG: info
       PGVISOR_ADMIN_TOKEN: postgres
-      PGVISOR_TLS_ENABLED: ${PGVISOR_TLS_ENABLED:-false}
-      PGVISOR_TLS_REQUIRED: ${PGVISOR_TLS_REQUIRED:-false}
+      PGVISOR_TLS_ENABLED: "true"
+      PGVISOR_TLS_REQUIRED: "true"
       PGVISOR_TLS_CERT_DIR: /var/lib/postgresql/tls
       PGVISOR_TLS_CERT_FILE: ${PGVISOR_TLS_CERT_FILE:-}
       PGVISOR_TLS_KEY_FILE: ${PGVISOR_TLS_KEY_FILE:-}

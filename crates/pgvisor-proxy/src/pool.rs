@@ -4,11 +4,15 @@ use std::time::{Duration, Instant};
 
 use bytes::BytesMut;
 use pgvisor_core::protocol::message::{BackendMessage, InitialClientMessage, StartupMessage};
+use rustls_pki_types::ServerName;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{watch, Mutex};
+use tokio_rustls::TlsConnector;
 use tracing::{debug, info, warn};
+
+use crate::tls::BackendStream;
 
 #[derive(Debug, Clone)]
 pub struct FailoverConfig {
@@ -46,7 +50,7 @@ pub enum BackendRole {
 
 /// A live backend TCP connection managed by the pool.
 pub struct PooledConnection {
-    pub stream: TcpStream,
+    pub stream: BackendStream,
     pub role: BackendRole,
     pub addr: String,
     pub created_at: Instant,
@@ -70,8 +74,47 @@ impl PooledConnection {
         user: Option<&str>,
         database: Option<&str>,
     ) -> Result<Self, PoolError> {
-        debug!(addr, ?role, "Opening new backend connection");
-        let mut stream = TcpStream::connect(addr).await?;
+        Self::connect_with_tls(addr, role, user, database, None).await
+    }
+
+    /// Connects to a PostgreSQL instance with optional TLS encryption.
+    pub async fn connect_with_tls(
+        addr: &str,
+        role: BackendRole,
+        user: Option<&str>,
+        database: Option<&str>,
+        tls_connector: Option<Arc<TlsConnector>>,
+    ) -> Result<Self, PoolError> {
+        debug!(addr, ?role, has_tls = tls_connector.is_some(), "Opening new backend connection");
+        let mut tcp_stream = TcpStream::connect(addr).await?;
+
+        let mut stream = if let Some(connector) = tls_connector {
+            // Send SSLRequest packet to backend
+            let mut ssl_req = [0u8; 8];
+            ssl_req[0..4].copy_from_slice(&8i32.to_be_bytes());
+            ssl_req[4..8].copy_from_slice(&(pgvisor_core::protocol::SSL_REQUEST_CODE).to_be_bytes());
+            tcp_stream.write_all(&ssl_req).await?;
+
+            let mut resp = [0u8; 1];
+            tcp_stream.read_exact(&mut resp).await?;
+            if resp[0] == b'S' {
+                let host = addr.split(':').next().unwrap_or(addr);
+                let server_name = ServerName::try_from(host.to_string())
+                    .map_err(|e| PoolError::BackendUnavailable(format!("Invalid DNS name {}: {}", host, e)))?;
+                let tls_stream = connector
+                    .connect(server_name, tcp_stream)
+                    .await
+                    .map_err(|e| PoolError::BackendUnavailable(format!("TLS handshake failed with backend {}: {}", addr, e)))?;
+                BackendStream::Tls(tls_stream)
+            } else {
+                return Err(PoolError::BackendUnavailable(format!(
+                    "Backend at {} does not support SSL (received '{}')",
+                    addr, resp[0] as char
+                )));
+            }
+        } else {
+            BackendStream::Plain(tcp_stream)
+        };
 
         // 1. Send StartupMessage to backend
         let mut startup_buf = BytesMut::new();
@@ -133,6 +176,7 @@ impl PooledConnection {
 pub struct ConnectionPool {
     inner: Arc<Mutex<PoolInner>>,
     topology_notifier: Arc<watch::Sender<u64>>,
+    tls_connector: Option<Arc<TlsConnector>>,
 }
 
 struct PoolInner {
@@ -159,7 +203,14 @@ impl ConnectionPool {
                 version: 0,
             })),
             topology_notifier: Arc::new(tx),
+            tls_connector: None,
         }
+    }
+
+    /// Sets the TLS connector for backend connections.
+    pub fn with_tls_connector(mut self, connector: Arc<TlsConnector>) -> Self {
+        self.tls_connector = Some(connector);
+        self
     }
 
     /// Updates current cluster topology known from consensus.
@@ -244,7 +295,14 @@ impl ConnectionPool {
             debug!(addr = %conn.addr, ?role, "Reusing idle pooled connection");
             Ok(conn)
         } else {
-            PooledConnection::connect(&target_addr, role, user, database).await
+            PooledConnection::connect_with_tls(
+                &target_addr,
+                role,
+                user,
+                database,
+                self.tls_connector.clone(),
+            )
+            .await
         }
     }
 
