@@ -32,6 +32,8 @@ pub struct SidecarState {
     pub system_metrics: Arc<SystemMetricsCollector>,
     pub peers: Arc<Vec<String>>,
     pub cluster_secret: Option<String>,
+    /// Cluster-wide backup/restore lock state on the leader with auto-expiry.
+    pub backup_lock: Arc<RwLock<Option<BackupLockInfo>>>,
 }
 
 impl SidecarState {
@@ -57,6 +59,7 @@ impl SidecarState {
             system_metrics: Arc::new(SystemMetricsCollector::new()),
             peers,
             cluster_secret,
+            backup_lock: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -108,4 +111,26 @@ pub struct StatusResponse {
 #[derive(Deserialize)]
 pub struct EventsQuery {
     pub since_id: Option<u64>,
+}
+
+/// Tracks cluster-wide backup/restore lock state on the leader.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BackupLockInfo {
+    pub token: String,
+    pub acquired_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Response returned when a backup lock is successfully acquired.
+#[derive(Serialize)]
+pub struct AcquireBackupLockResponse {
+    pub lock_token: String,
+    pub acquired_at: String,
+    pub expires_at: String,
+}
+
+/// Payload required to release a backup lock.
+#[derive(Deserialize)]
+pub struct ReleaseLockPayload {
+    pub lock_token: String,
 }

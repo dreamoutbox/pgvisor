@@ -53,12 +53,15 @@
 - `crates/pgvisor-core/src/protocol/tracker.rs` = Query classifier routing `SELECT pg_switch_wal()` as `QueryKind::Write` to leader
 - `tests/test-promoted-restore.sh` = Automated regression test verifying leader failover, snapshot restore on promoted leader, absence of recovery spam, and standby re-sync
 
-### If you want to modify backup retention policies, CRON scheduling, concurrent backup/restore mutex locks, or follower backup offloading, then check:
+### If you want to modify backup retention policies, CRON scheduling, cluster-wide backup/restore locks, or follower backup offloading, then check:
 
 - `crates/pgvisor-core/src/backup/manager.rs` = `BackupScheduleConfig` (`keep_count`, `retention_days`, `full_backup_cron`, `incremental_backup_cron`, `cron_enabled`, `from_env`), `BasebackupMeta.source_node`, and `prune_retention` with single latest snapshot safeguard
 - `crates/pgvisor-proxy/src/scheduler.rs` = `BackupScheduler` driving automated background full and incremental backup jobs via `croner::Cron`
-- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::select_backup_target` prioritizing follower/standby nodes over primary for `pg_basebackup`, and `operation_lock` (async mutex) rejecting concurrent backup/restore with error
-- `crates/pgvisor-dashboard/src/handlers.rs` = `api_create_backup`, `api_restore_backup`, and `api_quick_restore` mapping concurrent lock rejections to HTTP 409 Conflict, and `StandaloneBackupService` with mutex lock
+- `crates/pgvisor-sidecar/src/control/state.rs` = `SidecarState::backup_lock` holding `BackupLockInfo` with token and TTL expiration timestamps
+- `crates/pgvisor-sidecar/src/control/handlers.rs` = `handle_acquire_backup_lock` and `handle_release_backup_lock` enforcing leader-only access (503), TTL auto-expiry, and 409 Conflict rejection
+- `crates/pgvisor-sidecar/src/control/server.rs` = Route registration for `/control/backup-lock/acquire` and `/control/backup-lock/release` with cluster auth middleware
+- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::acquire_backup_lock_on_leader` and `release_backup_lock_on_leader` coordinating cluster-wide lock on leader sidecar for all backup/restore/delete operations
+- `crates/pgvisor-dashboard/src/handlers/backup.rs` = `api_create_backup`, `api_restore_backup`, and `api_quick_restore` mapping concurrent lock rejections to HTTP 409 Conflict
 - `crates/pgvisor-dashboard/src/models.rs` = `BackupOverviewSummary.keep_count` and `BackupItemView.source_node`
 - `crates/pgvisor-dashboard/templates/backups.html` = Dashboard UI displaying keep count in summary and source node badge in backup snapshot list
 - `crates/pgvisor-proxy/src/main.rs` = Wiring `BackupScheduleConfig::from_env()` and starting `BackupScheduler`
@@ -66,3 +69,4 @@
 - `examples/docker-compose.yml` = Example compose definition passing `PGVISOR_BACKUP_*` retention and CRON variables with defaults
 - `examples/.env.example` & `examples/.env` = Environment variable templates defining default retention limits and CRON schedules
 - `tests/test-backup-restore.sh` = Automated integration test asserting follower node backup execution, primary node restore execution, and HTTP 409 Conflict mutex rejection
+

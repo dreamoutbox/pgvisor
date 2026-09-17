@@ -10,9 +10,10 @@ use pgvisor_core::{
 use tracing::{info, warn};
 
 use super::state::{
-    EventsQuery, RepointPayload, RestorePayload, ResyncPayload, SidecarEventRecord, SidecarState,
-    StatusResponse,
+    AcquireBackupLockResponse, BackupLockInfo, EventsQuery, ReleaseLockPayload, RepointPayload,
+    RestorePayload, ResyncPayload, SidecarEventRecord, SidecarState, StatusResponse,
 };
+
 use crate::supervisor::ProcessStatus;
 
 pub async fn handle_status(State(state): State<SidecarState>) -> impl IntoResponse {
@@ -664,3 +665,95 @@ pub async fn handle_restart(
         "node_id": state.node_id
     })))
 }
+
+/// TTL for cluster-wide backup/restore lock before automatic expiration (15 minutes).
+pub const BACKUP_LOCK_TTL_MINUTES: i64 = 15;
+
+/// Acquires the cluster-wide backup/restore lock on the leader sidecar.
+///
+/// Returns 503 if this node is not the current leader, 409 if the lock is already held.
+/// On success returns a `lock_token` UUID that must be presented to release the lock.
+/// Automatically expires stale locks held longer than `BACKUP_LOCK_TTL_MINUTES`.
+pub async fn handle_acquire_backup_lock(
+    State(state): State<SidecarState>,
+) -> Result<Json<AcquireBackupLockResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let role = state.role.read().await.clone();
+    if role != "leader" {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "This node is not the cluster leader; direct backup-lock requests to the leader"
+            })),
+        ));
+    }
+
+    let now = chrono::Utc::now();
+    let mut lock_guard = state.backup_lock.write().await;
+
+    if let Some(ref existing) = *lock_guard {
+        if now < existing.expires_at {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "A backup or restore operation is already in progress. Please wait for the current operation to complete.",
+                    "expires_at": existing.expires_at.to_rfc3339()
+                })),
+            ));
+        }
+        warn!(
+            token = %existing.token,
+            expired_at = %existing.expires_at,
+            "Existing backup lock expired; auto-releasing lock"
+        );
+        *lock_guard = None;
+    }
+
+    let token = uuid::Uuid::new_v4().to_string();
+    let expires_at = now + chrono::Duration::minutes(BACKUP_LOCK_TTL_MINUTES);
+
+    *lock_guard = Some(BackupLockInfo {
+        token: token.clone(),
+        acquired_at: now,
+        expires_at,
+    });
+
+    info!(%token, %expires_at, "Cluster backup lock acquired on leader");
+    Ok(Json(AcquireBackupLockResponse {
+        lock_token: token,
+        acquired_at: now.to_rfc3339(),
+        expires_at: expires_at.to_rfc3339(),
+    }))
+}
+
+/// Releases the cluster-wide backup/restore lock on the leader sidecar.
+///
+/// The caller must present the `lock_token` obtained from `/control/backup-lock/acquire`.
+/// A token mismatch is silently ignored (idempotent). This prevents a late-arriving
+/// release from a crashed proxy from evicting a newly acquired lock.
+pub async fn handle_release_backup_lock(
+    State(state): State<SidecarState>,
+    Json(payload): Json<ReleaseLockPayload>,
+) -> impl IntoResponse {
+    let mut lock_guard = state.backup_lock.write().await;
+    match lock_guard.as_ref() {
+        Some(existing) if existing.token == payload.lock_token => {
+            info!(token = %payload.lock_token, "Cluster backup lock released");
+            *lock_guard = None;
+            Json(serde_json::json!({ "status": "ok", "message": "Backup lock released" }))
+        }
+        Some(existing) => {
+            warn!(
+                presented = %payload.lock_token,
+                stored = %existing.token,
+                "Backup lock release ignored: token mismatch"
+            );
+            Json(
+                serde_json::json!({ "status": "ok", "message": "Token mismatch; lock not released" }),
+            )
+        }
+        None => {
+            Json(serde_json::json!({ "status": "ok", "message": "Lock was already free" }))
+        }
+    }
+}
+

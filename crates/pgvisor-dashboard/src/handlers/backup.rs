@@ -185,7 +185,6 @@ pub struct StandaloneBackupService {
     backups: Arc<RwLock<Vec<BasebackupMeta>>>,
     endpoint: String,
     bucket: String,
-    operation_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl StandaloneBackupService {
@@ -215,7 +214,6 @@ impl StandaloneBackupService {
             backups: Arc::new(RwLock::new(initial)),
             endpoint: "http://127.0.0.1:9000".into(),
             bucket: "pgvisor-backups".into(),
-            operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 }
@@ -239,10 +237,6 @@ impl BackupService for StandaloneBackupService {
         backup_type: BackupType,
         label: Option<String>,
     ) -> Result<BasebackupMeta, String> {
-        let _guard = self.operation_lock.try_lock().map_err(|_| {
-            "A backup or restore operation is already in progress. Please wait for the current operation to complete.".to_string()
-        })?;
-
         let now = Utc::now();
         let snapshot_id = generate_snapshot_id(label.as_deref(), now);
         let bytes = match backup_type {
@@ -283,10 +277,6 @@ impl BackupService for StandaloneBackupService {
         snapshot_id: &str,
         target_time: Option<String>,
     ) -> Result<String, String> {
-        let _guard = self.operation_lock.try_lock().map_err(|_| {
-            "A backup or restore operation is already in progress. Please wait for the current operation to complete.".to_string()
-        })?;
-
         let lock = self.backups.read().await;
         if let Some(b) = lock.iter().find(|b| b.snapshot_id == snapshot_id) {
             let b_type_str = match b.backup_type {

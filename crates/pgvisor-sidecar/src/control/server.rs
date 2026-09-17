@@ -6,9 +6,9 @@ use tracing::{info, warn};
 
 use super::auth::cluster_auth_middleware;
 use super::handlers::{
-    handle_cancel_restore, handle_demote, handle_events, handle_fence, handle_prepare_restore,
-    handle_promote, handle_repoint, handle_restart, handle_restore, handle_resync, handle_start,
-    handle_status, handle_stop,
+    handle_acquire_backup_lock, handle_cancel_restore, handle_demote, handle_events, handle_fence,
+    handle_prepare_restore, handle_promote, handle_release_backup_lock, handle_repoint,
+    handle_restart, handle_restore, handle_resync, handle_start, handle_status, handle_stop,
 };
 use super::state::SidecarState;
 
@@ -28,12 +28,15 @@ pub fn build_control_router(state: SidecarState) -> Router {
         .route("/control/fence", post(handle_fence))
         .route("/control/demote", post(handle_demote))
         .route("/control/repoint", post(handle_repoint))
+        .route("/control/backup-lock/acquire", post(handle_acquire_backup_lock))
+        .route("/control/backup-lock/release", post(handle_release_backup_lock))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             cluster_auth_middleware,
         ))
         .with_state(state)
 }
+
 
 /// Spawns the HTTP control server task in the background.
 pub fn spawn_control_server(addr: SocketAddr, app: Router) {
@@ -141,4 +144,175 @@ mod tests {
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
     }
+
+    #[tokio::test]
+    async fn test_backup_lock_rejects_standby() {
+        let state = create_test_state(None);
+        {
+            let mut r = state.role.write().await;
+            *r = "standby".to_string();
+        }
+        let app = build_control_router(state);
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/control/backup-lock/acquire")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn test_backup_lock_exclusive_and_release() {
+        let state = create_test_state(None);
+        let app = build_control_router(state);
+
+        // First acquire should succeed (200 OK)
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/control/backup-lock/acquire")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let acquire_resp: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        let token = acquire_resp["lock_token"].as_str().unwrap().to_string();
+        assert!(!token.is_empty());
+        assert!(acquire_resp.get("expires_at").is_some());
+
+        // Second acquire while lock held should fail (409 Conflict)
+        let res2 = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/control/backup-lock/acquire")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res2.status(), StatusCode::CONFLICT);
+
+        // Release with valid token
+        let release_payload = serde_json::json!({ "lock_token": token });
+        let res3 = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/control/backup-lock/release")
+                    .header("content-type", "application/json")
+                    .body(Body::from(release_payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res3.status(), StatusCode::OK);
+
+        // After release, third acquire should succeed
+        let res4 = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/control/backup-lock/acquire")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res4.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_backup_lock_mismatch_token_does_not_release() {
+        let state = create_test_state(None);
+        let app = build_control_router(state);
+
+        // Acquire lock
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/control/backup-lock/acquire")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        // Release with bogus token
+        let release_payload = serde_json::json!({ "lock_token": "wrong-token-uuid" });
+        let res2 = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/control/backup-lock/release")
+                    .header("content-type", "application/json")
+                    .body(Body::from(release_payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res2.status(), StatusCode::OK);
+
+        // Lock should STILL be held -> next acquire returns 409
+        let res3 = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/control/backup-lock/acquire")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res3.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn test_backup_lock_auto_expires_after_ttl() {
+        let state = create_test_state(None);
+        // Artificially inject an already-expired lock
+        {
+            let mut lock_guard = state.backup_lock.write().await;
+            *lock_guard = Some(crate::control::state::BackupLockInfo {
+                token: "old-expired-token".to_string(),
+                acquired_at: chrono::Utc::now() - chrono::Duration::minutes(30),
+                expires_at: chrono::Utc::now() - chrono::Duration::minutes(15),
+            });
+        }
+        let app = build_control_router(state);
+
+        // Acquire should detect expired lock, auto-release, and succeed
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/control/backup-lock/acquire")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
 }
+

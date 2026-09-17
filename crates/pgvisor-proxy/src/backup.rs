@@ -31,7 +31,6 @@ pub struct ProxyBackupService {
     control_port: u16,
     http_client: reqwest::Client,
     audit_log: Option<Arc<AuditLog>>,
-    operation_lock: Arc<tokio::sync::Mutex<()>>,
     cluster_secret: Option<String>,
 }
 
@@ -68,7 +67,6 @@ impl ProxyBackupService {
             control_port,
             http_client,
             audit_log: None,
-            operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cluster_secret: None,
         }
     }
@@ -98,9 +96,90 @@ impl ProxyBackupService {
         self
     }
 
-    /// Returns a reference to the shared operation lock for testing or synchronization.
-    pub fn operation_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
-        self.operation_lock.clone()
+    /// Resolves leader hostname for control API requests.
+    fn resolve_leader_host(&self, leader_opt: Option<&str>) -> String {
+        leader_opt
+            .or(self.configured_leader.as_deref())
+            .map(|addr| addr.split(':').next().unwrap_or(addr).to_string())
+            .unwrap_or_else(|| "127.0.0.1".to_string())
+    }
+
+    /// Requests exclusive cluster backup/restore lock from the leader sidecar.
+    pub async fn acquire_backup_lock_on_leader(&self) -> Result<(String, String), String> {
+        let leader = self.leader_addr.read().await.clone();
+        let leader_host = self.resolve_leader_host(leader.as_deref());
+        let url = format!(
+            "http://{}:{}/control/backup-lock/acquire",
+            leader_host, self.control_port
+        );
+
+        let resp = self.http_client.post(&url).send().await.map_err(|e| {
+            format!(
+                "Failed to request backup lock from leader at {}: {}",
+                url, e
+            )
+        })?;
+
+        if resp.status() == reqwest::StatusCode::CONFLICT {
+            return Err(
+                "A backup or restore operation is already in progress. Please wait for the current operation to complete.".to_string(),
+            );
+        }
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(format!(
+                "Failed to acquire backup lock from leader ({}: {}): {}",
+                status, url, err_text
+            ));
+        }
+
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse backup lock response from leader: {}", e))?;
+
+        let token = body
+            .get("lock_token")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Leader lock response missing 'lock_token'".to_string())?
+            .to_string();
+
+        Ok((leader_host, token))
+    }
+
+    /// Releases exclusive cluster backup/restore lock on the leader sidecar.
+    pub async fn release_backup_lock_on_leader(&self, leader_host: &str, token: &str) {
+        let url = format!(
+            "http://{}:{}/control/backup-lock/release",
+            leader_host, self.control_port
+        );
+        let payload = serde_json::json!({
+            "lock_token": token
+        });
+
+        match self.http_client.post(&url).json(&payload).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                info!(%token, %leader_host, "Released cluster backup lock on leader");
+            }
+            Ok(resp) => {
+                warn!(
+                    %token,
+                    %leader_host,
+                    status = ?resp.status(),
+                    "Leader returned non-success when releasing backup lock"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    %token,
+                    %leader_host,
+                    ?e,
+                    "Failed to contact leader to release backup lock"
+                );
+            }
+        }
     }
 
     /// Selects candidate node for physical basebackup. Follower/standby nodes are prioritized
@@ -156,30 +235,12 @@ impl ProxyBackupService {
             (h, p, false)
         }
     }
-}
 
-#[async_trait::async_trait]
-impl BackupService for ProxyBackupService {
-    async fn list_backups(&self) -> Result<Vec<BasebackupMeta>, String> {
-        let mut list = self
-            .backup_manager
-            .list_basebackups()
-            .await
-            .map_err(|e| format!("Failed to list basebackups: {}", e))?;
-
-        list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        Ok(list)
-    }
-
-    async fn create_backup(
+    async fn create_backup_inner(
         &self,
         backup_type: BackupType,
         label: Option<String>,
     ) -> Result<BasebackupMeta, String> {
-        let _guard = self.operation_lock.try_lock().map_err(|_| {
-            "A backup or restore operation is already in progress. Please wait for the current operation to complete.".to_string()
-        })?;
-
         let (host, port, is_follower) = self.select_backup_target().await;
 
         let start_time = Utc::now();
@@ -316,14 +377,11 @@ impl BackupService for ProxyBackupService {
         Ok(meta)
     }
 
-    async fn restore_backup(
+    async fn restore_backup_inner(
         &self,
         snapshot_id: &str,
         target_time: Option<String>,
     ) -> Result<String, String> {
-        let _guard = self.operation_lock.try_lock().map_err(|_| {
-            "A backup or restore operation is already in progress. Please wait for the current operation to complete.".to_string()
-        })?;
         let (b_type_str, backup_name) =
             if let Ok(list) = self.backup_manager.list_basebackups().await {
                 if let Some(m) = list.iter().find(|b| {
@@ -557,14 +615,57 @@ impl BackupService for ProxyBackupService {
         ))
     }
 
-    async fn delete_backup(&self, snapshot_id: &str) -> Result<(), String> {
-        let _guard = self.operation_lock.try_lock().map_err(|_| {
-            "A backup or restore operation is already in progress. Please wait for the current operation to complete.".to_string()
-        })?;
+    async fn delete_backup_inner(&self, snapshot_id: &str) -> Result<(), String> {
         self.backup_manager
             .delete_basebackup(snapshot_id)
             .await
             .map_err(|e| format!("Failed to delete basebackup: {}", e))
+    }
+}
+
+#[async_trait::async_trait]
+impl BackupService for ProxyBackupService {
+    async fn list_backups(&self) -> Result<Vec<BasebackupMeta>, String> {
+        let mut list = self
+            .backup_manager
+            .list_basebackups()
+            .await
+            .map_err(|e| format!("Failed to list basebackups: {}", e))?;
+
+        list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(list)
+    }
+
+    async fn create_backup(
+        &self,
+        backup_type: BackupType,
+        label: Option<String>,
+    ) -> Result<BasebackupMeta, String> {
+        let (leader_host, lock_token) = self.acquire_backup_lock_on_leader().await?;
+        let res = self.create_backup_inner(backup_type, label).await;
+        self.release_backup_lock_on_leader(&leader_host, &lock_token)
+            .await;
+        res
+    }
+
+    async fn restore_backup(
+        &self,
+        snapshot_id: &str,
+        target_time: Option<String>,
+    ) -> Result<String, String> {
+        let (leader_host, lock_token) = self.acquire_backup_lock_on_leader().await?;
+        let res = self.restore_backup_inner(snapshot_id, target_time).await;
+        self.release_backup_lock_on_leader(&leader_host, &lock_token)
+            .await;
+        res
+    }
+
+    async fn delete_backup(&self, snapshot_id: &str) -> Result<(), String> {
+        let (leader_host, lock_token) = self.acquire_backup_lock_on_leader().await?;
+        let res = self.delete_backup_inner(snapshot_id).await;
+        self.release_backup_lock_on_leader(&leader_host, &lock_token)
+            .await;
+        res
     }
 
     async fn get_backup_archive(
@@ -649,34 +750,98 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mutex_concurrency_lock() {
-        let (service, _dir) =
-            build_test_service(Some("node1:5432".into()), vec!["node2:5432".into()]);
+    async fn test_leader_backup_lock_lifecycle() {
+        use axum::routing::post;
+        use axum::Json;
+        use tokio::net::TcpListener;
 
-        // Manually acquire lock simulating an ongoing long backup/restore
-        let lock = service.operation_lock();
-        let guard = lock.try_lock();
-        assert!(guard.is_ok());
+        let lock_state: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
+        let state_acquire = lock_state.clone();
+        let state_release = lock_state.clone();
 
-        // Attempt concurrent create_backup
-        let res = service.create_backup(BackupType::Full, None).await;
-        assert!(res.is_err());
-        assert!(res.unwrap_err().contains("already in progress"));
+        let app = axum::Router::new()
+            .route(
+                "/control/backup-lock/acquire",
+                post(move || {
+                    let st = state_acquire.clone();
+                    async move {
+                        let mut guard = st.write().await;
+                        if guard.is_some() {
+                            return Err((
+                                axum::http::StatusCode::CONFLICT,
+                                Json(serde_json::json!({
+                                    "error": "A backup or restore operation is already in progress."
+                                })),
+                            ));
+                        }
+                        let token = "test-token-1234".to_string();
+                        *guard = Some(token.clone());
+                        Ok(Json(serde_json::json!({
+                            "lock_token": token,
+                            "acquired_at": "2026-09-18T00:00:00Z"
+                        })))
+                    }
+                }),
+            )
+            .route(
+                "/control/backup-lock/release",
+                post(move |Json(payload): Json<serde_json::Value>| {
+                    let st = state_release.clone();
+                    async move {
+                        let mut guard = st.write().await;
+                        if let Some(token) = payload.get("lock_token").and_then(|v| v.as_str()) {
+                            if guard.as_deref() == Some(token) {
+                                *guard = None;
+                            }
+                        }
+                        Json(serde_json::json!({ "status": "ok" }))
+                    }
+                }),
+            );
 
-        // Attempt concurrent restore_backup
-        let res_restore = service.restore_backup("snap-test", None).await;
-        assert!(res_restore.is_err());
-        assert!(res_restore.unwrap_err().contains("already in progress"));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
 
-        // Attempt concurrent delete_backup
-        let res_delete = service.delete_backup("snap-test").await;
-        assert!(res_delete.is_err());
-        assert!(res_delete.unwrap_err().contains("already in progress"));
+        let dir = tempdir().unwrap();
+        let mut builder = Fs::default();
+        builder = builder.root(dir.path().to_str().unwrap());
+        let op = opendal::Operator::new(builder).unwrap().finish();
+        let bm = Arc::new(BackupManager::new("test_cluster", op));
+        let leader_addr = format!("127.0.0.1:5432");
 
-        // Release lock
-        drop(guard);
+        let service = ProxyBackupService::new(
+            bm,
+            Arc::new(RwLock::new(Some(leader_addr.clone()))),
+            Some(leader_addr),
+            Arc::new(RwLock::new(Vec::new())),
+            Vec::new(),
+            None,
+            "http://127.0.0.1:9000".into(),
+            "test-bucket".into(),
+            7,
+            Some(10),
+            server_port,
+        );
 
-        // After drop, lock is available again
-        assert!(lock.try_lock().is_ok());
+        // 1. Acquire lock
+        let (host, token) = service.acquire_backup_lock_on_leader().await.unwrap();
+        assert_eq!(host, "127.0.0.1");
+        assert_eq!(token, "test-token-1234");
+
+        // 2. Concurrent acquire fails with 409
+        let err = service.acquire_backup_lock_on_leader().await.unwrap_err();
+        assert!(err.contains("already in progress"));
+
+        // 3. Release lock
+        service.release_backup_lock_on_leader(&host, &token).await;
+
+        // 4. After release, acquire succeeds again
+        let (host2, token2) = service.acquire_backup_lock_on_leader().await.unwrap();
+        assert_eq!(host2, "127.0.0.1");
+        assert_eq!(token2, "test-token-1234");
     }
 }
+
