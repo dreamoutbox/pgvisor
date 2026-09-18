@@ -49,3 +49,24 @@
 - `crates/pgvisor-proxy/src/main.rs` = proxy dynamic topology monitor failover listening highlight
 - `crates/pgvisor-proxy/src/cluster.rs` = proxy node start/stop and switchover highlights
 - `crates/pgvisor-dashboard/src/handlers.rs` = standalone backup and cluster service highlights
+
+### If you want to modify or run the Python MVC demo application connecting to PgVisor, then check:
+
+- `examples/demo_app/app.py` = Flask application factory, error handling, blueprint registration, and server runner
+- `examples/demo_app/config.py` = Database connection parameters and environment variable loader
+- `examples/demo_app/models/database.py` = Threaded PostgreSQL connection pool with failover retry logic and schema initializer
+- `examples/demo_app/models/item.py` = Data model for CRUD operations on demo_items table
+- `examples/demo_app/models/cluster.py` = Inspection model for server recovery status, version, and read/write routing demonstration
+- `examples/demo_app/controllers/item_controller.py` = Web controllers for item listing, filtering, search, creation, editing, deletion, and seeding
+- `examples/demo_app/controllers/cluster_controller.py` = Web controllers for cluster diagnostic page and `/api/health` check endpoint
+- `examples/demo_app/views/base.html` = Master layout template with Bootstrap 5.3 CDN, navbar, connection badge, and flash messages
+- `examples/demo_app/views/items/index.html` = Items dashboard view with metrics cards, responsive table, and add item modal
+- `examples/demo_app/views/items/edit.html` = Item edit form view
+- `examples/demo_app/views/cluster/index.html` = PgVisor cluster diagnostic and live read/write routing test result view
+- `examples/demo_app/static/css/custom.css` = Custom styles and transitions enhancing Bootstrap 5
+- `examples/demo_app/Dockerfile` = Container build recipe running Gunicorn with unprivileged appuser
+- `examples/demo_app/docker-compose.yml` = Docker compose configuration for running demo app container standalone
+- `examples/docker-compose.demo-app.yml` = Extension compose configuration combining PgVisor HA cluster and demo app
+- `examples/run-demo-app.sh` = Bootstrap and management shell script for launching cluster with demo app compose
+- `examples/demo_app/requirements.txt` = Python runtime dependencies (Flask, psycopg2-binary, gunicorn, python-dotenv)
+- `examples/demo_app/README.md` = Documentation, architecture overview, environment configuration, and execution instructions

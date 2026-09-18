@@ -1,0 +1,25 @@
+# ==============================================================================
+# PgVisor Demo Application - Docker Compose
+# ==============================================================================
+
+services:
+  demo-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pgvisor-demo-app
+    restart: unless-stopped
+    ports:
+      - "${PORT:-5000}:5000"
+    environment:
+      # If running on same Docker network as pgvisor: DB_HOST=pgvisor-proxy
+      # If connecting through host port 5432: DB_HOST=host.docker.internal
+      DB_HOST: ${DB_HOST:-host.docker.internal}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:-postgres}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-key-pgvisor-demo}
+      DEBUG: ${DEBUG:-false}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

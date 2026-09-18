@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+
+{% block title %}Cluster Diagnostic &mdash; PgVisor MVC{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-4">
+    <div>
+        <h4 class="fw-bold mb-1">Postgres Cluster Diagnostics</h4>
+        <p class="text-muted small mb-0">Inspecting database connections and routing behavior through PgVisor L7 Proxy.</p>
+    </div>
+    <div>
+        <a href="{{ url_for('cluster.index', run_test=1) }}" class="btn btn-primary d-flex align-items-center gap-2 shadow-sm">
+            <i class="bi bi-play-circle"></i>
+            <span>Run Read/Write Routing Test</span>
+        </a>
+    </div>
+</div>
+
+<div class="row g-4 mb-4">
+    <!-- Connection Status Card -->
+    <div class="col-lg-6">
+        <div class="card border-0 shadow-sm rounded-3 h-100">
+            <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
+                <h5 class="mb-0 fw-bold">
+                    <i class="bi bi-hdd-network text-info me-2"></i>Proxy Connection Info
+                </h5>
+                {% if cluster_info.connected %}
+                    <span class="badge bg-success-subtle text-success border border-success-subtle">Connected</span>
+                {% else %}
+                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle">Disconnected</span>
+                {% endif %}
+            </div>
+            <div class="card-body p-3">
+                {% if cluster_info.connected %}
+                    <table class="table table-sm align-middle mb-0">
+                        <tbody>
+                            <tr>
+                                <th class="text-muted fw-semibold w-50">Database Name:</th>
+                                <td class="fw-bold text-dark">{{ cluster_info.db_name }}</td>
+                            </tr>
+                            <tr>
+                                <th class="text-muted fw-semibold">Database User:</th>
+                                <td>{{ cluster_info.db_user }}</td>
+                            </tr>
+                            <tr>
+                                <th class="text-muted fw-semibold">Connected Backend IP:</th>
+                                <td><code>{{ cluster_info.server_addr }}:{{ cluster_info.server_port }}</code></td>
+                            </tr>
+                            <tr>
+                                <th class="text-muted fw-semibold">Node Role:</th>
+                                <td>
+                                    <span class="badge {% if cluster_info.in_recovery %}bg-info-subtle text-info border{% else %}bg-primary-subtle text-primary border{% endif %}">
+                                        {{ cluster_info.node_role }}
+                                    </span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th class="text-muted fw-semibold">In Recovery (Standby):</th>
+                                <td>
+                                    {% if cluster_info.in_recovery %}
+                                        <span class="badge bg-success-subtle text-success">true (Read-Only Replica)</span>
+                                    {% else %}
+                                        <span class="badge bg-primary-subtle text-primary">false (Primary Leader)</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            <tr>
+                                <th class="text-muted fw-semibold">Postgres Version:</th>
+                                <td class="small text-muted text-break">{{ cluster_info.pg_version }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                {% else %}
+                    <div class="alert alert-danger mb-0">
+                        <h6 class="alert-heading fw-bold"><i class="bi bi-x-circle me-1"></i> Cannot reach database</h6>
+                        <p class="small mb-0">{{ cluster_info.error }}</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- How PgVisor Works Card -->
+    <div class="col-lg-6">
+        <div class="card border-0 shadow-sm rounded-3 h-100">
+            <div class="card-header bg-white border-bottom py-3">
+                <h5 class="mb-0 fw-bold">
+                    <i class="bi bi-shield-check text-success me-2"></i>How PgVisor Routes Traffic
+                </h5>
+            </div>
+            <div class="card-body p-3">
+                <div class="mb-3">
+                    <div class="d-flex align-items-center gap-2 mb-1">
+                        <span class="badge bg-info text-dark">Read Query (SELECT)</span>
+                        <i class="bi bi-arrow-right text-muted"></i>
+                        <span class="fw-semibold">Standby Replica</span>
+                    </div>
+                    <p class="text-muted small mb-0">
+                        PgVisor inspects incoming SQL statements. Pure reads route to healthy standby replicas to offload read traffic.
+                    </p>
+                </div>
+                <div class="mb-3">
+                    <div class="d-flex align-items-center gap-2 mb-1">
+                        <span class="badge bg-primary">Write Query (INSERT / UPDATE)</span>
+                        <i class="bi bi-arrow-right text-muted"></i>
+                        <span class="fw-semibold">Raft Leader Primary</span>
+                    </div>
+                    <p class="text-muted small mb-0">
+                        Data modifications and transactions route exclusively to the Raft-elected leader to ensure linearizable consistency.
+                    </p>
+                </div>
+                <div class="border-top pt-2">
+                    <span class="badge bg-secondary-subtle text-secondary border">Failover Connection Buffering</span>
+                    <p class="text-muted small mt-1 mb-0">
+                        During failover elections, PgVisor buffers client queries instead of immediately dropping TCP connections.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Live Routing Test Results -->
+{% if routing_results %}
+    <div class="card border-0 shadow-sm rounded-3 mb-4">
+        <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
+            <h5 class="mb-0 fw-bold">
+                <i class="bi bi-lightning-charge text-warning me-2"></i>Live Routing Test Results
+            </h5>
+            <span class="badge bg-success-subtle text-success border">Executed Just Now</span>
+        </div>
+        <div class="card-body p-4">
+            {% if routing_results.error %}
+                <div class="alert alert-danger mb-0">
+                    <h6 class="alert-heading fw-bold">Test Failed</h6>
+                    <p class="mb-0 small">{{ routing_results.error }}</p>
+                </div>
+            {% else %}
+                <div class="row g-4">
+                    <!-- Read Test Column -->
+                    <div class="col-md-6">
+                        <div class="p-3 border rounded-3 bg-light-subtle h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="fw-bold text-dark">
+                                    <i class="bi bi-eye text-info me-1"></i>Read Test (SELECT)
+                                </span>
+                                <span class="badge bg-info-subtle text-info border">Read Traffic</span>
+                            </div>
+                            {% if routing_results.read_test %}
+                                <ul class="list-unstyled small mb-0">
+                                    <li class="mb-1"><strong>Routed Target:</strong> <span class="badge bg-light text-dark border">{{ routing_results.read_test.routed_role }}</span></li>
+                                    <li class="mb-1"><strong>Server Address:</strong> <code>{{ routing_results.read_test.server_addr }}:{{ routing_results.read_test.server_port }}</code></li>
+                                    <li class="mb-1"><strong>In Recovery:</strong> <code>{{ routing_results.read_test.in_recovery }}</code></li>
+                                    <li><strong>Executed At:</strong> {{ routing_results.read_test.query_time }}</li>
+                                </ul>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <!-- Write Test Column -->
+                    <div class="col-md-6">
+                        <div class="p-3 border rounded-3 bg-light-subtle h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="fw-bold text-dark">
+                                    <i class="bi bi-pencil-square text-primary me-1"></i>Write Test (UPDATE)
+                                </span>
+                                <span class="badge bg-primary-subtle text-primary border">Write Traffic</span>
+                            </div>
+                            {% if routing_results.write_test %}
+                                <ul class="list-unstyled small mb-0">
+                                    <li class="mb-1"><strong>Routed Target:</strong> <span class="badge bg-light text-dark border">{{ routing_results.write_test.routed_role }}</span></li>
+                                    <li class="mb-1"><strong>Server Address:</strong> <code>{{ routing_results.write_test.server_addr }}:{{ routing_results.write_test.server_port }}</code></li>
+                                    <li class="mb-1"><strong>In Recovery:</strong> <code>{{ routing_results.write_test.in_recovery }}</code></li>
+                                    <li><strong>Result:</strong> Mutating statement committed on primary.</li>
+                                </ul>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+{% endif %}
+{% endblock %}

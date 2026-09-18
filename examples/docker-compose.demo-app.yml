@@ -1,0 +1,34 @@
+# ==============================================================================
+# PgVisor - Python MVC Demo Application Compose Extension
+#
+# Adds the containerized Python MVC web app on top of the 3-node PgVisor HA cluster.
+#
+# Usage:
+#   docker compose -f docker-compose.demo-app.yml up -d
+# Or:
+#   docker compose -f docker-compose.yml -f docker-compose.demo-app.yml up -d
+# ==============================================================================
+
+include:
+  - docker-compose.yml
+
+services:
+  demo-app:
+    image: ${DEMO_APP_IMAGE:-dreamoutbox/pgvisor-demo-app:latest}
+    build:
+      context: ./demo_app
+      dockerfile: Dockerfile
+    container_name: pgvisor-demo-app
+    restart: unless-stopped
+    ports:
+      - "${DEMO_APP_PORT:-5000}:5000"
+    environment:
+      DB_HOST: pgvisor-proxy
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-postgres}
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-key-pgvisor-demo}
+      DEBUG: ${DEBUG:-false}
+    depends_on:
+      - pgvisor-proxy

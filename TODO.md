@@ -177,9 +177,14 @@
 
 - [x] add wiki
 
-- [ ] demo: simple app connect and use pgvisor
+- [x] demo: simple app connect and use pgvisor
+      - Python MVC web app with Bootstrap 5 in `examples/demo_app`
+      - Containerized with Dockerfile and docker-compose.yml
+      - Demonstrates L7 read/write splitting, CRUD, and cluster diagnostics
 
 - [ ] inspect each node postgresql config with web dashboard
+
+- [ ] edit/delete tables rows from web dashboard
 
 ---
 

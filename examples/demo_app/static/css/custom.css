@@ -1,0 +1,40 @@
+/* PgVisor Demo App Custom Styling */
+
+:root {
+    --pg-primary: #0d6efd;
+    --pg-success: #198754;
+    --pg-border-color: #e9ecef;
+}
+
+body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: #212529;
+}
+
+.card {
+    transition: transform 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+
+.card:hover {
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.08) !important;
+}
+
+.table th {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #6c757d;
+}
+
+.badge {
+    font-weight: 500;
+}
+
+.btn-group-sm > .btn, .btn-sm {
+    padding: 0.25rem 0.6rem;
+}
+
+code {
+    font-size: 0.85em;
+    color: #d63384;
+}
