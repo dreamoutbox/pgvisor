@@ -8,7 +8,7 @@
 - `crates/pgvisor-dashboard/src/handlers/state.rs` = `DashboardState` struct and initialization
 - `crates/pgvisor-dashboard/src/handlers/sql.rs` = `SqlExecutor` trait, `StandaloneSqlExecutor`, `TablesQuery`, and SQL explorer / table schema endpoints
 - `crates/pgvisor-dashboard/src/handlers/backup.rs` = `BackupService` trait, `StandaloneBackupService`, snapshot selection, and backup / PITR restore endpoints
-- `crates/pgvisor-dashboard/src/handlers/cluster.rs` = `ClusterService` trait, `StandaloneClusterService`, and cluster overview / node lifecycle endpoints
+- `crates/pgvisor-dashboard/src/handlers/cluster.rs` = `ClusterService` trait (`get_node_logs`, `get_node_config`), `StandaloneClusterService`, `/api/nodes/:node_id/logs`, and `/api/nodes/:node_id/config/:config_type` endpoints
 - `crates/pgvisor-dashboard/src/handlers/users.rs` = `UserService` trait, `StandaloneUserService`, `SqlUserService`, and role / permission management endpoints
 - `crates/pgvisor-dashboard/src/handlers/auth.rs` = Login, logout, and token session cookie handlers
 - `crates/pgvisor-dashboard/src/handlers/audit.rs` = Audit log page and API list handlers
@@ -17,7 +17,14 @@
 - `crates/pgvisor-proxy/src/main.rs` = Proxy server entrypoint, injects `ProxySqlExecutor`, `ProxyBackupService`, `ProxyClusterService`, and `SqlUserService` into dashboard state
 - `crates/pgvisor-proxy/src/executor.rs` = `ProxySqlExecutor` running dashboard queries against live Postgres cluster connections
 - `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService` orchestrating OpenDAL backups and restores for the proxy dashboard
-- `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService` orchestrating manual leader switchover and standby repointing for the proxy dashboard
+- `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService` orchestrating manual leader switchover, standby repointing, node logs forwarding, and config inspection for the proxy dashboard
+
+### If you want to inspect node PostgreSQL logs, postgresql.conf, pg_hba.conf, or runtime diagnostic files in the web dashboard:
+
+- `crates/pgvisor-core/src/node.rs` = `NodeConfigType` enum (`PostgresqlConf`, `PostgresqlAutoConf`, `PgHbaConf`, `PgIdentConf`, `PostmasterPid`, `PostmasterOpts`, `StandbySignal`, `RecoverySignal`, `BackupLabel`), `NodeLogEntry`, and DTO models
+- `crates/pgvisor-dashboard/src/handlers/cluster.rs` = `ClusterService` trait (`get_node_logs`, `get_node_config`), `api_node_logs`, and `api_node_config` endpoints
+- `crates/pgvisor-dashboard/templates/nodes.html` = Inspect button on node rows, modal tabs for live log streaming / search / auto-refresh, and diagnostic file viewer
+- `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService::get_node_logs` and `get_node_config` proxying requests to sidecars via HTTP auth
 
 ### If you want to manage database users, roles, memberships, or table privileges:
 

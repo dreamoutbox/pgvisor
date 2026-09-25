@@ -16,11 +16,12 @@ use crate::handlers::{
     api_alter_user, api_create_backup, api_create_user, api_delete_backup, api_download_backup,
     api_drop_user, api_execute_sql, api_find_best_backup, api_get_privileges, api_get_user,
     api_grant_membership, api_list_audit_logs, api_list_backups, api_list_tables, api_list_users,
-    api_metrics_history, api_metrics_snapshot, api_node_action, api_nodes, api_quick_restore,
-    api_restart_node, api_restore_backup, api_revoke_membership, api_set_privilege, api_start_node,
-    api_status, api_stop_node, api_switchover, api_table_data, api_table_schema,
-    get_audit_logs_page, get_backups_page, get_login_page, get_logout, get_nodes, get_overview,
-    get_sql_console, get_tables_page, get_users_page, post_login, DashboardState,
+    api_metrics_history, api_metrics_snapshot, api_node_action, api_node_config, api_node_logs,
+    api_nodes, api_quick_restore, api_restart_node, api_restore_backup, api_revoke_membership,
+    api_set_privilege, api_start_node, api_status, api_stop_node, api_switchover, api_table_data,
+    api_table_schema, get_audit_logs_page, get_backups_page, get_login_page, get_logout,
+    get_nodes, get_overview, get_sql_console, get_tables_page, get_users_page, post_login,
+    DashboardState,
 };
 use crate::security::SqlSecurityGuard;
 
@@ -82,6 +83,8 @@ pub fn create_router(state: Arc<DashboardState>) -> Router {
         .route("/api/nodes/:node_id/stop", post(api_stop_node))
         .route("/api/nodes/:node_id/restart", post(api_restart_node))
         .route("/api/nodes/:node_id/action", post(api_node_action))
+        .route("/api/nodes/:node_id/logs", get(api_node_logs))
+        .route("/api/nodes/:node_id/config/:config_type", get(api_node_config))
         .route("/api/metrics/snapshot", get(api_metrics_snapshot))
         .route("/api/metrics/history", get(api_metrics_history))
         .route("/api/audit-logs", get(api_list_audit_logs))
@@ -842,5 +845,55 @@ mod tests {
             .unwrap();
         let response = auth_app.clone().oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_dashboard_node_inspection_routes() {
+        let state = Arc::new(DashboardState::new("test-cluster", None));
+        let app = create_router(state);
+
+        // 1. GET /api/nodes/1/logs returns logs
+        let req = Request::builder()
+            .uri("/api/nodes/1/logs?limit=2")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let logs: crate::models::NodeLogsResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(logs.node_id, 1);
+        assert_eq!(logs.entries.len(), 2);
+
+        // 2. GET /api/nodes/1/config/postgresql_conf returns config
+        let req = Request::builder()
+            .uri("/api/nodes/1/config/postgresql_conf")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let cfg: crate::models::NodeConfigResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(cfg.filename, "postgresql.conf");
+        assert!(cfg.content.contains("listen_addresses"));
+
+        // 3. GET /api/nodes/1/config/invalid_slug returns 400
+        let req = Request::builder()
+            .uri("/api/nodes/1/config/invalid_slug")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // 4. GET /nodes HTML contains Inspect button and inspect modal
+        let req = Request::builder()
+            .uri("/nodes")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(html.contains("openInspectModal"));
+        assert!(html.contains("inspectModal"));
     }
 }

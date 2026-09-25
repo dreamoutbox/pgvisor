@@ -14,8 +14,9 @@ pub use backup::{
     get_backups_page, parse_target_timestamp, BackupService, StandaloneBackupService,
 };
 pub use cluster::{
-    api_node_action, api_nodes, api_restart_node, api_start_node, api_status, api_stop_node,
-    api_switchover, get_nodes, get_overview, ClusterService, StandaloneClusterService,
+    api_node_action, api_node_config, api_node_logs, api_nodes, api_restart_node, api_start_node,
+    api_status, api_stop_node, api_switchover, get_nodes, get_overview, ClusterService,
+    StandaloneClusterService,
 };
 pub(crate) use sql::api_list_tables;
 pub use sql::{

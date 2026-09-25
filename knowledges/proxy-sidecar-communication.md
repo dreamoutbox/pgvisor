@@ -2,30 +2,43 @@
 
 The proxy (`pgvisor-proxy`) never talks to the PostgreSQL instances on the sidecar
 nodes via an internal RPC or message bus. Instead, every sidecar node exposes a
-lightweight **HTTP control API** (default port `8080`, overridable via
-`PGVISOR_CONTROL_PORT`). The proxy calls this API with plain JSON over HTTP.
+lightweight **HTTP control API** powered by Axum (default port `8080`, overridable via
+`PGVISOR_CONTROL_PORT`). The proxy and peer sidecars call this API with plain JSON over HTTP.
+
+> [!NOTE]
+> **No Dedicated Raft Port**: There is no separate TCP or gRPC port for Raft. Peer-to-peer
+> consensus, election heartbeats, status probing, and standby repoint commands all run
+> over the same Axum HTTP control API server on port 8080.
+>
+> **Cluster Authentication**: Sidecar-to-sidecar and proxy-to-sidecar communication can be
+> secured using HMAC-SHA256 bearer token authentication enforced by middleware when
+> `PGVISOR_CLUSTER_SECRET` is configured.
 
 ---
 
 ## Sidecar Control API surface
 
 Defined and served inside
-[`crates/pgvisor-sidecar/src/main.rs`](../crates/pgvisor-sidecar/src/main.rs)
+[`crates/pgvisor-sidecar/src/control/server.rs`](../crates/pgvisor-sidecar/src/control/server.rs)
 at startup:
 
 | Method | Path | Handler |
 |--------|------|---------|
-| `GET`  | `/control/status`  | `handle_status` – returns `node_id`, `role`, `status`, `child_pid`, `pg_version` |
+| `GET`  | `/control/status`  | `handle_status` – returns `node_id`, `role`, `status`, `child_pid`, `pg_version`, uptime, CPU/memory |
 | `GET`  | `/control/events`  | `handle_events` – auditable lifecycle event log (polling) |
+| `GET`  | `/control/logs`    | `handle_logs` – recent buffered supervisor and PostgreSQL logs |
+| `GET`  | `/control/config/:config_type` | `handle_config` – reads `postgresql.conf`, `pg_hba.conf`, `recovery.signal`, or `standby.signal` |
 | `POST` | `/control/start`   | `handle_start` – spawns PostgreSQL child process under sidecar supervision |
 | `POST` | `/control/stop`    | `handle_stop` – `pg_ctl stop -m fast` graceful shutdown |
 | `POST` | `/control/restart` | `handle_restart` – stops and restarts PostgreSQL under supervision |
 | `POST` | `/control/promote` | `handle_promote` – `pg_ctl promote` → role becomes `leader` |
 | `POST` | `/control/fence`   | `handle_fence` – `pg_ctl stop -m immediate` → role becomes `fenced` |
 | `POST` | `/control/demote`  | `handle_demote` – graceful stop → role becomes `fenced` |
-| `POST` | `/control/repoint` | `handle_repoint` – updates `primary_conninfo`, restarts replica pointing to new leader |
-| `POST` | `/control/restore` | `handle_restore` – downloads a base-backup snapshot and restores PGDATA |
+| `POST` | `/control/repoint` | `handle_repoint` – updates `primary_conninfo`, reloads or restarts replica pointing to new leader |
+| `POST` | `/control/restore` | `handle_restore` – downloads a basebackup snapshot and restores PGDATA |
 | `POST` | `/control/resync`  | `handle_resync` – `pg_basebackup` re-clone from primary |
+| `POST` | `/control/backup-lock/acquire` | `handle_acquire_backup_lock` – acquires distributed backup lock |
+| `POST` | `/control/backup-lock/release` | `handle_release_backup_lock` – releases distributed backup lock |
 
 The proxy builds the control URL by extracting the hostname from the
 PostgreSQL address and substituting port 8080:
@@ -34,6 +47,38 @@ PostgreSQL address and substituting port 8080:
 // crates/pgvisor-proxy/src/main.rs
 let control_url = format!("http://{}:{}", host, control_port);
 ```
+
+---
+
+## Inter-Node Consensus & Auto-Failover (No Dedicated Raft Port)
+
+Sidecars communicate peer-to-peer to monitor cluster health and execute leader failover:
+
+1. **Seed Discovery**: Nodes discover peers through the comma-separated `PGVISOR_PEERS` environment variable (e.g. `http://pgvisor-node1:8080,http://pgvisor-node2:8080,...`).
+2. **Heartbeat Probing**: The election monitor loop ([`crates/pgvisor-sidecar/src/election.rs`](../crates/pgvisor-sidecar/src/election.rs)) polls `GET /control/status` on all peers every 500 ms.
+3. **Quorum Election**: If 5 consecutive heartbeats fail (2,500 ms) and a majority quorum of alive nodes agrees no leader is active, the lowest node ID among alive peers automatically promotes itself via `pg_ctl promote`.
+4. **Repoint Broadcast**: The winning node broadcasts `POST /control/repoint` over port 8080 to all peer standbys with its connection info.
+5. **Split-Brain Guard**: If an existing leader detects another running leader via `/control/status`, it immediately invokes `pg_ctl stop -m immediate` to fence itself.
+
+---
+
+## Cluster Security & Authentication (`PGVISOR_CLUSTER_SECRET`)
+
+To prevent unauthorized control actions or spoofed election events:
+
+1. **HMAC-SHA256 Token Derivation**:
+   [`crates/pgvisor-core/src/auth.rs`](../crates/pgvisor-core/src/auth.rs) derives a deterministic bearer token:
+   - Secret key: Value of `PGVISOR_CLUSTER_SECRET`.
+   - Message payload: `pgvisor-internal-v1`.
+   - Header format: `Authorization: Bearer <hex_digest>`.
+2. **Axum Middleware Enforcement**:
+   [`crates/pgvisor-sidecar/src/control/auth.rs`](../crates/pgvisor-sidecar/src/control/auth.rs) installs `cluster_auth_middleware` across the entire Axum router.
+   - If `PGVISOR_CLUSTER_SECRET` is set: any incoming request missing or carrying an invalid token receives `401 Unauthorized`.
+   - Token validation uses constant-time comparison (`subtle::ConstantTimeEq`) to prevent timing side-channel attacks.
+   - If `PGVISOR_CLUSTER_SECRET` is unset: the sidecar logs a warning and runs in unauthenticated mode for local development.
+3. **Automatic Client Header Injection**:
+   - **Sidecar-to-sidecar**: Both the election monitor (`crates/pgvisor-sidecar/src/election.rs`) and pre-start peer discovery (`crates/pgvisor-sidecar/src/control/handlers.rs`) configure `reqwest::Client` with the Authorization header.
+   - **Proxy-to-sidecar**: `ProxyClusterService` and `ProxyBackupService` read the cluster secret from `PGVISOR_CLUSTER_SECRET` and attach the header to all outbound control requests.
 
 ---
 
@@ -152,15 +197,23 @@ Key points:
 ## Component map
 
 ```
+crates/pgvisor-core/src/
+  auth.rs       — HMAC-SHA256 bearer token derivation, header formatting, and constant-time validation
+
 crates/pgvisor-proxy/src/
   main.rs       — topology heartbeat loop, wires ProxySqlExecutor + ProxyClusterService
                   into DashboardState; spawns dashboard listener
-  cluster.rs    — ProxyClusterService: switchover via sidecar HTTP control API
+  cluster.rs    — ProxyClusterService: switchover via sidecar HTTP control API with auth header
   executor.rs   — ProxySqlExecutor: SQL over ConnectionPool (no sidecar involved)
   pool.rs       — ConnectionPool: BackendRole-aware idle connection store
 
 crates/pgvisor-sidecar/src/
-  main.rs       — HTTP control server: /control/* routes + election heartbeat loop
+  main.rs       — entrypoint, binds Axum control server on PGVISOR_CONTROL_PORT, spawns election monitor
+  control/
+    server.rs   — Axum control router construction and listener spawning
+    auth.rs     — cluster_auth_middleware enforcing PGVISOR_CLUSTER_SECRET
+    handlers.rs — /control/* route handlers
+  election.rs   — peer heartbeat loop, auto-failover quorum election, and repoint broadcast over HTTP
   config.rs     — PostgresConfig → writes postgresql.conf + pg_hba.conf to PGDATA
   supervisor.rs — PostgresSupervisor: promote / fence / stop / repoint / resync
 

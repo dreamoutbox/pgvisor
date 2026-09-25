@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 pub use pgvisor_core::metrics::{
     BackupMetrics, ClusterMetricsSnapshot, NodeMetricRole, NodeMetrics, ProxyMetrics,
 };
+pub use pgvisor_core::node::{
+    LogLevel, NodeConfigResponse, NodeConfigType, NodeLogEntry, NodeLogsResponse,
+};
 
 /// Role of a node within the Raft + PostgreSQL cluster.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

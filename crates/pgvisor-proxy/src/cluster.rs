@@ -4,7 +4,10 @@ use tracing::{info, warn};
 
 use pgvisor_core::audit::{AuditEventKind, AuditLog};
 use pgvisor_dashboard::handlers::ClusterService;
-use pgvisor_dashboard::models::{NodeActionResponse, NodeLifecycleAction, SwitchoverResponse};
+use pgvisor_dashboard::models::{
+    NodeActionResponse, NodeConfigResponse, NodeConfigType, NodeLifecycleAction,
+    NodeLogsResponse, SwitchoverResponse,
+};
 
 use crate::pool::ConnectionPool;
 
@@ -419,5 +422,61 @@ impl ClusterService for ProxyClusterService {
             node_id,
             action: NodeLifecycleAction::Restart,
         })
+    }
+
+    async fn get_node_logs(&self, node_id: u64, limit: usize) -> Result<NodeLogsResponse, String> {
+        info!(node_id, limit, "Retrieving logs for node");
+        let (target, _status) = self.find_target(node_id).await?;
+
+        let logs_url = format!(
+            "{}/control/logs?limit={}",
+            target.control_url.trim_end_matches('/'),
+            limit
+        );
+        let resp = self
+            .http_client
+            .get(&logs_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to send logs request to {}: {}", logs_url, e))?;
+
+        if !resp.status().is_success() {
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(format!("Logs retrieval failed on Node #{}: {}", node_id, err_body));
+        }
+
+        resp.json::<NodeLogsResponse>()
+            .await
+            .map_err(|e| format!("Failed to parse logs response from Node #{}: {}", node_id, e))
+    }
+
+    async fn get_node_config(
+        &self,
+        node_id: u64,
+        config_type: NodeConfigType,
+    ) -> Result<NodeConfigResponse, String> {
+        info!(node_id, ?config_type, "Retrieving config/diagnostic file for node");
+        let (target, _status) = self.find_target(node_id).await?;
+
+        let config_url = format!(
+            "{}/control/config/{}",
+            target.control_url.trim_end_matches('/'),
+            config_type.to_slug()
+        );
+        let resp = self
+            .http_client
+            .get(&config_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to send config request to {}: {}", config_url, e))?;
+
+        if !resp.status().is_success() {
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(format!("Config retrieval failed on Node #{}: {}", node_id, err_body));
+        }
+
+        resp.json::<NodeConfigResponse>()
+            .await
+            .map_err(|e| format!("Failed to parse config response from Node #{}: {}", node_id, e))
     }
 }

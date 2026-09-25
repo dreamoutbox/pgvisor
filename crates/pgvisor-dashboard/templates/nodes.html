@@ -213,9 +213,15 @@
                         <button class="btn btn-sm btn-danger" onclick="openNodeActionModal('stop', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
                             Stop
                         </button>
+                        <button class="btn btn-sm btn-secondary" onclick="openInspectModal('{{ node.node_id }}', '{{ node.address }}')">
+                            Inspect
+                        </button>
                     {% when NodeHealthState::Stopped %}
                         <button class="btn btn-sm btn-success" onclick="openNodeActionModal('start', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
                             Start
+                        </button>
+                        <button class="btn btn-sm btn-secondary" onclick="openInspectModal('{{ node.node_id }}', '{{ node.address }}')">
+                            Inspect
                         </button>
                     {% when NodeHealthState::Fenced %}
                         <button class="btn btn-sm btn-success" onclick="openNodeActionModal('start', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
@@ -224,8 +230,14 @@
                         <button class="btn btn-sm btn-secondary" onclick="openNodeActionModal('restart', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
                             Restart
                         </button>
+                        <button class="btn btn-sm btn-secondary" onclick="openInspectModal('{{ node.node_id }}', '{{ node.address }}')">
+                            Inspect
+                        </button>
                     {% when NodeHealthState::Degraded %}
                         <span style="color: var(--text-muted); font-size: 0.8rem;">Restoring...</span>
+                        <button class="btn btn-sm btn-secondary" onclick="openInspectModal('{{ node.node_id }}', '{{ node.address }}')">
+                            Inspect
+                        </button>
                     {% when NodeHealthState::Offline %}
                         <span style="color: var(--text-muted); font-size: 0.8rem;">Unreachable</span>
                 {% endmatch %}
@@ -272,6 +284,90 @@
         <div class="modal-actions">
             <button class="btn btn-secondary" onclick="closeNodeActionModal()">Cancel</button>
             <button id="btnSubmitNodeAction" class="btn btn-primary" onclick="submitNodeAction()">Confirm</button>
+        </div>
+    </div>
+</div>
+
+<!-- Node Inspect Modal (Logs & Configurations) -->
+<div id="inspectModal" class="modal-backdrop">
+    <div class="modal" style="max-width: 960px; max-height: 90vh; width: 95%; display: flex; flex-direction: column;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
+            <div>
+                <h2 style="margin: 0; font-size: 1.25rem;">Node #<span id="inspectNodeId"></span> Diagnostics (<code id="inspectNodeAddr"></code>)</h2>
+                <p style="color: var(--text-muted); font-size: 0.85rem; margin: 4px 0 0 0;">Inspect PostgreSQL stdout/stderr server logs and configuration/diagnostic files</p>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="closeInspectModal()">&times; Close</button>
+        </div>
+
+        <!-- Inspect Tabs Header -->
+        <div style="display: flex; gap: 8px; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 16px;">
+            <button id="tabBtnLogs" class="btn btn-sm btn-primary" onclick="switchInspectTab('logs')">Server Logs</button>
+            <button id="tabBtnConfig" class="btn btn-sm btn-secondary" onclick="switchInspectTab('config')">Configuration & State Files</button>
+        </div>
+
+        <!-- Tab 1: Logs Pane -->
+        <div id="inspectPaneLogs" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 12px; flex-wrap: wrap;">
+                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                    <label style="font-size: 0.85rem; color: var(--text-muted);">Lines:</label>
+                    <select id="inspectLogsLimit" onchange="fetchInspectLogs()" style="background: var(--bg-main); color: var(--text-main); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; font-size: 0.85rem;">
+                        <option value="50">50</option>
+                        <option value="100" selected>100</option>
+                        <option value="250">250</option>
+                        <option value="500">500</option>
+                        <option value="1000">1000</option>
+                    </select>
+                    <input type="text" id="inspectLogsFilter" placeholder="Filter logs..." oninput="filterInspectLogs()" style="background: var(--bg-main); color: var(--text-main); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; font-size: 0.85rem; width: 180px;">
+                    <label style="display: flex; align-items: center; gap: 4px; font-size: 0.85rem; color: var(--text-muted); cursor: pointer;">
+                        <input type="checkbox" id="inspectLogsAutoRefresh" onchange="toggleAutoRefresh(this.checked)"> Auto (3s)
+                    </label>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn btn-sm btn-secondary" onclick="copyInspectLogs()">Copy Logs</button>
+                    <button class="btn btn-sm btn-primary" onclick="fetchInspectLogs()">Refresh</button>
+                </div>
+            </div>
+
+            <div id="inspectLogsContainer" style="background: #0b0f19; border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: monospace; font-size: 0.82rem; overflow-y: auto; height: 420px; white-space: pre-wrap; line-height: 1.45;">
+                <span style="color: var(--text-muted);">Loading logs...</span>
+            </div>
+            <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 8px; display: flex; justify-content: space-between;">
+                <span id="inspectLogsCount">0 entries</span>
+                <span id="inspectLogsTime"></span>
+            </div>
+        </div>
+
+        <!-- Tab 2: Config Files Pane -->
+        <div id="inspectPaneConfig" style="display: none; flex-direction: column; flex: 1; min-height: 0;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 12px; flex-wrap: wrap;">
+                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                    <label style="font-size: 0.85rem; color: var(--text-muted);">Select File:</label>
+                    <select id="inspectConfigFileSelect" onchange="fetchInspectConfig()" style="background: var(--bg-main); color: var(--text-main); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; font-size: 0.85rem;">
+                        <option value="postgresql_conf">postgresql.conf (Base Config)</option>
+                        <option value="postgresql_auto_conf">postgresql.auto.conf (Auto / Replication)</option>
+                        <option value="pg_hba_conf">pg_hba.conf (Client Auth)</option>
+                        <option value="pg_ident_conf">pg_ident.conf (Ident Map)</option>
+                        <option value="postmaster_pid">postmaster.pid (Process Status)</option>
+                        <option value="postmaster_opts">postmaster.opts (Start Flags)</option>
+                        <option value="standby_signal">standby.signal (Replica State)</option>
+                        <option value="recovery_signal">recovery.signal (PITR State)</option>
+                        <option value="backup_label">backup_label (Checkpoint LSN)</option>
+                    </select>
+                    <span id="inspectFileStatusBadge" class="badge badge-standby">Loading...</span>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn btn-sm btn-secondary" onclick="copyInspectConfig()">Copy File</button>
+                    <button class="btn btn-sm btn-primary" onclick="fetchInspectConfig()">Reload</button>
+                </div>
+            </div>
+
+            <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px; display: flex; gap: 16px;">
+                <span>Filename: <strong id="inspectConfigFilename" style="color: var(--text-main);">-</strong></span>
+                <span>Size: <span id="inspectConfigSize">-</span></span>
+                <span>Modified: <span id="inspectConfigModified">-</span></span>
+            </div>
+
+            <pre id="inspectConfigContainer" style="background: #0b0f19; border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: monospace; font-size: 0.82rem; overflow-y: auto; height: 420px; margin: 0; white-space: pre-wrap; line-height: 1.45; color: #f8fafc;">Select a file to inspect...</pre>
         </div>
     </div>
 </div>
@@ -413,6 +509,178 @@
             btn.disabled = false;
             btn.textContent = originalText;
         }
+    }
+
+    // Inspect Modal (Logs & Configs)
+    let inspectingNodeId = null;
+    let inspectingNodeAddr = null;
+    let inspectAutoRefreshTimer = null;
+    let cachedLogEntries = [];
+
+    function openInspectModal(nodeId, nodeAddr) {
+        inspectingNodeId = parseInt(nodeId, 10);
+        inspectingNodeAddr = nodeAddr;
+        document.getElementById('inspectNodeId').textContent = nodeId;
+        document.getElementById('inspectNodeAddr').textContent = nodeAddr;
+        document.getElementById('inspectModal').style.display = 'flex';
+        switchInspectTab('logs');
+        fetchInspectLogs();
+    }
+
+    function closeInspectModal() {
+        document.getElementById('inspectModal').style.display = 'none';
+        inspectingNodeId = null;
+        inspectingNodeAddr = null;
+        if (inspectAutoRefreshTimer) {
+            clearInterval(inspectAutoRefreshTimer);
+            inspectAutoRefreshTimer = null;
+        }
+        document.getElementById('inspectLogsAutoRefresh').checked = false;
+    }
+
+    function switchInspectTab(tab) {
+        const btnLogs = document.getElementById('tabBtnLogs');
+        const btnConfig = document.getElementById('tabBtnConfig');
+        const paneLogs = document.getElementById('inspectPaneLogs');
+        const paneConfig = document.getElementById('inspectPaneConfig');
+
+        if (tab === 'logs') {
+            btnLogs.className = 'btn btn-sm btn-primary';
+            btnConfig.className = 'btn btn-sm btn-secondary';
+            paneLogs.style.display = 'flex';
+            paneConfig.style.display = 'none';
+        } else {
+            btnLogs.className = 'btn btn-sm btn-secondary';
+            btnConfig.className = 'btn btn-sm btn-primary';
+            paneLogs.style.display = 'none';
+            paneConfig.style.display = 'flex';
+            fetchInspectConfig();
+        }
+    }
+
+    async function fetchInspectLogs() {
+        if (!inspectingNodeId) return;
+        const limit = document.getElementById('inspectLogsLimit').value || '100';
+        const container = document.getElementById('inspectLogsContainer');
+
+        try {
+            const resp = await fetch(`/api/nodes/${inspectingNodeId}/logs?limit=${limit}`);
+            if (!resp.ok) {
+                const err = await resp.text();
+                container.innerHTML = `<span style="color: var(--danger);">Failed to load logs: ${err}</span>`;
+                return;
+            }
+            const data = await resp.json();
+            cachedLogEntries = data.entries || [];
+            renderInspectLogs();
+            document.getElementById('inspectLogsCount').textContent = `${cachedLogEntries.length} entries shown (${data.total_buffered} total buffered)`;
+            document.getElementById('inspectLogsTime').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+        } catch (e) {
+            container.innerHTML = `<span style="color: var(--danger);">Network error fetching logs: ${e.message}</span>`;
+        }
+    }
+
+    function renderInspectLogs() {
+        const container = document.getElementById('inspectLogsContainer');
+        const query = (document.getElementById('inspectLogsFilter').value || '').toLowerCase();
+        const filtered = cachedLogEntries.filter(entry => !query || entry.message.toLowerCase().includes(query));
+
+        if (filtered.length === 0) {
+            container.innerHTML = '<span style="color: var(--text-muted); font-style: italic;">No log lines matched filter.</span>';
+            return;
+        }
+
+        const lines = filtered.map(e => {
+            const d = new Date(e.timestamp_ms);
+            const ts = d.toISOString().replace('T', ' ').substring(0, 19);
+            let color = '#94a3b8';
+            if (e.level === 'warn') color = '#fbbf24';
+            if (e.level === 'error') color = '#f87171';
+            return `<div style="display: flex; gap: 8px;"><span style="color: #64748b; user-select: none;">${ts}</span><span style="color: ${color}; font-weight: 600; min-width: 46px;">[${e.level.toUpperCase()}]</span><span style="color: #f1f5f9; flex: 1;">${escapeHtml(e.message)}</span></div>`;
+        });
+
+        container.innerHTML = lines.join('');
+        container.scrollTop = container.scrollHeight;
+    }
+
+    function filterInspectLogs() {
+        renderInspectLogs();
+    }
+
+    function copyInspectLogs() {
+        const text = cachedLogEntries.map(e => `[${new Date(e.timestamp_ms).toISOString()}] [${e.level.toUpperCase()}] ${e.message}`).join('\n');
+        navigator.clipboard.writeText(text).then(() => {
+            showToast('Logs copied to clipboard!');
+        }).catch(() => {
+            showToast('Failed to copy to clipboard', true);
+        });
+    }
+
+    function toggleAutoRefresh(enable) {
+        if (inspectAutoRefreshTimer) {
+            clearInterval(inspectAutoRefreshTimer);
+            inspectAutoRefreshTimer = null;
+        }
+        if (enable) {
+            inspectAutoRefreshTimer = setInterval(() => {
+                fetchInspectLogs();
+            }, 3000);
+        }
+    }
+
+    async function fetchInspectConfig() {
+        if (!inspectingNodeId) return;
+        const fileType = document.getElementById('inspectConfigFileSelect').value;
+        const container = document.getElementById('inspectConfigContainer');
+        const badge = document.getElementById('inspectFileStatusBadge');
+
+        container.textContent = 'Loading file...';
+        badge.className = 'badge badge-standby';
+        badge.textContent = 'Loading...';
+
+        try {
+            const resp = await fetch(`/api/nodes/${inspectingNodeId}/config/${fileType}`);
+            if (!resp.ok) {
+                const err = await resp.text();
+                container.textContent = `Error: ${err}`;
+                badge.className = 'badge badge-offline';
+                badge.textContent = 'Error';
+                return;
+            }
+            const data = await resp.json();
+            document.getElementById('inspectConfigFilename').textContent = data.filename;
+            document.getElementById('inspectConfigSize').textContent = `${data.size_bytes} bytes`;
+            document.getElementById('inspectConfigModified').textContent = data.modified_at_ms ? new Date(data.modified_at_ms).toLocaleString() : 'N/A';
+
+            if (data.exists) {
+                badge.className = 'badge badge-healthy';
+                badge.textContent = 'Present';
+                container.textContent = data.content || '(empty file)';
+            } else {
+                badge.className = 'badge badge-offline';
+                badge.textContent = 'Not Found on Disk';
+                container.textContent = `File '${data.filename}' does not exist on node #${inspectingNodeId}.`;
+            }
+        } catch (e) {
+            container.textContent = `Network error: ${e.message}`;
+            badge.className = 'badge badge-offline';
+            badge.textContent = 'Error';
+        }
+    }
+
+    function copyInspectConfig() {
+        const text = document.getElementById('inspectConfigContainer').textContent;
+        navigator.clipboard.writeText(text).then(() => {
+            showToast('Config file content copied to clipboard!');
+        }).catch(() => {
+            showToast('Failed to copy to clipboard', true);
+        });
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 </script>
 {% endblock %}
