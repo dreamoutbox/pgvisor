@@ -1,6 +1,7 @@
 pub mod config;
 pub mod control;
 pub mod election;
+pub mod logging;
 pub mod supervisor;
 pub mod system;
 pub mod version;
@@ -17,11 +18,14 @@ use config::PostgresConfig;
 use control::{build_control_router, spawn_control_server, SidecarState};
 pub use control::{SidecarEventRecord, StatusResponse};
 use election::spawn_election_monitor;
+use logging::SidecarLogCaptureLayer;
 use pgvisor_core::backup::{BackupManager, BackupScheduleConfig};
 use supervisor::PostgresSupervisor;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use version::detect_postgres_version;
 use wal::{run_archive_wal, run_restore_wal};
 
@@ -43,12 +47,19 @@ async fn main() -> Result<()> {
         return run_restore_wal(&args[2], &args[3]).await;
     }
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_ansi(false)
+    let log_buffer = Arc::new(std::sync::RwLock::new(std::collections::VecDeque::with_capacity(
+        supervisor::MAX_LOG_ENTRIES,
+    )));
+
+    let capture_layer = SidecarLogCaptureLayer::new(Arc::clone(&log_buffer));
+    let fmt_layer = tracing_subscriber::fmt::layer().with_ansi(false);
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt_layer)
+        .with(capture_layer)
         .init();
 
     let data_dir = env::var("PGDATA")
@@ -79,7 +90,7 @@ async fn main() -> Result<()> {
 
     info!(?data_dir, port, %superuser, node_id, %role, "pgvisor-sidecar supervisor starting up");
 
-    let supervisor = Arc::new(PostgresSupervisor::new(&data_dir));
+    let supervisor = Arc::new(PostgresSupervisor::with_log_buffer(&data_dir, log_buffer));
     supervisor
         .ensure_initialized(&superuser, primary_conninfo.as_deref())
         .await?;

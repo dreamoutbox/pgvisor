@@ -10,12 +10,12 @@ use pgvisor_core::node::{
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 use crate::config::{ConfigError, ConfigGenerator, PostgresConfig};
 
-const MAX_LOG_ENTRIES: usize = 2000;
+pub const MAX_LOG_ENTRIES: usize = 2000;
 
 #[derive(Debug, Error)]
 pub enum SupervisorError {
@@ -48,18 +48,28 @@ pub struct PostgresSupervisor {
     child_pid: Arc<AtomicU32>,
     active_child: Arc<Mutex<Option<Child>>>,
     started_at: Arc<Mutex<Option<std::time::Instant>>>,
-    logs: Arc<RwLock<VecDeque<NodeLogEntry>>>,
+    logs: Arc<std::sync::RwLock<VecDeque<NodeLogEntry>>>,
 }
 
 impl PostgresSupervisor {
     pub fn new(data_dir: impl AsRef<Path>) -> Self {
+        Self::with_log_buffer(
+            data_dir,
+            Arc::new(std::sync::RwLock::new(VecDeque::with_capacity(MAX_LOG_ENTRIES))),
+        )
+    }
+
+    pub fn with_log_buffer(
+        data_dir: impl AsRef<Path>,
+        logs: Arc<std::sync::RwLock<VecDeque<NodeLogEntry>>>,
+    ) -> Self {
         Self {
             data_dir: data_dir.as_ref().to_path_buf(),
             status: Arc::new(Mutex::new(ProcessStatus::Stopped)),
             child_pid: Arc::new(AtomicU32::new(0)),
             active_child: Arc::new(Mutex::new(None)),
             started_at: Arc::new(Mutex::new(None)),
-            logs: Arc::new(RwLock::new(VecDeque::with_capacity(MAX_LOG_ENTRIES))),
+            logs,
         }
     }
 
@@ -173,49 +183,21 @@ impl PostgresSupervisor {
         let pid = child.id().unwrap_or(0);
         self.child_pid.store(pid, Ordering::SeqCst);
 
-        // Pipe stdout and stderr to tracing logs and in-memory circular buffer
-        let logs_stdout = Arc::clone(&self.logs);
+        // Pipe stdout and stderr to tracing logs which will be captured into the in-memory circular buffer
         if let Some(stdout) = child.stdout.take() {
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
                     info!(target: "postgres", "{}", line);
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64;
-                    let mut buf = logs_stdout.write().await;
-                    if buf.len() >= MAX_LOG_ENTRIES {
-                        buf.pop_front();
-                    }
-                    buf.push_back(NodeLogEntry {
-                        timestamp_ms: now,
-                        level: LogLevel::Info,
-                        message: line,
-                    });
                 }
             });
         }
 
-        let logs_stderr = Arc::clone(&self.logs);
         if let Some(stderr) = child.stderr.take() {
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
                     warn!(target: "postgres", "{}", line);
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64;
-                    let mut buf = logs_stderr.write().await;
-                    if buf.len() >= MAX_LOG_ENTRIES {
-                        buf.pop_front();
-                    }
-                    buf.push_back(NodeLogEntry {
-                        timestamp_ms: now,
-                        level: LogLevel::Warn,
-                        message: line,
-                    });
                 }
             });
         }
@@ -783,7 +765,9 @@ impl PostgresSupervisor {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        let mut buf = self.logs.write().await;
+        let Ok(mut buf) = self.logs.write() else {
+            return;
+        };
         if buf.len() >= MAX_LOG_ENTRIES {
             buf.pop_front();
         }
@@ -796,7 +780,9 @@ impl PostgresSupervisor {
 
     /// Retrieves up to `limit` recent buffered log entries.
     pub async fn recent_logs(&self, limit: usize) -> Vec<NodeLogEntry> {
-        let buf = self.logs.read().await;
+        let Ok(buf) = self.logs.read() else {
+            return Vec::new();
+        };
         let total = buf.len();
         let count = limit.min(total);
         let start_idx = total.saturating_sub(count);
@@ -805,7 +791,7 @@ impl PostgresSupervisor {
 
     /// Total number of currently buffered log entries.
     pub async fn total_buffered_logs(&self) -> usize {
-        self.logs.read().await.len()
+        self.logs.read().map(|b| b.len()).unwrap_or(0)
     }
 
     /// Reads a diagnostic or configuration file from the PostgreSQL data directory.

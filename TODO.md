@@ -192,15 +192,15 @@
 
 - [x] edit/delete tables rows from web dashboard
 
-- [ ] install PG extensions with web dashboard
-
 - [ ] add demo images in README and Wiki
+
+- [ ] docker swarm testing
 
 ---
 
 # Backlog
 
-- [ ] docker swarm testing
+- [ ] install PG extensions with web dashboard
 
 - [ ] make proxy and sidecar export opentelemetry data. to use with prometheus/grafana.
 
@@ -216,7 +216,7 @@
 
 - [ ] multiple s3 storage.
 
-- [ ] survive. Multi-Availability Zone (Multi-AZ) support
+- [ ] Multi-Availability Zone (Multi-AZ) support
 
 - [ ] add Kubernetes Operator & CRDs. - **Kubernetes Operator**: Custom CRDs and k8s-native controllers.
 

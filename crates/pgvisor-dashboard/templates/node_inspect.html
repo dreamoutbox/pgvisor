@@ -62,7 +62,7 @@
             <code style="font-size: 1rem; color: var(--primary); background: rgba(56, 189, 248, 0.1); padding: 2px 8px; border-radius: 4px;">{{ node.address }}</code>
         </div>
         <p style="color: var(--text-muted); font-size: 0.9rem; margin: 0;">
-            Full-page real-time PostgreSQL server stdout/stderr logs and diagnostic configuration inspector
+            Full-page real-time sidecar supervisor &amp; PostgreSQL server logs and diagnostic configuration inspector
         </p>
     </div>
     <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
@@ -97,7 +97,7 @@
     <!-- Tabs Header -->
     <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
         <div style="display: flex; gap: 8px;">
-            <button id="tabBtnLogs" class="btn btn-sm btn-primary" onclick="switchInspectTab('logs')">Server Logs</button>
+            <button id="tabBtnLogs" class="btn btn-sm btn-primary" onclick="switchInspectTab('logs')">Node &amp; Server Logs</button>
             <button id="tabBtnConfig" class="btn btn-sm btn-secondary" onclick="switchInspectTab('config')">Configuration & State Files</button>
         </div>
         <div style="font-size: 0.85rem; color: var(--text-muted);">
@@ -109,6 +109,12 @@
     <div id="inspectPaneLogs" style="display: flex; flex-direction: column;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 12px; flex-wrap: wrap;">
             <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                <label style="font-size: 0.85rem; color: var(--text-muted);">Source:</label>
+                <select id="inspectLogsSource" onchange="filterInspectLogs()" style="background: var(--bg-main); color: var(--text-main); border: 1px solid var(--border); border-radius: 4px; padding: 5px 10px; font-size: 0.85rem;">
+                    <option value="all" selected>All Sources (Sidecar + Postgres)</option>
+                    <option value="sidecar">Sidecar Only (pgvisor_sidecar)</option>
+                    <option value="postgres">PostgreSQL Only (postgres)</option>
+                </select>
                 <label style="font-size: 0.85rem; color: var(--text-muted);">Lines:</label>
                 <select id="inspectLogsLimit" onchange="fetchInspectLogs()" style="background: var(--bg-main); color: var(--text-main); border: 1px solid var(--border); border-radius: 4px; padding: 5px 10px; font-size: 0.85rem;">
                     <option value="50">50</option>
@@ -118,13 +124,14 @@
                     <option value="1000">1000</option>
                     <option value="2000">2000 (Max Buffer)</option>
                 </select>
-                <input type="text" id="inspectLogsFilter" placeholder="Filter logs in view..." oninput="filterInspectLogs()" style="background: var(--bg-main); color: var(--text-main); border: 1px solid var(--border); border-radius: 4px; padding: 5px 10px; font-size: 0.85rem; width: 220px;">
+                <input type="text" id="inspectLogsFilter" placeholder="Filter logs in view..." oninput="filterInspectLogs()" style="background: var(--bg-main); color: var(--text-main); border: 1px solid var(--border); border-radius: 4px; padding: 5px 10px; font-size: 0.85rem; width: 200px;">
                 <label style="display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--text-muted); cursor: pointer; user-select: none;">
                     <input type="checkbox" id="inspectLogsAutoRefresh" onchange="toggleAutoRefresh(this.checked)"> Auto-refresh (3s)
                 </label>
             </div>
             <div style="display: flex; gap: 8px;">
-                <button class="btn btn-sm btn-secondary" onclick="copyInspectLogs()">Copy Logs</button>
+                <button class="btn btn-sm btn-secondary" onclick="copyInspectLogs('standard')">Copy Logs</button>
+                <button class="btn btn-sm btn-secondary" onclick="copyInspectLogs('docker')">Copy (Docker Format)</button>
                 <button class="btn btn-sm btn-primary" onclick="fetchInspectLogs()">Refresh Now</button>
             </div>
         </div>
@@ -234,10 +241,19 @@
         }
     }
 
+    function getFilteredLogEntries() {
+        const source = (document.getElementById('inspectLogsSource')?.value || 'all').toLowerCase();
+        const query = (document.getElementById('inspectLogsFilter')?.value || '').toLowerCase();
+        return cachedLogEntries.filter(entry => {
+            if (source === 'sidecar' && !entry.message.startsWith('pgvisor_')) return false;
+            if (source === 'postgres' && !entry.message.startsWith('postgres:')) return false;
+            return !query || entry.message.toLowerCase().includes(query);
+        });
+    }
+
     function renderInspectLogs() {
         const container = document.getElementById('inspectLogsContainer');
-        const query = (document.getElementById('inspectLogsFilter').value || '').toLowerCase();
-        const filtered = cachedLogEntries.filter(entry => !query || entry.message.toLowerCase().includes(query));
+        const filtered = getFilteredLogEntries();
 
         if (filtered.length === 0) {
             container.innerHTML = '<span style="color: var(--text-muted); font-style: italic;">No log lines matched filter.</span>';
@@ -261,10 +277,13 @@
         renderInspectLogs();
     }
 
-    function copyInspectLogs() {
-        const text = cachedLogEntries.map(e => `[${new Date(e.timestamp_ms).toISOString()}] [${e.level.toUpperCase()}] ${e.message}`).join('\n');
+    function copyInspectLogs(format = 'standard') {
+        const filtered = getFilteredLogEntries();
+        const text = format === 'docker'
+            ? filtered.map(e => `${new Date(e.timestamp_ms).toISOString()} ${e.level.toUpperCase()} ${e.message}`).join('\n')
+            : filtered.map(e => `[${new Date(e.timestamp_ms).toISOString()}] [${e.level.toUpperCase()}] ${e.message}`).join('\n');
         navigator.clipboard.writeText(text).then(() => {
-            showToast('Logs copied to clipboard!');
+            showToast(format === 'docker' ? 'Logs copied (Docker format)!' : 'Logs copied to clipboard!');
         }).catch(() => {
             showToast('Failed to copy to clipboard', true);
         });

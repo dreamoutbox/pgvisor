@@ -14,6 +14,7 @@
 ### If you want to inspect node PostgreSQL logs, postgresql.conf, pg_hba.conf, or runtime diagnostic files:
 
 - `crates/pgvisor-core/src/node.rs` = `NodeConfigType` enum (`PostgresqlConf`, `PostgresqlAutoConf`, `PgHbaConf`, `PgIdentConf`, `PostmasterPid`, `PostmasterOpts`, `StandbySignal`, `RecoverySignal`, `BackupLabel`), `NodeLogEntry`, and DTO responses
+- `crates/pgvisor-sidecar/src/logging.rs` = `SidecarLogCaptureLayer` capturing structured tracing logs from sidecar and PostgreSQL into in-memory ring buffer
 - `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor::recent_logs` ring buffer retrieval and `PostgresSupervisor::read_node_file` safe filesystem inspection
 - `crates/pgvisor-sidecar/src/control/handlers.rs` = `GET /control/logs` and `GET /control/config/:config_type` handlers
 - `crates/pgvisor-sidecar/src/control/server.rs` = Route registration under cluster auth middleware
