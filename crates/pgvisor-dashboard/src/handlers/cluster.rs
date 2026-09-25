@@ -15,7 +15,7 @@ use crate::models::{
     NodeConfigType, NodeHealthState, NodeLifecycleAction, NodeLogEntry, NodeLogsResponse,
     NodeRole, NodeSummary, SwitchoverRequest, SwitchoverResponse,
 };
-use crate::templates::{NodesTemplate, OverviewTemplate};
+use crate::templates::{NodeInspectTemplate, NodesTemplate, OverviewTemplate};
 
 /// Abstraction for managing cluster lifecycle, node operations, and leader switchover.
 #[async_trait::async_trait]
@@ -182,10 +182,13 @@ impl ClusterService for StandaloneClusterService {
             _ => true,
         };
 
+        let filename = config_type.filename();
+        let path = format!("/var/lib/postgresql/data/{}", filename);
         Ok(NodeConfigResponse {
             node_id,
             file_type: config_type,
-            filename: config_type.filename().to_string(),
+            filename: filename.to_string(),
+            path,
             exists,
             size_bytes: content.len() as u64,
             modified_at_ms: Some(1727260800000),
@@ -228,6 +231,28 @@ pub async fn get_nodes(
     };
     template.render().map(Html).map_err(|e| {
         error!(?e, "Failed to render nodes template");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
+}
+
+/// GET /nodes/:node_id/inspect -> Renders dedicated full-page node diagnostics
+pub async fn get_node_inspect_page(
+    State(state): State<Arc<DashboardState>>,
+    Path(node_id): Path<u64>,
+) -> Result<Html<String>, StatusCode> {
+    let overview = state.overview.read().await;
+    let node = overview
+        .nodes
+        .iter()
+        .find(|n| n.node_id == node_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let template = NodeInspectTemplate {
+        node,
+        auth_enabled: state.admin_token.is_some(),
+    };
+    template.render().map(Html).map_err(|e| {
+        error!(?e, "Failed to render node inspect template");
         StatusCode::INTERNAL_SERVER_ERROR
     })
 }

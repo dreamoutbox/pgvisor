@@ -20,7 +20,7 @@ use crate::handlers::{
     api_nodes, api_quick_restore, api_restart_node, api_restore_backup, api_revoke_membership,
     api_set_privilege, api_start_node, api_status, api_stop_node, api_switchover, api_table_data,
     api_table_schema, api_delete_table_row, api_update_table_row, get_audit_logs_page, get_backups_page, get_login_page, get_logout,
-    get_nodes, get_overview, get_sql_console, get_tables_page, get_users_page, post_login,
+    get_node_inspect_page, get_nodes, get_overview, get_sql_console, get_tables_page, get_users_page, post_login,
     DashboardState,
 };
 use crate::security::SqlSecurityGuard;
@@ -71,6 +71,8 @@ pub fn create_router(state: Arc<DashboardState>) -> Router {
         .route("/logout", get(get_logout).post(get_logout))
         .route("/", get(get_overview))
         .route("/nodes", get(get_nodes))
+        .route("/nodes/:node_id/inspect", get(get_node_inspect_page))
+        .route("/nodes/:node_id", get(get_node_inspect_page))
         .route("/metrics", get(|| async { Redirect::to("/") }))
         .route("/tables", get(get_tables_page))
         .route("/sql", get(get_sql_console))
@@ -878,6 +880,7 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
         let cfg: crate::models::NodeConfigResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(cfg.filename, "postgresql.conf");
+        assert_eq!(cfg.path, "/var/lib/postgresql/data/postgresql.conf");
         assert!(cfg.content.contains("listen_addresses"));
 
         // 3. GET /api/nodes/1/config/invalid_slug returns 400
@@ -888,7 +891,7 @@ mod tests {
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
-        // 4. GET /nodes HTML contains Inspect button and inspect modal
+        // 4. GET /nodes HTML contains Inspect link to /nodes/1/inspect (no modal)
         let req = Request::builder()
             .uri("/nodes")
             .body(Body::empty())
@@ -897,8 +900,29 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
         let html = String::from_utf8_lossy(&body);
-        assert!(html.contains("openInspectModal"));
-        assert!(html.contains("inspectModal"));
+        assert!(html.contains("/nodes/1/inspect"));
+        assert!(!html.contains("inspectModal"));
+
+        // 5. GET /nodes/1/inspect dedicated page returns 200 OK with diagnostics UI
+        let req = Request::builder()
+            .uri("/nodes/1/inspect")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(html.contains("Node #1 Diagnostics"));
+        assert!(html.contains("inspectLogsContainer"));
+        assert!(html.contains("inspectConfigContainer"));
+
+        // 6. GET /nodes/999/inspect for non-existent node returns 404 Not Found
+        let req = Request::builder()
+            .uri("/nodes/999/inspect")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

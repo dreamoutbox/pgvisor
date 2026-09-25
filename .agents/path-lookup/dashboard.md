@@ -86,12 +86,13 @@
 
 ### If you want to inspect node stdout/stderr logs or configuration and diagnostic files (postgresql.conf, pg_hba.conf, postmaster.pid, standby.signal, etc.) from the dashboard, then check:
 
-- `crates/pgvisor-core/src/node.rs` = `NodeConfigType`, `NodeLogEntry`, `NodeLogsResponse`, and `NodeConfigResponse` models
-- `crates/pgvisor-sidecar/src/supervisor.rs` = Circular log buffer (`MAX_LOG_ENTRIES`) in `PostgresSupervisor` and `read_node_file`
+- `crates/pgvisor-core/src/node.rs` = `NodeConfigType`, `NodeLogEntry`, `NodeLogsResponse`, and `NodeConfigResponse` models (with absolute `path` string)
+- `crates/pgvisor-sidecar/src/supervisor.rs` = Circular log buffer (`MAX_LOG_ENTRIES`) in `PostgresSupervisor` and `read_node_file` populating absolute file path
 - `crates/pgvisor-sidecar/src/control/handlers.rs` = `GET /control/logs` and `GET /control/config/:config_type` handlers
-- `crates/pgvisor-dashboard/src/handlers/cluster.rs` = `ClusterService` trait (`get_node_logs`, `get_node_config`), `StandaloneClusterService`, and `/api/nodes/:node_id/{logs,config/:config_type}` endpoints
+- `crates/pgvisor-dashboard/src/handlers/cluster.rs` = `ClusterService` trait (`get_node_logs`, `get_node_config`), `get_node_inspect_page`, and `/api/nodes/:node_id/{logs,config/:config_type}` endpoints
 - `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService` forwarding log/config inspection calls to sidecar with cluster secret auth
-- `crates/pgvisor-dashboard/templates/nodes.html` = Inspect button and modal with live log viewer and config/diagnostic file viewer tabs
+- `crates/pgvisor-dashboard/templates/nodes.html` = Inspect button linking to dedicated `/nodes/:node_id/inspect` page
+- `crates/pgvisor-dashboard/templates/node_inspect.html` = Dedicated full-page diagnostics layout with live server logs and configuration/diagnostic file viewer displaying absolute paths
 - `tests/test-dashboard-tables-nodes.sh` = Integration test verifying log and diagnostic file inspection endpoints
 
 ### If you want to modify table row deletion, editing, or primary key detection in the web dashboard, then check:

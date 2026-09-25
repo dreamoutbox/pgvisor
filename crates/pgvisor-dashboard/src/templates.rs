@@ -19,6 +19,13 @@ pub struct NodesTemplate<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "node_inspect.html")]
+pub struct NodeInspectTemplate<'a> {
+    pub node: &'a NodeSummary,
+    pub auth_enabled: bool,
+}
+
+#[derive(Template)]
 #[template(path = "sql.html")]
 pub struct SqlConsoleTemplate {
     pub auth_enabled: bool,

@@ -812,12 +812,14 @@ impl PostgresSupervisor {
     pub async fn read_node_file(&self, config_type: NodeConfigType) -> Result<NodeConfigResponse, SupervisorError> {
         let filename = config_type.filename();
         let path = self.data_dir.join(filename);
+        let path_str = path.to_string_lossy().to_string();
 
         if !path.exists() {
             return Ok(NodeConfigResponse {
                 node_id: 0,
                 file_type: config_type,
                 filename: filename.to_string(),
+                path: path_str,
                 exists: false,
                 content: String::new(),
                 size_bytes: 0,
@@ -850,6 +852,7 @@ impl PostgresSupervisor {
             node_id: 0,
             file_type: config_type,
             filename: filename.to_string(),
+            path: path_str,
             exists: true,
             content,
             size_bytes,
@@ -919,6 +922,7 @@ mod tests {
         let resp = supervisor.read_node_file(NodeConfigType::PostgresqlConf).await.unwrap();
         assert!(!resp.exists);
         assert_eq!(resp.content, "");
+        assert_eq!(resp.path, dir.path().join("postgresql.conf").to_string_lossy().to_string());
 
         // Create file
         let conf_path = dir.path().join("postgresql.conf");
@@ -927,6 +931,7 @@ mod tests {
         let resp2 = supervisor.read_node_file(NodeConfigType::PostgresqlConf).await.unwrap();
         assert!(resp2.exists);
         assert_eq!(resp2.filename, "postgresql.conf");
+        assert_eq!(resp2.path, conf_path.to_string_lossy().to_string());
         assert!(resp2.content.contains("port = 5432"));
         assert_eq!(resp2.file_type, NodeConfigType::PostgresqlConf);
     }

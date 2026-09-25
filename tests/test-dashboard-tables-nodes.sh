@@ -111,24 +111,26 @@ echo "[3/8] Testing diagnostic and configuration file inspection..."
 # 1. postgresql.conf
 CONF_RESP=$(curl -s "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/nodes/${LEADER_ID}/config/postgresql_conf")
 CONF_NAME=$(echo "${CONF_RESP}" | jq -r '.filename')
+CONF_PATH=$(echo "${CONF_RESP}" | jq -r '.path // ""')
 CONF_CONTENT=$(echo "${CONF_RESP}" | jq -r '.content')
-if [ "${CONF_NAME}" != "postgresql.conf" ] || [[ ! "${CONF_CONTENT}" =~ (listen_addresses|port|shared_buffers) ]]; then
-    echo "Error: Failed to inspect postgresql.conf for node ${LEADER_ID}"
+if [ "${CONF_NAME}" != "postgresql.conf" ] || [[ ! "${CONF_CONTENT}" =~ (listen_addresses|port|shared_buffers) ]] || [[ ! "${CONF_PATH}" =~ /postgresql\.conf$ ]]; then
+    echo "Error: Failed to inspect postgresql.conf for node ${LEADER_ID} or path missing"
     echo "Response: ${CONF_RESP}"
     exit 1
 fi
-echo "Verified: postgresql.conf successfully inspected"
+echo "Verified: postgresql.conf successfully inspected (path: ${CONF_PATH})"
 
 # 2. pg_hba.conf
 HBA_RESP=$(curl -s "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/nodes/${LEADER_ID}/config/pg_hba_conf")
 HBA_NAME=$(echo "${HBA_RESP}" | jq -r '.filename')
+HBA_PATH=$(echo "${HBA_RESP}" | jq -r '.path // ""')
 HBA_CONTENT=$(echo "${HBA_RESP}" | jq -r '.content')
-if [ "${HBA_NAME}" != "pg_hba.conf" ] || [[ ! "${HBA_CONTENT}" =~ (local|host) ]]; then
-    echo "Error: Failed to inspect pg_hba.conf for node ${LEADER_ID}"
+if [ "${HBA_NAME}" != "pg_hba.conf" ] || [[ ! "${HBA_CONTENT}" =~ (local|host) ]] || [[ ! "${HBA_PATH}" =~ /pg_hba\.conf$ ]]; then
+    echo "Error: Failed to inspect pg_hba.conf for node ${LEADER_ID} or path missing"
     echo "Response: ${HBA_RESP}"
     exit 1
 fi
-echo "Verified: pg_hba.conf successfully inspected"
+echo "Verified: pg_hba.conf successfully inspected (path: ${HBA_PATH})"
 
 # 3. postmaster.pid
 PID_RESP=$(curl -s "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/nodes/${LEADER_ID}/config/postmaster_pid")
@@ -150,6 +152,14 @@ if [ "${SIG_NAME}" != "standby.signal" ]; then
     exit 1
 fi
 echo "Verified: standby.signal successfully inspected on standby node ${STANDBY_ID}"
+
+# 5. Dedicated inspection page route (/nodes/:id/inspect)
+PAGE_HTML=$(curl -s "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/nodes/${LEADER_ID}/inspect")
+if [[ ! "${PAGE_HTML}" =~ "Node #${LEADER_ID} Diagnostics" ]] || [[ ! "${PAGE_HTML}" =~ "inspectLogsContainer" ]]; then
+    echo "Error: Dedicated inspection page failed to render properly for node ${LEADER_ID}"
+    exit 1
+fi
+echo "Verified: Dedicated node inspect full page rendered successfully"
 
 echo ""
 echo "[4/8] Creating test table and seeding initial rows..."

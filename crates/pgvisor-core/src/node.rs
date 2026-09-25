@@ -124,6 +124,8 @@ pub struct NodeConfigResponse {
     pub node_id: u64,
     pub file_type: NodeConfigType,
     pub filename: String,
+    #[serde(default)]
+    pub path: String,
     pub exists: bool,
     pub content: String,
     pub size_bytes: u64,
