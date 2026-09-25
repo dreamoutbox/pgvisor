@@ -1,12 +1,11 @@
 name: PgVisor CI
 
 on:
-  # TEMP DISABLED UNTIL TESTS ARE FIXED
-  # push:
-  #   branches:
-  #     - master
-  tags:
-    - "v*"
+  push:
+    # branches:
+    #   - master
+    tags:
+      - "v*"
   # pull_request:
   #   branches:
   #     - master
