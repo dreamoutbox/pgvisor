@@ -1,14 +1,22 @@
 ### If you want to modify PostgreSQL sidecar process supervision, configuration templating, signals, or fencing, then check:
 
 - `crates/pgvisor-sidecar/src/config.rs` = PostgreSQL configuration generator for `postgresql.conf`, `pg_hba.conf`, replication `standby.signal`, and PITR `recovery.signal` / `restore_command`
-- `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor` managing `initdb`, replica cloning via `pg_basebackup`, child process spawning, pipe logging, `start`, `stop`, `restart`, `pg_ctl promote` (idempotent), `repoint_primary`, emergency fencing (`pg_ctl stop -m immediate`), `restore_from_snapshot`, and `resync_from_primary`
-- `crates/pgvisor-sidecar/src/control/handlers.rs` = Axum HTTP control request handlers (`/control/status`, `/control/start`, `/control/stop`, `/control/restart`, `/control/restore`, `/control/resync`, `/control/promote`, `/control/fence`, `/control/repoint`, `/control/events`) and `start_postgres_safely`
+- `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor` managing `initdb`, replica cloning via `pg_basebackup`, child process spawning, pipe logging and circular buffer capture (`append_log`, `recent_logs`), diagnostic/config file reading (`read_node_file`), `start`, `stop`, `restart`, `pg_ctl promote` (idempotent), `repoint_primary`, emergency fencing (`pg_ctl stop -m immediate`), `restore_from_snapshot`, and `resync_from_primary`
+- `crates/pgvisor-sidecar/src/control/handlers.rs` = Axum HTTP control request handlers (`/control/status`, `/control/logs`, `/control/config/:config_type`, `/control/start`, `/control/stop`, `/control/restart`, `/control/restore`, `/control/resync`, `/control/promote`, `/control/fence`, `/control/repoint`, `/control/events`) and `start_postgres_safely`
 - `crates/pgvisor-sidecar/src/control/server.rs` = Axum router construction and listener spawning for sidecar control API
-- `crates/pgvisor-sidecar/src/control/state.rs` = `SidecarState`, `SidecarEventRecord`, and control request/response payload DTOs
+- `crates/pgvisor-sidecar/src/control/state.rs` = `SidecarState`, `SidecarEventRecord`, `LogsQuery`, and control request/response payload DTOs
+- `crates/pgvisor-core/src/node.rs` = `NodeConfigType` enum, `NodeLogEntry`, `NodeLogsResponse`, and `NodeConfigResponse` transfer models
 - `crates/pgvisor-sidecar/src/election.rs` = Background heartbeat loop & auto-failover election monitor, quorum promotion, split-brain leader detection/fencing, and standby repoint broadcast
 - `crates/pgvisor-sidecar/src/wal.rs` = WAL `archive` / `restore` CLI subcommand handlers
 - `crates/pgvisor-sidecar/src/version.rs` = PostgreSQL server version detection
 - `crates/pgvisor-sidecar/src/main.rs` = Sidecar service entrypoint, CLI dispatch, environment configuration, component wiring, and container PID 1 signal listener (`SIGTERM`, `SIGINT`, `SIGQUIT`)
+
+### If you want to inspect node PostgreSQL logs, postgresql.conf, pg_hba.conf, or runtime diagnostic files:
+
+- `crates/pgvisor-core/src/node.rs` = `NodeConfigType` enum (`PostgresqlConf`, `PostgresqlAutoConf`, `PgHbaConf`, `PgIdentConf`, `PostmasterPid`, `PostmasterOpts`, `StandbySignal`, `RecoverySignal`, `BackupLabel`), `NodeLogEntry`, and DTO responses
+- `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor::recent_logs` ring buffer retrieval and `PostgresSupervisor::read_node_file` safe filesystem inspection
+- `crates/pgvisor-sidecar/src/control/handlers.rs` = `GET /control/logs` and `GET /control/config/:config_type` handlers
+- `crates/pgvisor-sidecar/src/control/server.rs` = Route registration under cluster auth middleware
 
 ### If you want to test adding a new node dynamically to the cluster or scale out standby replicas, then check:
 

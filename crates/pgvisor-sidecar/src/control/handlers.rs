@@ -1,8 +1,9 @@
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use pgvisor_core::backup::BackupType;
+use pgvisor_core::node::{NodeConfigResponse, NodeConfigType, NodeLogsResponse};
 use pgvisor_core::{
     extract_node_name, format_become_leader_highlight, format_leader_down_highlight,
     format_restore_highlight, log_highlight,
@@ -10,8 +11,9 @@ use pgvisor_core::{
 use tracing::{info, warn};
 
 use super::state::{
-    AcquireBackupLockResponse, BackupLockInfo, EventsQuery, ReleaseLockPayload, RepointPayload,
-    RestorePayload, ResyncPayload, SidecarEventRecord, SidecarState, StatusResponse,
+    AcquireBackupLockResponse, BackupLockInfo, EventsQuery, LogsQuery, ReleaseLockPayload,
+    RepointPayload, RestorePayload, ResyncPayload, SidecarEventRecord, SidecarState,
+    StatusResponse,
 };
 
 use crate::supervisor::ProcessStatus;
@@ -50,6 +52,53 @@ pub async fn handle_events(
     let q = state.events.read().await;
     let records: Vec<SidecarEventRecord> = q.iter().filter(|e| e.id > since_id).cloned().collect();
     Json(records)
+}
+
+/// GET /control/logs?limit=N -> Returns recent buffered PostgreSQL log lines
+pub async fn handle_logs(
+    State(state): State<SidecarState>,
+    Query(query): Query<LogsQuery>,
+) -> Json<NodeLogsResponse> {
+    let limit = query.limit.unwrap_or(100).min(1000).max(1);
+    let entries = state.supervisor.recent_logs(limit).await;
+    let total_buffered = state.supervisor.total_buffered_logs().await;
+    Json(NodeLogsResponse {
+        node_id: state.node_id,
+        total_buffered,
+        entries,
+    })
+}
+
+/// GET /control/config/:config_type -> Inspects specific configuration or diagnostic file safely
+pub async fn handle_config(
+    State(state): State<SidecarState>,
+    Path(file_type_slug): Path<String>,
+) -> Result<Json<NodeConfigResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let config_type = match NodeConfigType::from_slug(&file_type_slug) {
+        Some(ct) => ct,
+        None => {
+            let supported: Vec<&str> = NodeConfigType::all().iter().map(|c| c.to_slug()).collect();
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!("Invalid config file slug '{}'. Supported slugs: {:?}", file_type_slug, supported)
+                })),
+            ));
+        }
+    };
+
+    match state.supervisor.read_node_file(config_type).await {
+        Ok(mut resp) => {
+            resp.node_id = state.node_id;
+            Ok(Json(resp))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to read file: {}", e)
+            })),
+        )),
+    }
 }
 
 pub async fn handle_promote(

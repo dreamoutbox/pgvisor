@@ -1,15 +1,21 @@
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
+use pgvisor_core::node::{
+    LogLevel, NodeConfigResponse, NodeConfigType, NodeLogEntry,
+};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
 use crate::config::{ConfigError, ConfigGenerator, PostgresConfig};
+
+const MAX_LOG_ENTRIES: usize = 2000;
 
 #[derive(Debug, Error)]
 pub enum SupervisorError {
@@ -42,6 +48,7 @@ pub struct PostgresSupervisor {
     child_pid: Arc<AtomicU32>,
     active_child: Arc<Mutex<Option<Child>>>,
     started_at: Arc<Mutex<Option<std::time::Instant>>>,
+    logs: Arc<RwLock<VecDeque<NodeLogEntry>>>,
 }
 
 impl PostgresSupervisor {
@@ -52,6 +59,7 @@ impl PostgresSupervisor {
             child_pid: Arc::new(AtomicU32::new(0)),
             active_child: Arc::new(Mutex::new(None)),
             started_at: Arc::new(Mutex::new(None)),
+            logs: Arc::new(RwLock::new(VecDeque::with_capacity(MAX_LOG_ENTRIES))),
         }
     }
 
@@ -165,21 +173,49 @@ impl PostgresSupervisor {
         let pid = child.id().unwrap_or(0);
         self.child_pid.store(pid, Ordering::SeqCst);
 
-        // Pipe stdout and stderr to tracing logs
+        // Pipe stdout and stderr to tracing logs and in-memory circular buffer
+        let logs_stdout = Arc::clone(&self.logs);
         if let Some(stdout) = child.stdout.take() {
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
                     info!(target: "postgres", "{}", line);
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let mut buf = logs_stdout.write().await;
+                    if buf.len() >= MAX_LOG_ENTRIES {
+                        buf.pop_front();
+                    }
+                    buf.push_back(NodeLogEntry {
+                        timestamp_ms: now,
+                        level: LogLevel::Info,
+                        message: line,
+                    });
                 }
             });
         }
 
+        let logs_stderr = Arc::clone(&self.logs);
         if let Some(stderr) = child.stderr.take() {
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
                     warn!(target: "postgres", "{}", line);
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let mut buf = logs_stderr.write().await;
+                    if buf.len() >= MAX_LOG_ENTRIES {
+                        buf.pop_front();
+                    }
+                    buf.push_back(NodeLogEntry {
+                        timestamp_ms: now,
+                        level: LogLevel::Warn,
+                        message: line,
+                    });
                 }
             });
         }
@@ -740,6 +776,86 @@ impl PostgresSupervisor {
             "Postgres did not become ready within timeout".into(),
         ))
     }
+
+    /// Appends a log line to the in-memory circular buffer.
+    pub async fn append_log(&self, level: LogLevel, message: impl Into<String>) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let mut buf = self.logs.write().await;
+        if buf.len() >= MAX_LOG_ENTRIES {
+            buf.pop_front();
+        }
+        buf.push_back(NodeLogEntry {
+            timestamp_ms: now,
+            level,
+            message: message.into(),
+        });
+    }
+
+    /// Retrieves up to `limit` recent buffered log entries.
+    pub async fn recent_logs(&self, limit: usize) -> Vec<NodeLogEntry> {
+        let buf = self.logs.read().await;
+        let total = buf.len();
+        let count = limit.min(total);
+        let start_idx = total.saturating_sub(count);
+        buf.iter().skip(start_idx).cloned().collect()
+    }
+
+    /// Total number of currently buffered log entries.
+    pub async fn total_buffered_logs(&self) -> usize {
+        self.logs.read().await.len()
+    }
+
+    /// Reads a diagnostic or configuration file from the PostgreSQL data directory.
+    pub async fn read_node_file(&self, config_type: NodeConfigType) -> Result<NodeConfigResponse, SupervisorError> {
+        let filename = config_type.filename();
+        let path = self.data_dir.join(filename);
+
+        if !path.exists() {
+            return Ok(NodeConfigResponse {
+                node_id: 0,
+                file_type: config_type,
+                filename: filename.to_string(),
+                exists: false,
+                content: String::new(),
+                size_bytes: 0,
+                modified_at_ms: None,
+            });
+        }
+
+        let metadata = tokio::fs::metadata(&path).await?;
+        let size_bytes = metadata.len();
+        let modified_at_ms = metadata.modified().ok().and_then(|t| {
+            t.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_millis() as u64)
+        });
+
+        // Limit read size to 1MB to prevent excessive memory consumption
+        let content = if size_bytes > 1024 * 1024 {
+            let mut file = tokio::fs::File::open(&path).await?;
+            let mut buffer = vec![0u8; 1024 * 1024];
+            let n = tokio::io::AsyncReadExt::read(&mut file, &mut buffer).await?;
+            let mut s = String::from_utf8_lossy(&buffer[..n]).to_string();
+            s.push_str("\n... [truncated: file exceeds 1MB] ...");
+            s
+        } else {
+            match tokio::fs::read(&path).await {
+                Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+                Err(e) => format!("Error reading {}: {}", filename, e),
+            }
+        };
+
+        Ok(NodeConfigResponse {
+            node_id: 0,
+            file_type: config_type,
+            filename: filename.to_string(),
+            exists: true,
+            content,
+            size_bytes,
+            modified_at_ms,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -770,5 +886,48 @@ mod tests {
             .await;
 
         assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_supervisor_log_buffering() {
+        let dir = tempdir().unwrap();
+        let supervisor = PostgresSupervisor::new(dir.path());
+        assert_eq!(supervisor.total_buffered_logs().await, 0);
+
+        supervisor.append_log(LogLevel::Info, "test log line 1").await;
+        supervisor.append_log(LogLevel::Warn, "test log line 2").await;
+        assert_eq!(supervisor.total_buffered_logs().await, 2);
+
+        let logs = supervisor.recent_logs(10).await;
+        assert_eq!(logs.len(), 2);
+        assert_eq!(logs[0].message, "test log line 1");
+        assert_eq!(logs[0].level, LogLevel::Info);
+        assert_eq!(logs[1].message, "test log line 2");
+        assert_eq!(logs[1].level, LogLevel::Warn);
+
+        let limited = supervisor.recent_logs(1).await;
+        assert_eq!(limited.len(), 1);
+        assert_eq!(limited[0].message, "test log line 2");
+    }
+
+    #[tokio::test]
+    async fn test_supervisor_read_node_file() {
+        let dir = tempdir().unwrap();
+        let supervisor = PostgresSupervisor::new(dir.path());
+
+        // File does not exist
+        let resp = supervisor.read_node_file(NodeConfigType::PostgresqlConf).await.unwrap();
+        assert!(!resp.exists);
+        assert_eq!(resp.content, "");
+
+        // Create file
+        let conf_path = dir.path().join("postgresql.conf");
+        tokio::fs::write(&conf_path, "port = 5432\nshared_buffers = 128MB\n").await.unwrap();
+
+        let resp2 = supervisor.read_node_file(NodeConfigType::PostgresqlConf).await.unwrap();
+        assert!(resp2.exists);
+        assert_eq!(resp2.filename, "postgresql.conf");
+        assert!(resp2.content.contains("port = 5432"));
+        assert_eq!(resp2.file_type, NodeConfigType::PostgresqlConf);
     }
 }

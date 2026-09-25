@@ -6,9 +6,10 @@ use tracing::{info, warn};
 
 use super::auth::cluster_auth_middleware;
 use super::handlers::{
-    handle_acquire_backup_lock, handle_cancel_restore, handle_demote, handle_events, handle_fence,
-    handle_prepare_restore, handle_promote, handle_release_backup_lock, handle_repoint,
-    handle_restart, handle_restore, handle_resync, handle_start, handle_status, handle_stop,
+    handle_acquire_backup_lock, handle_cancel_restore, handle_config, handle_demote, handle_events,
+    handle_fence, handle_logs, handle_prepare_restore, handle_promote, handle_release_backup_lock,
+    handle_repoint, handle_restart, handle_restore, handle_resync, handle_start, handle_status,
+    handle_stop,
 };
 use super::state::SidecarState;
 
@@ -17,6 +18,8 @@ pub fn build_control_router(state: SidecarState) -> Router {
     Router::new()
         .route("/control/status", get(handle_status))
         .route("/control/events", get(handle_events))
+        .route("/control/logs", get(handle_logs))
+        .route("/control/config/:config_type", get(handle_config))
         .route("/control/start", post(handle_start))
         .route("/control/stop", post(handle_stop))
         .route("/control/restart", post(handle_restart))
@@ -318,5 +321,74 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_control_router_logs() {
+        let state = create_test_state(None);
+        state
+            .supervisor
+            .append_log(pgvisor_core::LogLevel::Info, "server started")
+            .await;
+        let app = build_control_router(state);
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/control/logs?limit=50")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let logs_resp: pgvisor_core::node::NodeLogsResponse =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(logs_resp.node_id, 1);
+        assert_eq!(logs_resp.total_buffered, 1);
+        assert_eq!(logs_resp.entries[0].message, "server started");
+    }
+
+    #[tokio::test]
+    async fn test_control_router_config() {
+        let state = create_test_state(None);
+        let app = build_control_router(state);
+
+        // Valid slug for non-existent file
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/control/config/postgresql_conf")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let cfg_resp: pgvisor_core::node::NodeConfigResponse =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(cfg_resp.filename, "postgresql.conf");
+        assert!(!cfg_resp.exists);
+
+        // Invalid slug -> 400 Bad Request
+        let res2 = app
+            .oneshot(
+                Request::builder()
+                    .uri("/control/config/unknown_file_type")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res2.status(), StatusCode::BAD_REQUEST);
     }
 }

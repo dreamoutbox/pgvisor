@@ -113,6 +113,11 @@ pub struct EventsQuery {
     pub since_id: Option<u64>,
 }
 
+#[derive(Deserialize)]
+pub struct LogsQuery {
+    pub limit: Option<usize>,
+}
+
 /// Tracks cluster-wide backup/restore lock state on the leader.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BackupLockInfo {

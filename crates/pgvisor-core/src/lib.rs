@@ -4,6 +4,7 @@ pub mod backup;
 pub mod error;
 pub mod logging;
 pub mod metrics;
+pub mod node;
 pub mod protocol;
 pub mod raft;
 pub mod storage;
@@ -23,6 +24,7 @@ pub use logging::{
 pub use metrics::{
     BackupMetrics, ClusterMetricsSnapshot, NodeMetricRole, NodeMetrics, ProxyMetrics,
 };
+pub use node::{LogLevel, NodeConfigResponse, NodeConfigType, NodeLogEntry, NodeLogsResponse};
 pub use protocol::{
     BackendMessage, FrontendMessage, InitialClientMessage, QueryKind, StartupMessage,
     TransactionStatus, TransactionTracker,
