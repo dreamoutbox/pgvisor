@@ -182,13 +182,25 @@
       - Containerized with Dockerfile and docker-compose.yml
       - Demonstrates L7 read/write splitting, CRUD, and cluster diagnostics
 
-- [ ] inspect each node postgresql config with web dashboard
+- [ ] bug: failover not triggering when stop leader node (node1)
+
+- [ ] fix `Latency StdDev (ms)` in loadtest report as 0
+
+- [ ] secure openraft port and communication. use shared secret ENV.
+
+- [ ] inspect each node postgresql config, pg_hba, etc with web dashboard
 
 - [ ] edit/delete tables rows from web dashboard
+
+- [ ] install PG extensions with web dashboard
+
+- [ ] add demo images in README.md
 
 ---
 
 # Backlog
+
+- [ ] docker swarm testing
 
 - [ ] make proxy and sidecar export opentelemetry data. to use with prometheus/grafana.
 

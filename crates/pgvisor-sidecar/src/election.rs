@@ -175,9 +175,6 @@ pub fn spawn_election_monitor(monitor_state: SidecarState, peers: Arc<Vec<String
                             if st.role == "leader" {
                                 leader_found = true;
                             }
-                        } else if st.role == "leader" {
-                            alive_nodes.push(st.node_id);
-                            leader_found = true;
                         }
                     }
                 }

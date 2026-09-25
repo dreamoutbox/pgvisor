@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 DO_BUILD=true
 SILENT=false
 
@@ -58,8 +60,7 @@ run_cmd docker compose down -v --remove-orphans
 
 if [ "$DO_BUILD" = true ]; then
     log_msg "[2/4] Building PgVisor Docker images (default)..."
-    run_cmd docker build -t pgvisor-test-node:latest -t pgvisor-test-proxy:latest .
-    run_cmd docker compose build
+    run_cmd "${SCRIPT_DIR}/dev-build-image.sh" --compose
 else
     log_msg "[2/4] Skipping Docker image build (--no-build specified)..."
 fi

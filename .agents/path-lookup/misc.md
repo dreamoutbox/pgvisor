@@ -24,6 +24,9 @@
 
 ### If you want to modify Docker image builds, dependency caching, or cargo-chef layers, then check:
 
+- `dev-build-image.sh` = Reusable CLI script to build PgVisor Docker images with configurable tags and optional `--compose` build.
+- `dev-build-and-push.sh` = Script to authenticate with Docker registry, build PgVisor image via `dev-build-image.sh`, and push.
+- `reset-docker-compose.sh` = Dev cluster reset script invoking `dev-build-image.sh --compose` before launching containers.
 - `Dockerfile` = Multi-stage Docker build recipe using `cargo-chef` (`chef`, `planner`, `builder`) and runtime PostgreSQL 18.6 base.
 - `.dockerignore` = Excluded files and directories to avoid invalidating Docker build context and cargo-chef cache layers.
 - `Cargo.toml` = Root workspace manifest whose dependencies determine the chef `recipe.json` cache key.

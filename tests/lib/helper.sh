@@ -17,7 +17,7 @@
 run_node_sql() {
     local container="$1"
     local query="$2"
-    docker exec -i "${container}" psql -U postgres -d postgres -t -A -c "${query}" 2>/dev/null || true
+    docker exec -i "${container}" psql -h localhost -U postgres -d postgres -t -A -c "${query}" 2>/dev/null || true
 }
 
 # get_sidecar_status CONTAINER

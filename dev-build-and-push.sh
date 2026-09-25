@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 TAG="${TAG:-latest}"
 
 if [[ $# -eq 3 ]]; then
@@ -20,7 +22,7 @@ fi
 
 echo "$DOCKER_PAT" | docker login -u "$DOCKER_USER" --password-stdin
 
-docker build -t "${IMAGE}:${TAG}" .
+"${SCRIPT_DIR}/dev-build-image.sh" -t "${IMAGE}:${TAG}"
 docker push "${IMAGE}:${TAG}"
 
 docker logout
