@@ -36,10 +36,6 @@ NODE2_CONTAINER="pgvisor-rejoin-fenced-node2"
 NODE3_CONTAINER="pgvisor-rejoin-fenced-node3"
 PROXY_CONTAINER="pgvisor-rejoin-fenced-proxy"
 
-cleanup() {
-    echo "Tearing down cluster ${PROJECT_NAME}..."
-    cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
-}
 trap cleanup EXIT
 
 echo "========================================================="
@@ -54,28 +50,6 @@ cluster_up   "${PROJECT_NAME}" "${COMPOSE_FILE}"
 echo "Waiting for cluster containers to report healthy..."
 wait_for_healthy 120 "${PROJECT_NAME}-minio" "${NODE1_CONTAINER}" "${NODE2_CONTAINER}" "${NODE3_CONTAINER}"
 wait_for_proxy_ready "http://localhost:${TEST_DASHBOARD_PORT}" 60 "${AUTH_HEADER[@]}"
-
-# Helper to execute SQL via PgVisor proxy
-run_proxy_sql() {
-    local query="$1"
-    local output=""
-    for attempt in 1 2 3 4 5; do
-        if command -v psql &> /dev/null; then
-            if output=$(PGPASSWORD="" PGCONNECT_TIMEOUT=5 timeout 15 psql -h "${PROXY_HOST}" -p "${PROXY_PORT}" -U postgres -d postgres -t -A -c "${query}" 2>&1); then
-                echo "${output}"
-                return 0
-            fi
-        else
-            if output=$(timeout 15 docker exec -i "${PROXY_CONTAINER}" psql -h localhost -p 5432 -U postgres -d postgres -t -A -c "${query}" 2>&1); then
-                echo "${output}"
-                return 0
-            fi
-        fi
-        sleep 1
-    done
-    echo "${output}"
-    return 1
-}
 
 
 echo ""

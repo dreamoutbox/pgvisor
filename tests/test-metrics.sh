@@ -44,10 +44,6 @@ NODE2_CONTAINER="pgvisor-metrics-node2"
 NODE3_CONTAINER="pgvisor-metrics-node3"
 PROXY_CONTAINER="pgvisor-metrics-proxy"
 
-cleanup() {
-    echo "Tearing down cluster ${PROJECT_NAME}..."
-    cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
-}
 trap cleanup EXIT
 
 echo "========================================================="

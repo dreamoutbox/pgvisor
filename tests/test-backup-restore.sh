@@ -55,26 +55,6 @@ echo "Waiting for cluster containers to report healthy..."
 wait_for_healthy 120 "${PROJECT_NAME}-minio" "pgvisor-backup-restore-node1" "pgvisor-backup-restore-node2" "pgvisor-backup-restore-node3"
 wait_for_proxy_ready "${DASHBOARD_URL}" 60 "${AUTH_HEADER[@]}"
 
-# Helper for executing SQL via psql with automatic reconnection retry
-run_sql() {
-    local query="$1"
-    for attempt in 1 2 3; do
-        if command -v psql &> /dev/null; then
-            if output=$(PGPASSWORD="" psql -h "${PROXY_HOST}" -p "${PROXY_PORT}" -U postgres -d postgres -t -A -c "${query}" 2>&1); then
-                echo "${output}"
-                return 0
-            fi
-        else
-            if output=$(docker exec -i "${NODE_CONTAINER}" psql -U postgres -d postgres -t -A -c "${query}" 2>&1); then
-                echo "${output}"
-                return 0
-            fi
-        fi
-        sleep 1
-    done
-    echo "${output}"
-    return 1
-}
 
 
 # ------------------------------------------------------------------------------

@@ -8,12 +8,17 @@
 # Functions provided:
 #   cluster_up                 PROJECT COMPOSE_FILE [EXTRA_ARGS...]
 #   cluster_down               PROJECT COMPOSE_FILE [EXTRA_ARGS...]
+#   cleanup                    [EXTRA_ARGS...]
 #   start_node                 CONTAINER [PROJECT] [COMPOSE_FILE] [SERVICE]
 #   stop_node                  CONTAINER
 #   wait_and_remove_minio_init CONTAINER [TIMEOUT_SECS]
 #   wait_for_healthy           TIMEOUT_SECONDS CONTAINER [CONTAINER...]
 #   wait_for_proxy_ready       DASHBOARD_URL [TIMEOUT_SECS] [AUTH_HEADER...]
 # ==============================================================================
+
+SCRIPT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=tests/lib/helper.sh
+source "${SCRIPT_LIB_DIR}/helper.sh"
 
 # start_node CONTAINER [PROJECT] [COMPOSE_FILE] [SERVICE]
 #
@@ -90,13 +95,25 @@ cluster_up() {
 
 # cluster_down PROJECT COMPOSE_FILE [EXTRA_ARGS...]
 #
-# Tears down the cluster and removes volumes. Swallows all output so the test
+# Tears down the cluster and removes volumes with a fast 1s timeout (-t 1)
+# to drastically accelerate test cleanup. Swallows all output so the test
 # cleanup trap stays clean.
 cluster_down() {
     local project="$1"
     local compose_file="$2"
     shift 2 || true
-    docker compose -p "${project}" -f "${compose_file}" "$@" down -v --remove-orphans > /dev/null 2>&1 || true
+    docker compose -p "${project}" -f "${compose_file}" "$@" down -v --remove-orphans -t 1 > /dev/null 2>&1 || true
+}
+
+# cleanup [EXTRA_ARGS...]
+#
+# Standard test exit trap cleanup handler.
+# Automatically tears down the isolated test cluster using PROJECT_NAME and COMPOSE_FILE.
+cleanup() {
+    if [ -n "${PROJECT_NAME:-}" ] && [ -n "${COMPOSE_FILE:-}" ]; then
+        echo "Tearing down cluster ${PROJECT_NAME}..."
+        cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}" "$@"
+    fi
 }
 
 # wait_for_healthy TIMEOUT_SECONDS CONTAINER [CONTAINER...]

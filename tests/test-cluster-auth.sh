@@ -74,11 +74,6 @@ derive_token() {
 VALID_TOKEN="$(derive_token "${CLUSTER_SECRET}")"
 FORGED_TOKEN="$(derive_token "${HACKER_SECRET}")"
 
-cleanup() {
-    echo ""
-    echo "Tearing down cluster ${PROJECT_NAME}..."
-    cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
-}
 trap cleanup EXIT
 
 echo "========================================================="

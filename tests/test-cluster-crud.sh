@@ -24,10 +24,6 @@ if [ ! -f "${SQL_FILE}" ]; then
     exit 1
 fi
 
-cleanup() {
-    echo "Tearing down cluster ${PROJECT_NAME}..."
-    cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
-}
 trap cleanup EXIT
 
 echo "========================================================="

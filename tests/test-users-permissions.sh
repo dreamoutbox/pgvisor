@@ -43,10 +43,6 @@ NODE2_CONTAINER="pgvisor-users-permissions-node2"
 NODE3_CONTAINER="pgvisor-users-permissions-node3"
 PROXY_CONTAINER="pgvisor-users-permissions-proxy"
 
-cleanup() {
-    echo "Tearing down cluster ${PROJECT_NAME}..."
-    cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
-}
 trap cleanup EXIT
 
 echo "========================================================="
@@ -63,26 +59,6 @@ wait_for_healthy 120 "${PROJECT_NAME}-minio" "${NODE1_CONTAINER}" "${NODE2_CONTA
 
 echo "Waiting for proxy to become ready..."
 wait_for_proxy_ready "${DASHBOARD_URL}" 60 "${AUTH_HEADER[@]}"
-
-run_sql() {
-    local query="$1"
-    for attempt in 1 2 3 4 5; do
-        if command -v psql &> /dev/null; then
-            if output=$(PGPASSWORD="" psql -h "${PROXY_HOST}" -p "${PROXY_PORT}" -U postgres -d postgres -t -A -c "${query}" 2>/dev/null); then
-                echo "${output}"
-                return 0
-            fi
-        else
-            if output=$(docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" exec -T pgvisor-proxy psql -h localhost -p 5432 -U postgres -d postgres -t -A -c "${query}" 2>/dev/null); then
-                echo "${output}"
-                return 0
-            fi
-        fi
-        sleep 1
-    done
-    echo "${output:-}"
-    return 1
-}
 
 echo "Creating baseline test table ${TEST_TABLE}..."
 run_sql "CREATE TABLE IF NOT EXISTS ${TEST_TABLE} (id int, val text); INSERT INTO ${TEST_TABLE} VALUES (1, 'initial');"

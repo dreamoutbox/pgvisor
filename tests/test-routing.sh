@@ -55,36 +55,7 @@ if [ ! -f "${COMPOSE_FILE}" ]; then
     exit 1
 fi
 
-cleanup() {
-    echo "Tearing down cluster ${PROJECT_NAME}..."
-    cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
-}
 trap cleanup EXIT
-
-# Helper: run a query through the proxy with up to N retries (replication-lag tolerance).
-run_proxy_sql() {
-    local query="$1"
-    local max_attempts="${2:-5}"
-    local output=""
-    local attempt
-    for attempt in $(seq 1 "${max_attempts}"); do
-        if command -v psql &> /dev/null; then
-            if output=$(PGPASSWORD="" psql -h "${PROXY_HOST}" -p "${PROXY_PORT}" -U postgres -d postgres -t -A -c "${query}" 2>/dev/null); then
-                echo "${output}"
-                return 0
-            fi
-        else
-            if output=$(docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" exec -T pgvisor-proxy \
-                        psql -h localhost -p 5432 -U postgres -d postgres -t -A -c "${query}" 2>/dev/null); then
-                echo "${output}"
-                return 0
-            fi
-        fi
-        sleep 1
-    done
-    echo "${output:-}"
-    return 1
-}
 
 
 echo "========================================================="

@@ -75,37 +75,12 @@ wait_for_proxy_ready "${DASHBOARD1_URL}" 60 "${AUTH_HEADER[@]}"
 wait_for_proxy_ready "${DASHBOARD2_URL}" 60 "${AUTH_HEADER[@]}"
 echo "+ Both proxy1 and proxy2 are ready and serving traffic."
 
-# Helper to execute SQL queries via proxy with retry loop for replication lag
-run_proxy_sql() {
-    local port="$1"
-    local container="$2"
-    local query="$3"
-    local max_attempts="${4:-10}"
-    local output=""
-    for attempt in $(seq 1 "${max_attempts}"); do
-        if command -v psql &> /dev/null; then
-            if output=$(PGPASSWORD="" PGCONNECT_TIMEOUT=5 timeout 15 psql -h localhost -p "${port}" -U postgres -d postgres -t -A -c "${query}" 2>&1); then
-                echo "${output}"
-                return 0
-            fi
-        else
-            if output=$(timeout 15 docker exec -i "${container}" psql -h localhost -p 5432 -U postgres -d postgres -t -A -c "${query}" 2>&1); then
-                echo "${output}"
-                return 0
-            fi
-        fi
-        sleep 1
-    done
-    echo "${output}"
-    return 1
-}
-
 run_proxy1_sql() {
-    run_proxy_sql "${PROXY1_PORT}" "${PROXY1_CONTAINER}" "$1" "${2:-10}"
+    run_proxy_sql "$1" "${2:-10}" "${PROXY1_PORT}" "${PROXY_HOST:-localhost}" "${PROXY1_CONTAINER}"
 }
 
 run_proxy2_sql() {
-    run_proxy_sql "${PROXY2_PORT}" "${PROXY2_CONTAINER}" "$1" "${2:-10}"
+    run_proxy_sql "$1" "${2:-10}" "${PROXY2_PORT}" "${PROXY_HOST:-localhost}" "${PROXY2_CONTAINER}"
 }
 
 

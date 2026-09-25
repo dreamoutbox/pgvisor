@@ -43,12 +43,12 @@
 - `tests/test-<name>.sh` = create the shell script following the existing pattern (isolated project name, port constants, cleanup trap, retry-loop assertions).
 - `scripts/test-<name>.sql` (optional) = create a companion SQL fixture if the test drives SQL directly.
 
-### If you want to change test cluster startup, health check wait, or container cleanup, then check:
+### If you want to change test cluster startup, health check wait, container cleanup, or test SQL query helpers, then check:
 
-- `tests/lib/cluster.sh` = shared library for `cluster_up` (`--progress quiet`), `cluster_down`, `wait_and_remove_minio_init`, `wait_for_healthy` (with fail-fast crash detection), and `wait_for_proxy_ready`.
-- `tests/lib/helper.sh` = shared test utilities for `run_node_sql` (connects via `-h localhost` to avoid missing socket errors), `get_sidecar_status`, and `json_extract`.
-- `reset-docker-compose.sh` = developer cluster reset script with `pgvisor-minio-init` wait & removal and container healthcheck polling with timeout.
-- `tests/test-*.sh` = integration test scripts that invoke `cluster_up`, `wait_for_healthy`, and `cluster_down`.
+- `tests/lib/cluster.sh` = shared library for `cluster_up` (`--progress quiet`), `cluster_down` (with fast `-t 1` timeout), default `cleanup` trap handler, `wait_and_remove_minio_init`, `wait_for_healthy` (with fail-fast crash detection), and `wait_for_proxy_ready`.
+- `tests/lib/helper.sh` = shared test utilities for `run_proxy_sql` / `run_sql` (query with retry loop & fallback), `run_node_sql` (direct container SQL), `get_sidecar_status`, and `json_extract`.
+- `reset-docker-compose.sh` = developer cluster reset script with fast `-t 1` compose teardown, `pgvisor-minio-init` wait & removal, and container healthcheck polling with timeout.
+- `tests/test-*.sh` = integration test scripts that invoke `cluster_up`, `wait_for_healthy`, `run_proxy_sql`/`run_sql`, and `cleanup`.
 
 ### If you want to fix flaky post-restore assertions (wrong row counts after snapshot restore), then check:
 

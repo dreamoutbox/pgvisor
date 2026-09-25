@@ -56,7 +56,7 @@ log_msg "  PgVisor Cluster Reset & Build Script"
 log_msg "========================================================="
 
 log_msg "[1/4] Stopping containers and removing persistent volumes..."
-run_cmd docker compose down -v --remove-orphans
+run_cmd docker compose down -v --remove-orphans -t 1
 
 if [ "$DO_BUILD" = true ]; then
     log_msg "[2/4] Building PgVisor Docker images (default)..."
