@@ -186,13 +186,13 @@
 
 - [x] fix tests
 
-- [ ] fix `Latency StdDev (ms)` in loadtest report as 0
+- [x] fix `Latency StdDev (ms)` in loadtest report as 0
 
-- [ ] secure openraft port and communication. use shared secret ENV.
-
-- [ ] inspect each node postgresql config, pg_hba, etc with web dashboard
+- [ ] inspect each node logs, postgresql config, pg_hba, etc in web dashboard
 
 - [ ] edit/delete tables rows from web dashboard
+
+- [ ] secure openraft port and communication. use shared secret ENV.
 
 - [ ] install PG extensions with web dashboard
 

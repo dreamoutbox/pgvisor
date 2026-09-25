@@ -30,6 +30,7 @@ REPORT_FILE="${REPORT_DIR}/report-${TIMESTAMP}.md"
 # Workload configurations (can be overridden by environment)
 PGBENCH_SCALE="${PGBENCH_SCALE:-10}"       # scale factor: 10 = ~1,000,000 accounts
 BENCH_DURATION="${BENCH_DURATION:-20}"     # seconds per concurrency run
+PGBENCH_PROGRESS="${PGBENCH_PROGRESS:-5}"   # progress interval (seconds) for latency stddev tracking
 CONCURRENCY_LEVELS=(1 8 32 128)
 
 PROXY_HOST="127.0.0.1"
@@ -90,7 +91,7 @@ cat <<EOF > "${REPORT_FILE}"
 
 ## Executive Summary
 
-| Scenario | Tested Concurrency Levels | Peak TPS | p95 Latency @ Peak | Routing Target |
+| Scenario | Tested Concurrency Levels | Peak TPS | Avg Latency @ Peak | Routing Target |
 |---|---|---|---|---|
 EOF
 
@@ -127,7 +128,7 @@ for clients in "${CONCURRENCY_LEVELS[@]}"; do
     PGPASSWORD="" pgbench -h "${PROXY_HOST}" -p "${PROXY_PORT}" -U postgres -d postgres -S -T 2 -c "${clients}" -j "${threads}" >/dev/null 2>&1 || true
 
     # Benchmark
-    PGPASSWORD="" pgbench -h "${PROXY_HOST}" -p "${PROXY_PORT}" -U postgres -d postgres -S -T "${BENCH_DURATION}" -c "${clients}" -j "${threads}" -r > "${out_file}" 2>&1 || true
+    PGPASSWORD="" pgbench -h "${PROXY_HOST}" -p "${PROXY_PORT}" -U postgres -d postgres -S -T "${BENCH_DURATION}" -c "${clients}" -j "${threads}" -P "${PGBENCH_PROGRESS}" -r > "${out_file}" 2>&1 || true
 
     res=$(parse_pgbench_output "${out_file}")
     tps=$(echo "${res}" | cut -d'|' -f1)
@@ -163,7 +164,7 @@ for clients in "${CONCURRENCY_LEVELS[@]}"; do
     PGPASSWORD="" pgbench -h "${PROXY_HOST}" -p "${PROXY_PORT}" -U postgres -d postgres -T 2 -c "${clients}" -j "${threads}" >/dev/null 2>&1 || true
 
     # Benchmark
-    PGPASSWORD="" pgbench -h "${PROXY_HOST}" -p "${PROXY_PORT}" -U postgres -d postgres -T "${BENCH_DURATION}" -c "${clients}" -j "${threads}" -r > "${out_file}" 2>&1 || true
+    PGPASSWORD="" pgbench -h "${PROXY_HOST}" -p "${PROXY_PORT}" -U postgres -d postgres -T "${BENCH_DURATION}" -c "${clients}" -j "${threads}" -P "${PGBENCH_PROGRESS}" -r > "${out_file}" 2>&1 || true
 
     res=$(parse_pgbench_output "${out_file}")
     tps=$(echo "${res}" | cut -d'|' -f1)
@@ -198,7 +199,7 @@ for clients in "${CONCURRENCY_LEVELS[@]}"; do
     PGPASSWORD="" pgbench -h "${PROXY_HOST}" -p "${PROXY_PORT}" -U postgres -d postgres -N -T 2 -c "${clients}" -j "${threads}" >/dev/null 2>&1 || true
 
     # Benchmark
-    PGPASSWORD="" pgbench -h "${PROXY_HOST}" -p "${PROXY_PORT}" -U postgres -d postgres -N -T "${BENCH_DURATION}" -c "${clients}" -j "${threads}" -r > "${out_file}" 2>&1 || true
+    PGPASSWORD="" pgbench -h "${PROXY_HOST}" -p "${PROXY_PORT}" -U postgres -d postgres -N -T "${BENCH_DURATION}" -c "${clients}" -j "${threads}" -P "${PGBENCH_PROGRESS}" -r > "${out_file}" 2>&1 || true
 
     res=$(parse_pgbench_output "${out_file}")
     tps=$(echo "${res}" | cut -d'|' -f1)
@@ -289,7 +290,7 @@ cat <<EOF >> "${REPORT_FILE}"
 4. **Replication Health:** Standby replication lag stayed within acceptable boundaries (**${REPL_LAG} bytes** remaining post-load).
 
 ---
-*Generated automatically by \`tests/test-load.sh\`.*
+*Generated automatically by \`dev-loadtest.sh\`.*
 EOF
 
 echo "[5/5] Report generated successfully at:"

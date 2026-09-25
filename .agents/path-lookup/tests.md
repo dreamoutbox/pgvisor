@@ -29,6 +29,7 @@
 - `composes/docker-compose.cluster-auth.yml` = isolated test compose file for cluster internal auth test (proxy port 7532, dashboard 10180, minio 11100/11101).
 - `scripts/derive-auth-token.py` = standalone script to compute deterministic HMAC-SHA256 bearer tokens for cluster authentication without inline python scripts.
 - `composes/docker-compose.load.yml` = isolated test compose file for load testing with 1 CPU and 1GB RAM limits.
+- `dev-loadtest.sh` = developer load testing runner measuring sustained throughput, latency average, and latency stddev across read, write, and mixed workloads with pgbench.
 - `composes/docker-compose.proxy-failover-proxy2.yml` = compose overlay defining the second proxy (pgvisor-proxy2) on ports 6833/9481.
 - `reset-docker-compose.sh` = developer cluster reset script; builds images by default, supports `--no-build` and `-s`/`--silent`.
 - `dev-dump-logs.sh` = developer helper script to dump logs from pgvisor nodes 1-3 into `logs/` directory, supporting timestamps, tail, and proxy/minio options.
