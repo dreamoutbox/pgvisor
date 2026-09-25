@@ -83,3 +83,23 @@
 - `crates/pgvisor-sidecar/src/control/handlers.rs` = Sidecar `/control/start`, `/control/stop`, `/control/restart` endpoints
 - `crates/pgvisor-sidecar/src/election.rs` = Election monitor pause on stopped status and fenced auto-rejoin
 - `tests/test-node-lifecycle.sh` = Integration test verifying end-to-end node stop, start, restart, pool continuity, error cases, and audit logs
+
+### If you want to inspect node stdout/stderr logs or configuration and diagnostic files (postgresql.conf, pg_hba.conf, postmaster.pid, standby.signal, etc.) from the dashboard, then check:
+
+- `crates/pgvisor-core/src/node.rs` = `NodeConfigType`, `NodeLogEntry`, `NodeLogsResponse`, and `NodeConfigResponse` models
+- `crates/pgvisor-sidecar/src/supervisor.rs` = Circular log buffer (`MAX_LOG_ENTRIES`) in `PostgresSupervisor` and `read_node_file`
+- `crates/pgvisor-sidecar/src/control/handlers.rs` = `GET /control/logs` and `GET /control/config/:config_type` handlers
+- `crates/pgvisor-dashboard/src/handlers/cluster.rs` = `ClusterService` trait (`get_node_logs`, `get_node_config`), `StandaloneClusterService`, and `/api/nodes/:node_id/{logs,config/:config_type}` endpoints
+- `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService` forwarding log/config inspection calls to sidecar with cluster secret auth
+- `crates/pgvisor-dashboard/templates/nodes.html` = Inspect button and modal with live log viewer and config/diagnostic file viewer tabs
+- `tests/test-dashboard-tables-nodes.sh` = Integration test verifying log and diagnostic file inspection endpoints
+
+### If you want to modify table row deletion, editing, or primary key detection in the web dashboard, then check:
+
+- `crates/pgvisor-dashboard/src/models.rs` = `DeleteRowRequest`, `UpdateRowRequest`, `RowMutationResponse`, and `primary_keys` in `TableDataResponse`
+- `crates/pgvisor-dashboard/src/handlers/sql.rs` = `fetch_table_primary_keys`, `is_valid_identifier`, `format_sql_literal`, `api_delete_table_row`, and `api_update_table_row` handlers
+- `crates/pgvisor-dashboard/src/templates.rs` = `TablesTemplate` helper methods (`is_primary_key_col`, `has_primary_keys`, `table_data_json`)
+- `crates/pgvisor-dashboard/templates/tables.html` = Data Browse view with Actions column, no-PK warning, Delete Row Modal, Edit Row Modal, and AJAX mutation handlers
+- `crates/pgvisor-dashboard/src/lib.rs` = Route registration for `DELETE /api/tables/:table/rows` and `PUT /api/tables/:table/rows` and unit tests
+- `crates/pgvisor-proxy/src/executor.rs` = `ProxySqlExecutor` routing DELETE and UPDATE queries to Raft leader
+- `tests/test-dashboard-tables-nodes.sh` = Integration test verifying row editing, row deletion, and audit logging

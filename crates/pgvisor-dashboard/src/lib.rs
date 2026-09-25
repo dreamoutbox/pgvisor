@@ -1030,5 +1030,20 @@ mod tests {
             .unwrap();
         let resp = auth_app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+
+        // 11. GET /tables?table=pgvisor_demo&tab=data renders table actions and modals
+        let req = Request::builder()
+            .uri("/tables?table=pgvisor_demo&tab=data")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(html.contains("deleteRowModal"));
+        assert!(html.contains("editRowModal"));
+        assert!(html.contains("row-edit-btn"));
+        assert!(html.contains("row-delete-btn"));
+        assert!(html.contains("table-metadata"));
     }
 }

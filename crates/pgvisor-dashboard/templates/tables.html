@@ -201,6 +201,15 @@
                 </div>
             </div>
 
+            {% if !self.has_primary_keys() %}
+            <div style="background: rgba(245, 158, 11, 0.1); border: 1px solid var(--warning); border-radius: 6px; padding: 10px 14px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; font-size: 0.85rem; color: #fcd34d;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink: 0;">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4m0 4h.01"></path>
+                </svg>
+                <span>Table '{{ active }}' has no primary key defined. Row editing and deletion are disabled to prevent accidental bulk modifications.</span>
+            </div>
+            {% endif %}
+
             <!-- Data Table -->
             <div style="overflow-x: auto; max-height: 560px;">
                 {% if data_rows.is_empty() %}
@@ -209,14 +218,32 @@
                 <table>
                     <thead>
                         <tr>
+                            {% if self.has_primary_keys() %}
+                            <th style="width: 130px; text-align: center;">Actions</th>
+                            {% endif %}
                             {% for col in data_columns %}
-                            <th>{{ col }}</th>
+                            <th>
+                                {{ col }}
+                                {% if self.is_primary_key_col(col) %}
+                                <span style="font-size: 0.7rem; color: var(--primary); background: rgba(56, 189, 248, 0.15); padding: 1px 4px; border-radius: 3px; margin-left: 4px;">PK</span>
+                                {% endif %}
+                            </th>
                             {% endfor %}
                         </tr>
                     </thead>
                     <tbody>
                         {% for row in data_rows %}
                         <tr>
+                            {% if self.has_primary_keys() %}
+                            <td style="text-align: center; white-space: nowrap;">
+                                <button type="button" class="row-action-btn row-edit-btn" data-row-index="{{ loop.index0 }}" onclick="openEditRowModal(this.getAttribute('data-row-index'))" title="Edit Row">
+                                    Edit
+                                </button>
+                                <button type="button" class="row-action-btn row-delete-btn" data-row-index="{{ loop.index0 }}" onclick="openDeleteRowModal(this.getAttribute('data-row-index'))" title="Delete Row">
+                                    Delete
+                                </button>
+                            </td>
+                            {% endif %}
                             {% for cell in row %}
                             <td>
                                 {% if let Some(val) = cell %}
@@ -233,6 +260,10 @@
                 {% endif %}
             </div>
         </div>
+
+        <script id="table-metadata" type="application/json">
+        {{ self.table_data_json()|safe }}
+        </script>
         {% else %}
         <!-- Welcome empty state -->
         <div class="card" style="text-align: center; padding: 48px 24px;">
@@ -249,6 +280,81 @@
         </div>
         {% endif %}
         {% endif %}
+    </div>
+</div>
+
+<!-- Delete Row Modal -->
+<div id="deleteRowModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card" style="max-width: 480px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h3 style="margin: 0; font-size: 1.15rem; color: var(--danger); display: flex; align-items: center; gap: 8px;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    <line x1="10" y1="11" x2="10" y2="17"></line>
+                    <line x1="14" y1="11" x2="14" y2="17"></line>
+                </svg>
+                Delete Row
+            </h3>
+            <button type="button" onclick="closeDeleteModal()" style="background: none; border: none; color: var(--text-muted); font-size: 1.25rem; cursor: pointer;">&times;</button>
+        </div>
+
+        <p style="font-size: 0.9rem; color: var(--text-main); margin-bottom: 12px;">
+            Are you sure you want to permanently delete this row from table <code id="delete-table-name" style="color: var(--primary);"></code>?
+        </p>
+
+        <div style="background: #0b0f19; border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 16px;">
+            <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em;">Primary Key Identification</div>
+            <div id="delete-pk-display" style="font-family: monospace; font-size: 0.9rem; color: #f8fafc;"></div>
+        </div>
+
+        <div id="delete-error" style="display: none; background: rgba(248, 113, 113, 0.1); border: 1px solid var(--danger); border-radius: 6px; padding: 10px; margin-bottom: 16px; color: #fca5a5; font-size: 0.85rem;"></div>
+
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 20px;">
+            This mutation will be executed directly on the cluster leader and recorded in the audit log.
+        </p>
+
+        <div style="display: flex; justify-content: flex-end; gap: 10px;">
+            <button type="button" onclick="closeDeleteModal()" style="background: var(--bg-card-hover); border: 1px solid var(--border); border-radius: 6px; padding: 8px 16px; color: var(--text-main); font-weight: 500; cursor: pointer;">
+                Cancel
+            </button>
+            <button id="confirm-delete-btn" type="button" onclick="confirmDeleteRow()" style="background: var(--danger); border: none; border-radius: 6px; padding: 8px 18px; color: #fff; font-weight: 600; cursor: pointer;">
+                Delete Row
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Row Modal -->
+<div id="editRowModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card" style="max-width: 600px; max-height: 85vh; display: flex; flex-direction: column;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-shrink: 0;">
+            <h3 style="margin: 0; font-size: 1.15rem; color: var(--primary); display: flex; align-items: center; gap: 8px;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 20h9"></path>
+                    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                </svg>
+                Edit Row
+            </h3>
+            <button type="button" onclick="closeEditModal()" style="background: none; border: none; color: var(--text-muted); font-size: 1.25rem; cursor: pointer;">&times;</button>
+        </div>
+
+        <div id="edit-error" style="display: none; background: rgba(248, 113, 113, 0.1); border: 1px solid var(--danger); border-radius: 6px; padding: 10px; margin-bottom: 16px; color: #fca5a5; font-size: 0.85rem; flex-shrink: 0;"></div>
+
+        <form id="edit-row-form" onsubmit="submitEditRow(event)" style="display: flex; flex-direction: column; overflow: hidden; flex: 1;">
+            <div id="edit-fields-container" style="overflow-y: auto; padding-right: 4px; display: flex; flex-direction: column; gap: 14px; margin-bottom: 20px;">
+                <!-- Dynamically populated fields -->
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 10px; flex-shrink: 0; border-top: 1px solid var(--border); padding-top: 16px;">
+                <button type="button" onclick="closeEditModal()" style="background: var(--bg-card-hover); border: 1px solid var(--border); border-radius: 6px; padding: 8px 16px; color: var(--text-main); font-weight: 500; cursor: pointer;">
+                    Cancel
+                </button>
+                <button id="save-edit-btn" type="submit" style="background: var(--primary); border: none; border-radius: 6px; padding: 8px 18px; color: #0b0f19; font-weight: 600; cursor: pointer;">
+                    Save Changes
+                </button>
+            </div>
+        </form>
     </div>
 </div>
 
@@ -302,6 +408,55 @@
 }
 .page-nav-btn:hover {
     background: var(--border);
+}
+.row-action-btn {
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    margin: 0 2px;
+    border: 1px solid transparent;
+    transition: all 0.15s;
+}
+.row-edit-btn {
+    background: rgba(56, 189, 248, 0.12);
+    color: var(--primary);
+    border-color: rgba(56, 189, 248, 0.3);
+}
+.row-edit-btn:hover {
+    background: var(--primary);
+    color: #0b0f19;
+}
+.row-delete-btn {
+    background: rgba(248, 113, 113, 0.12);
+    color: var(--danger);
+    border-color: rgba(248, 113, 113, 0.3);
+}
+.row-delete-btn:hover {
+    background: var(--danger);
+    color: #fff;
+}
+.modal-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(11, 15, 25, 0.8);
+    backdrop-filter: blur(4px);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.modal-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    width: 90%;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
 }
 </style>
 
@@ -389,6 +544,237 @@ async function executeSql() {
         document.getElementById('error-message').innerText = String(err);
         status.innerText = 'Network error';
     } finally {
+        btn.disabled = false;
+    }
+}
+
+let currentTableMeta = null;
+let targetDeletePk = null;
+let targetEditPk = null;
+
+function getTableMetadata() {
+    if (currentTableMeta) return currentTableMeta;
+    const el = document.getElementById('table-metadata');
+    if (el) {
+        try {
+            currentTableMeta = JSON.parse(el.textContent);
+        } catch (e) {
+            console.error('Failed to parse table metadata', e);
+        }
+    }
+    return currentTableMeta;
+}
+
+function openDeleteRowModal(rowIndexStr) {
+    const meta = getTableMetadata();
+    if (!meta) return;
+    const rowIndex = parseInt(rowIndexStr, 10);
+    const row = meta.rows[rowIndex];
+    if (!row) return;
+
+    targetDeletePk = {};
+    meta.primaryKeys.forEach(pk => {
+        const colIdx = meta.columns.indexOf(pk);
+        if (colIdx !== -1) {
+            targetDeletePk[pk] = row[colIdx];
+        }
+    });
+
+    document.getElementById('delete-table-name').innerText = meta.tableName;
+    document.getElementById('delete-pk-display').innerText = Object.entries(targetDeletePk)
+        .map(([k, v]) => `${k} = ${v}`)
+        .join(', ');
+    document.getElementById('delete-error').style.display = 'none';
+    document.getElementById('confirm-delete-btn').disabled = false;
+    document.getElementById('deleteRowModal').style.display = 'flex';
+}
+
+function closeDeleteModal() {
+    document.getElementById('deleteRowModal').style.display = 'none';
+    targetDeletePk = null;
+}
+
+async function confirmDeleteRow() {
+    const meta = getTableMetadata();
+    if (!meta || !targetDeletePk) return;
+    const btn = document.getElementById('confirm-delete-btn');
+    const errBox = document.getElementById('delete-error');
+    btn.disabled = true;
+    errBox.style.display = 'none';
+
+    try {
+        const resp = await fetch(`/api/tables/${encodeURIComponent(meta.tableName)}/rows`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ primary_keys: targetDeletePk })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            errBox.style.display = 'block';
+            errBox.innerText = data.message || (typeof data === 'string' ? data : 'Delete failed');
+            btn.disabled = false;
+        } else {
+            closeDeleteModal();
+            location.reload();
+        }
+    } catch (err) {
+        errBox.style.display = 'block';
+        errBox.innerText = String(err);
+        btn.disabled = false;
+    }
+}
+
+function openEditRowModal(rowIndexStr) {
+    const meta = getTableMetadata();
+    if (!meta) return;
+    const rowIndex = parseInt(rowIndexStr, 10);
+    const row = meta.rows[rowIndex];
+    if (!row) return;
+
+    targetEditPk = {};
+    meta.primaryKeys.forEach(pk => {
+        const colIdx = meta.columns.indexOf(pk);
+        if (colIdx !== -1) {
+            targetEditPk[pk] = row[colIdx];
+        }
+    });
+
+    const container = document.getElementById('edit-fields-container');
+    container.innerHTML = '';
+    document.getElementById('edit-error').style.display = 'none';
+    document.getElementById('save-edit-btn').disabled = false;
+
+    meta.columns.forEach((col, idx) => {
+        const val = row[idx];
+        const isPk = meta.primaryKeys.includes(col);
+        const fieldWrapper = document.createElement('div');
+        fieldWrapper.style.display = 'flex';
+        fieldWrapper.style.flexDirection = 'column';
+        fieldWrapper.style.gap = '4px';
+
+        const label = document.createElement('label');
+        label.style.fontSize = '0.85rem';
+        label.style.fontWeight = '500';
+        label.style.color = 'var(--text-main)';
+        label.innerHTML = `<strong>${col}</strong>${isPk ? ' <span style="font-size: 0.75rem; color: var(--primary);">(Primary Key - Read-only)</span>' : ''}`;
+        fieldWrapper.appendChild(label);
+
+        if (isPk) {
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = val === null ? '' : val;
+            input.disabled = true;
+            input.style.background = '#0b0f19';
+            input.style.border = '1px solid var(--border)';
+            input.style.borderRadius = '6px';
+            input.style.padding = '8px 10px';
+            input.style.color = 'var(--text-muted)';
+            input.style.fontFamily = 'monospace';
+            fieldWrapper.appendChild(input);
+        } else {
+            const inputRow = document.createElement('div');
+            inputRow.style.display = 'flex';
+            inputRow.style.gap = '8px';
+            inputRow.style.alignItems = 'center';
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.name = `col_${col}`;
+            input.id = `input_${col}`;
+            input.value = val === null ? '' : val;
+            input.style.flex = '1';
+            input.style.background = '#0b0f19';
+            input.style.border = '1px solid var(--border)';
+            input.style.borderRadius = '6px';
+            input.style.padding = '8px 10px';
+            input.style.color = 'var(--text-main)';
+            input.style.fontSize = '0.9rem';
+
+            const nullLabel = document.createElement('label');
+            nullLabel.style.display = 'flex';
+            nullLabel.style.alignItems = 'center';
+            nullLabel.style.gap = '4px';
+            nullLabel.style.fontSize = '0.8rem';
+            nullLabel.style.color = 'var(--text-muted)';
+            nullLabel.style.cursor = 'pointer';
+
+            const nullCheck = document.createElement('input');
+            nullCheck.type = 'checkbox';
+            nullCheck.id = `null_${col}`;
+            nullCheck.checked = val === null;
+            if (nullCheck.checked) {
+                input.disabled = true;
+                input.style.opacity = '0.5';
+            }
+            nullCheck.onchange = () => {
+                input.disabled = nullCheck.checked;
+                input.style.opacity = nullCheck.checked ? '0.5' : '1';
+                if (!nullCheck.checked && input.value === '') {
+                    input.focus();
+                }
+            };
+            nullLabel.appendChild(nullCheck);
+            nullLabel.appendChild(document.createTextNode('NULL'));
+
+            inputRow.appendChild(input);
+            inputRow.appendChild(nullLabel);
+            fieldWrapper.appendChild(inputRow);
+        }
+
+        container.appendChild(fieldWrapper);
+    });
+
+    document.getElementById('editRowModal').style.display = 'flex';
+}
+
+function closeEditModal() {
+    document.getElementById('editRowModal').style.display = 'none';
+    targetEditPk = null;
+}
+
+async function submitEditRow(e) {
+    e.preventDefault();
+    const meta = getTableMetadata();
+    if (!meta || !targetEditPk) return;
+    const btn = document.getElementById('save-edit-btn');
+    const errBox = document.getElementById('edit-error');
+    btn.disabled = true;
+    errBox.style.display = 'none';
+
+    const values = {};
+    meta.columns.forEach(col => {
+        if (!meta.primaryKeys.includes(col)) {
+            const nullCheck = document.getElementById(`null_${col}`);
+            const input = document.getElementById(`input_${col}`);
+            if (nullCheck && nullCheck.checked) {
+                values[col] = null;
+            } else if (input) {
+                values[col] = input.value;
+            }
+        }
+    });
+
+    try {
+        const resp = await fetch(`/api/tables/${encodeURIComponent(meta.tableName)}/rows`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                primary_keys: targetEditPk,
+                values: values
+            })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            errBox.style.display = 'block';
+            errBox.innerText = data.message || (typeof data === 'string' ? data : 'Update failed');
+            btn.disabled = false;
+        } else {
+            closeEditModal();
+            location.reload();
+        }
+    } catch (err) {
+        errBox.style.display = 'block';
+        errBox.innerText = String(err);
         btn.disabled = false;
     }
 }

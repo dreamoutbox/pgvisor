@@ -48,10 +48,7 @@ pub fn format_sql_literal(value: &serde_json::Value) -> String {
 }
 
 /// Fetch primary key column names for a given table from the PostgreSQL catalog.
-pub async fn fetch_table_primary_keys(
-    sql_executor: &dyn SqlExecutor,
-    table: &str,
-) -> Vec<String> {
+pub async fn fetch_table_primary_keys(sql_executor: &dyn SqlExecutor, table: &str) -> Vec<String> {
     if !is_valid_identifier(table) {
         return Vec::new();
     }
@@ -85,20 +82,11 @@ impl SqlExecutor for StandaloneSqlExecutor {
         // Safe standard catalog query simulation for standalone dashboard mode
         let upper = sql.to_uppercase();
         let (columns, rows) = if upper.starts_with("DELETE FROM") {
-            (
-                vec!["status".into()],
-                vec![vec!["DELETE 1".into()]],
-            )
+            (vec!["status".into()], vec![vec!["DELETE 1".into()]])
         } else if upper.starts_with("UPDATE") {
-            (
-                vec!["status".into()],
-                vec![vec!["UPDATE 1".into()]],
-            )
+            (vec!["status".into()], vec![vec!["UPDATE 1".into()]])
         } else if upper.contains("TABLE_CONSTRAINTS") || upper.contains("KEY_COLUMN_USAGE") {
-            (
-                vec!["column_name".into()],
-                vec![vec!["id".into()]],
-            )
+            (vec!["column_name".into()], vec![vec!["id".into()]])
         } else if upper.contains("INFORMATION_SCHEMA.TABLES") {
             (
                 vec!["table_name".into(), "table_schema".into()],
@@ -218,7 +206,6 @@ impl SqlExecutor for StandaloneSqlExecutor {
                     "PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc, 64-bit".into(),
                 ]],
             )
-
         } else {
             (
                 vec!["result".into()],
@@ -463,8 +450,7 @@ pub async fn api_table_schema(
                 } else {
                     None
                 };
-                let is_primary_key =
-                    primary_keys.iter().any(|pk| pk.eq_ignore_ascii_case(&name));
+                let is_primary_key = primary_keys.iter().any(|pk| pk.eq_ignore_ascii_case(&name));
                 Some(ColumnInfo {
                     name,
                     data_type,
@@ -632,11 +618,14 @@ pub async fn api_delete_table_row(
                 "Deleted row from table '{}' (primary keys: {:?})",
                 table, payload.primary_keys
             ),
-            Some(serde_json::json!({
-                "table": table,
-                "primary_keys": payload.primary_keys,
-                "affected_rows": affected_rows,
-            }).to_string()),
+            Some(
+                serde_json::json!({
+                    "table": table,
+                    "primary_keys": payload.primary_keys,
+                    "affected_rows": affected_rows,
+                })
+                .to_string(),
+            ),
         )
         .await;
 
@@ -780,12 +769,15 @@ pub async fn api_update_table_row(
                 payload.primary_keys,
                 payload.values.keys().collect::<Vec<_>>()
             ),
-            Some(serde_json::json!({
-                "table": table,
-                "primary_keys": payload.primary_keys,
-                "values": payload.values,
-                "affected_rows": affected_rows,
-            }).to_string()),
+            Some(
+                serde_json::json!({
+                    "table": table,
+                    "primary_keys": payload.primary_keys,
+                    "values": payload.values,
+                    "affected_rows": affected_rows,
+                })
+                .to_string(),
+            ),
         )
         .await;
 

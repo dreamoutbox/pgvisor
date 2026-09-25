@@ -43,6 +43,7 @@ PROFILES = [
     ("load", "load", 7432, 10080, 11000, 11001),
     ("cluster-auth", "cluster-auth", 7532, 10180, 11100, 11101),
     ("tls", "tls", 7632, 10280, 11200, 11201),
+    ("tables-nodes", "tables-nodes", 7732, 10380, 11300, 11301),
 ]
 
 

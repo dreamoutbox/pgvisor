@@ -48,11 +48,23 @@ impl<'a> TablesTemplate<'a> {
     }
 
     pub fn is_primary_key_col(&self, name: &str) -> bool {
-        self.primary_keys.iter().any(|pk| pk.eq_ignore_ascii_case(name))
+        self.primary_keys
+            .iter()
+            .any(|pk| pk.eq_ignore_ascii_case(name))
     }
 
     pub fn has_primary_keys(&self) -> bool {
         !self.primary_keys.is_empty()
+    }
+
+    pub fn table_data_json(&self) -> String {
+        let val = serde_json::json!({
+            "tableName": self.active_table.unwrap_or_default(),
+            "primaryKeys": self.primary_keys,
+            "columns": self.data_columns,
+            "rows": self.data_rows,
+        });
+        serde_json::to_string(&val).unwrap_or_else(|_| "{}".to_string())
     }
 }
 

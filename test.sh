@@ -88,6 +88,7 @@ TEST_SCRIPTS=(
     "test-promoted-restore.sh"
     "test-cluster-auth.sh"
     "test-tls.sh"
+    "test-dashboard-tables-nodes.sh"
 )
 
 TOTAL_TESTS="${#TEST_SCRIPTS[@]}"
