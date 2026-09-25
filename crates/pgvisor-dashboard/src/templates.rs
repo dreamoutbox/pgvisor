@@ -32,6 +32,7 @@ pub struct TablesTemplate<'a> {
     pub active_tab: &'a str,
     pub columns: &'a [ColumnInfo],
     pub data_columns: &'a [String],
+    pub primary_keys: &'a [String],
     pub data_rows: &'a [Vec<Option<String>>],
     pub total_rows: u64,
     pub page: usize,
@@ -44,6 +45,14 @@ pub struct TablesTemplate<'a> {
 impl<'a> TablesTemplate<'a> {
     pub fn is_active_table(&self, name: &str) -> bool {
         self.active_table == Some(name)
+    }
+
+    pub fn is_primary_key_col(&self, name: &str) -> bool {
+        self.primary_keys.iter().any(|pk| pk.eq_ignore_ascii_case(name))
+    }
+
+    pub fn has_primary_keys(&self) -> bool {
+        !self.primary_keys.is_empty()
     }
 }
 

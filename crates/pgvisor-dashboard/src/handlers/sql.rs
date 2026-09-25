@@ -6,15 +6,68 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Html;
 use axum::Json;
+use pgvisor_core::audit::AuditEventKind;
 use serde::Deserialize;
 use tracing::{error, info, warn};
 
 use super::state::DashboardState;
 use crate::models::{
-    ColumnInfo, SqlQueryError, SqlQueryRequest, SqlQueryResult, TableDataResponse, TableSummary,
+    ColumnInfo, DeleteRowRequest, RowMutationResponse, SqlQueryError, SqlQueryRequest,
+    SqlQueryResult, TableDataResponse, TableSummary, UpdateRowRequest,
 };
 use crate::security::SecurityError;
 use crate::templates::TablesTemplate;
+
+/// Validate an SQL identifier to ensure it strictly conforms to PostgreSQL standard naming
+/// (starts with alphabetic char or underscore, alphanumeric/underscore, <= 63 chars).
+pub fn is_valid_identifier(ident: &str) -> bool {
+    !ident.is_empty()
+        && ident.len() <= 63
+        && ident.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && ident.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Format a JSON value into a safe SQL literal for queries.
+pub fn format_sql_literal(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "NULL".to_string(),
+        serde_json::Value::Bool(b) => {
+            if *b {
+                "TRUE".to_string()
+            } else {
+                "FALSE".to_string()
+            }
+        }
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => format!("'{}'", s.replace('\'', "''")),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            let json_str = serde_json::to_string(value).unwrap_or_default();
+            format!("'{}'", json_str.replace('\'', "''"))
+        }
+    }
+}
+
+/// Fetch primary key column names for a given table from the PostgreSQL catalog.
+pub async fn fetch_table_primary_keys(
+    sql_executor: &dyn SqlExecutor,
+    table: &str,
+) -> Vec<String> {
+    if !is_valid_identifier(table) {
+        return Vec::new();
+    }
+    let pk_sql = format!(
+        "SELECT kcu.column_name FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema WHERE tc.table_name = '{}' AND tc.table_schema = 'public' AND tc.constraint_type = 'PRIMARY KEY' ORDER BY kcu.ordinal_position;",
+        table
+    );
+    if let Ok(res) = sql_executor.execute(&pk_sql, 100).await {
+        res.rows
+            .into_iter()
+            .filter_map(|mut r| r.drain(..).next())
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
 
 /// Abstraction for executing SQL queries on PostgreSQL backends.
 #[async_trait::async_trait]
@@ -31,7 +84,22 @@ impl SqlExecutor for StandaloneSqlExecutor {
         let start = Instant::now();
         // Safe standard catalog query simulation for standalone dashboard mode
         let upper = sql.to_uppercase();
-        let (columns, rows) = if upper.contains("INFORMATION_SCHEMA.TABLES") {
+        let (columns, rows) = if upper.starts_with("DELETE FROM") {
+            (
+                vec!["status".into()],
+                vec![vec!["DELETE 1".into()]],
+            )
+        } else if upper.starts_with("UPDATE") {
+            (
+                vec!["status".into()],
+                vec![vec!["UPDATE 1".into()]],
+            )
+        } else if upper.contains("TABLE_CONSTRAINTS") || upper.contains("KEY_COLUMN_USAGE") {
+            (
+                vec!["column_name".into()],
+                vec![vec!["id".into()]],
+            )
+        } else if upper.contains("INFORMATION_SCHEMA.TABLES") {
             (
                 vec!["table_name".into(), "table_schema".into()],
                 vec![vec!["pgvisor_demo".into(), "public".into()]],
@@ -150,6 +218,7 @@ impl SqlExecutor for StandaloneSqlExecutor {
                     "PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc, 64-bit".into(),
                 ]],
             )
+
         } else {
             (
                 vec!["result".into()],
@@ -224,13 +293,15 @@ pub async fn get_tables_page(
     let mut columns = Vec::new();
     let mut data_columns = Vec::new();
     let mut data_rows: Vec<Vec<Option<String>>> = Vec::new();
+    let mut primary_keys = Vec::new();
     let mut total_rows = 0u64;
     let limit = params.limit.unwrap_or(50).min(100).max(1);
     let page = params.page.unwrap_or(1).max(1);
     let offset = (page - 1) * limit;
 
     if let Some(tbl) = active_table_name {
-        if tbl.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        if is_valid_identifier(tbl) {
+            primary_keys = fetch_table_primary_keys(&*state.sql_executor, tbl).await;
             if active_tab == "schema" {
                 let schema_sql = format!(
                     "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '{}' ORDER BY ordinal_position;",
@@ -248,7 +319,8 @@ pub async fn get_tables_page(
                                 } else {
                                     None
                                 };
-                            let is_primary_key = name.eq_ignore_ascii_case("id");
+                            let is_primary_key =
+                                primary_keys.iter().any(|pk| pk.eq_ignore_ascii_case(&name));
                             columns.push(ColumnInfo {
                                 name,
                                 data_type,
@@ -296,6 +368,7 @@ pub async fn get_tables_page(
         active_tab,
         columns: &columns,
         data_columns: &data_columns,
+        primary_keys: &primary_keys,
         data_rows: &data_rows,
         total_rows,
         page,
@@ -362,10 +435,11 @@ pub async fn api_table_schema(
     State(state): State<Arc<DashboardState>>,
     Path(table): Path<String>,
 ) -> Result<Json<Vec<ColumnInfo>>, (StatusCode, String)> {
-    if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+    if !is_valid_identifier(&table) {
         return Err((StatusCode::BAD_REQUEST, "Invalid table name".into()));
     }
 
+    let primary_keys = fetch_table_primary_keys(&*state.sql_executor, &table).await;
     let sql = format!(
         "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '{}' ORDER BY ordinal_position;",
         table
@@ -389,7 +463,8 @@ pub async fn api_table_schema(
                 } else {
                     None
                 };
-                let is_primary_key = name.eq_ignore_ascii_case("id");
+                let is_primary_key =
+                    primary_keys.iter().any(|pk| pk.eq_ignore_ascii_case(&name));
                 Some(ColumnInfo {
                     name,
                     data_type,
@@ -412,13 +487,15 @@ pub async fn api_table_data(
     Path(table): Path<String>,
     Query(params): Query<TablesQuery>,
 ) -> Result<Json<TableDataResponse>, (StatusCode, String)> {
-    if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+    if !is_valid_identifier(&table) {
         return Err((StatusCode::BAD_REQUEST, "Invalid table name".into()));
     }
 
     let limit = params.limit.unwrap_or(50).min(100).max(1);
     let page = params.page.unwrap_or(1).max(1);
     let offset = (page - 1) * limit;
+
+    let primary_keys = fetch_table_primary_keys(&*state.sql_executor, &table).await;
 
     let count_sql = format!("SELECT count(*) FROM {};", table);
     let total_rows = state
@@ -439,6 +516,7 @@ pub async fn api_table_data(
     Ok(Json(TableDataResponse {
         table_name: table,
         columns: res.columns,
+        primary_keys,
         rows: res
             .rows
             .into_iter()
@@ -447,6 +525,274 @@ pub async fn api_table_data(
         total_rows,
         limit,
         offset,
+    }))
+}
+
+/// DELETE /api/tables/:table/rows -> Delete a single row by primary key
+pub async fn api_delete_table_row(
+    State(state): State<Arc<DashboardState>>,
+    Path(table): Path<String>,
+    Json(payload): Json<DeleteRowRequest>,
+) -> Result<Json<RowMutationResponse>, (StatusCode, String)> {
+    if !is_valid_identifier(&table) {
+        return Err((StatusCode::BAD_REQUEST, "Invalid table name".into()));
+    }
+
+    if payload.primary_keys.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Primary keys must be provided to identify row".into(),
+        ));
+    }
+
+    let pks = fetch_table_primary_keys(&*state.sql_executor, &table).await;
+    if pks.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Table '{}' has no primary key defined; row deletion is disabled",
+                table
+            ),
+        ));
+    }
+
+    // Ensure all defined primary keys are provided in payload
+    for pk in &pks {
+        if !payload.primary_keys.contains_key(pk) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Missing required primary key column: '{}'", pk),
+            ));
+        }
+    }
+
+    // Validate identifiers and construct WHERE clauses
+    let mut where_clauses = Vec::with_capacity(pks.len());
+    for (col, val) in &payload.primary_keys {
+        if !is_valid_identifier(col) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Invalid primary key column identifier: '{}'", col),
+            ));
+        }
+        if !pks.iter().any(|p| p.eq_ignore_ascii_case(col)) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Column '{}' is not part of the primary key for '{}'",
+                    col, table
+                ),
+            ));
+        }
+        if val.is_null() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Primary key column '{}' value cannot be null", col),
+            ));
+        }
+        where_clauses.push(format!("\"{}\" = {}", col, format_sql_literal(val)));
+    }
+
+    let sql = format!(
+        "DELETE FROM \"{}\" WHERE {};",
+        table,
+        where_clauses.join(" AND ")
+    );
+
+    let res = state
+        .sql_executor
+        .execute(&sql, 1)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let affected_rows = if let Some(r) = res.rows.first() {
+        if let Some(s) = r.first() {
+            if s.starts_with("DELETE ") {
+                s.trim_start_matches("DELETE ")
+                    .trim()
+                    .parse::<usize>()
+                    .unwrap_or(1)
+            } else {
+                1
+            }
+        } else {
+            1
+        }
+    } else {
+        1
+    };
+
+    state
+        .audit_log
+        .append(
+            AuditEventKind::DangerousSql,
+            None,
+            None,
+            format!(
+                "Deleted row from table '{}' (primary keys: {:?})",
+                table, payload.primary_keys
+            ),
+            Some(serde_json::json!({
+                "table": table,
+                "primary_keys": payload.primary_keys,
+                "affected_rows": affected_rows,
+            }).to_string()),
+        )
+        .await;
+
+    Ok(Json(RowMutationResponse {
+        status: "ok".into(),
+        message: format!("Row deleted successfully from '{}'", table),
+        affected_rows,
+    }))
+}
+
+/// PUT /api/tables/:table/rows -> Update columns for a row identified by primary key
+pub async fn api_update_table_row(
+    State(state): State<Arc<DashboardState>>,
+    Path(table): Path<String>,
+    Json(payload): Json<UpdateRowRequest>,
+) -> Result<Json<RowMutationResponse>, (StatusCode, String)> {
+    if !is_valid_identifier(&table) {
+        return Err((StatusCode::BAD_REQUEST, "Invalid table name".into()));
+    }
+
+    if payload.primary_keys.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Primary keys must be provided to identify row".into(),
+        ));
+    }
+
+    if payload.values.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "No column values provided to update".into(),
+        ));
+    }
+
+    let pks = fetch_table_primary_keys(&*state.sql_executor, &table).await;
+    if pks.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Table '{}' has no primary key defined; row updates are disabled",
+                table
+            ),
+        ));
+    }
+
+    // Ensure all defined primary keys are provided
+    for pk in &pks {
+        if !payload.primary_keys.contains_key(pk) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Missing required primary key column: '{}'", pk),
+            ));
+        }
+    }
+
+    let mut where_clauses = Vec::with_capacity(pks.len());
+    for (col, val) in &payload.primary_keys {
+        if !is_valid_identifier(col) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Invalid primary key column identifier: '{}'", col),
+            ));
+        }
+        if !pks.iter().any(|p| p.eq_ignore_ascii_case(col)) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Column '{}' is not part of the primary key for '{}'",
+                    col, table
+                ),
+            ));
+        }
+        if val.is_null() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Primary key column '{}' value cannot be null", col),
+            ));
+        }
+        where_clauses.push(format!("\"{}\" = {}", col, format_sql_literal(val)));
+    }
+
+    let mut set_clauses = Vec::with_capacity(payload.values.len());
+    for (col, val) in &payload.values {
+        if !is_valid_identifier(col) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Invalid column identifier: '{}'", col),
+            ));
+        }
+        if pks.iter().any(|p| p.eq_ignore_ascii_case(col)) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Primary key column '{}' cannot be updated directly; delete and insert instead",
+                    col
+                ),
+            ));
+        }
+        set_clauses.push(format!("\"{}\" = {}", col, format_sql_literal(val)));
+    }
+
+    let sql = format!(
+        "UPDATE \"{}\" SET {} WHERE {};",
+        table,
+        set_clauses.join(", "),
+        where_clauses.join(" AND ")
+    );
+
+    let res = state
+        .sql_executor
+        .execute(&sql, 1)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let affected_rows = if let Some(r) = res.rows.first() {
+        if let Some(s) = r.first() {
+            if s.starts_with("UPDATE ") {
+                s.trim_start_matches("UPDATE ")
+                    .trim()
+                    .parse::<usize>()
+                    .unwrap_or(1)
+            } else {
+                1
+            }
+        } else {
+            1
+        }
+    } else {
+        1
+    };
+
+    state
+        .audit_log
+        .append(
+            AuditEventKind::DangerousSql,
+            None,
+            None,
+            format!(
+                "Updated row in table '{}' (primary keys: {:?}, updated columns: {:?})",
+                table,
+                payload.primary_keys,
+                payload.values.keys().collect::<Vec<_>>()
+            ),
+            Some(serde_json::json!({
+                "table": table,
+                "primary_keys": payload.primary_keys,
+                "values": payload.values,
+                "affected_rows": affected_rows,
+            }).to_string()),
+        )
+        .await;
+
+    Ok(Json(RowMutationResponse {
+        status: "ok".into(),
+        message: format!("Row updated successfully in '{}'", table),
+        affected_rows,
     }))
 }
 

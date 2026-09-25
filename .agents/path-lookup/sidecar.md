@@ -50,6 +50,7 @@
 - `crates/pgvisor-proxy/src/main.rs` = Proxy reading `PGVISOR_CLUSTER_SECRET` and configuring topology monitor client
 - `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService::with_cluster_secret` attaching auth header to switchover/node lifecycle calls
 - `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::with_cluster_secret` attaching auth header to restore/resync calls
+- `knowledges/proxy-sidecar-communication.md` = Documentation on HTTP control API, consensus over Axum, and cluster secret authentication
 - `docker-compose.yml` = `PGVISOR_CLUSTER_SECRET` environment variable distribution across cluster services
 
 ### If you want to modify sidecar TLS/SSL certificate generation or PostgreSQL SSL settings, then check:

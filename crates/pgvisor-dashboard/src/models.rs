@@ -114,10 +114,33 @@ pub struct ColumnInfo {
 pub struct TableDataResponse {
     pub table_name: String,
     pub columns: Vec<String>,
+    #[serde(default)]
+    pub primary_keys: Vec<String>,
     pub rows: Vec<Vec<Option<String>>>,
     pub total_rows: u64,
     pub limit: usize,
     pub offset: usize,
+}
+
+/// Request payload to delete a single row identified by its primary key(s).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteRowRequest {
+    pub primary_keys: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// Request payload to update columns for a single row identified by its primary key(s).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateRowRequest {
+    pub primary_keys: std::collections::HashMap<String, serde_json::Value>,
+    pub values: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// Response returned after successfully deleting or updating a table row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RowMutationResponse {
+    pub status: String,
+    pub message: String,
+    pub affected_rows: usize,
 }
 
 /// Request to trigger a physical backup snapshot.

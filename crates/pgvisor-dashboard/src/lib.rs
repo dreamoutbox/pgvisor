@@ -8,7 +8,7 @@ use axum::extract::{Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use std::sync::Arc;
 
@@ -19,7 +19,7 @@ use crate::handlers::{
     api_metrics_history, api_metrics_snapshot, api_node_action, api_node_config, api_node_logs,
     api_nodes, api_quick_restore, api_restart_node, api_restore_backup, api_revoke_membership,
     api_set_privilege, api_start_node, api_status, api_stop_node, api_switchover, api_table_data,
-    api_table_schema, get_audit_logs_page, get_backups_page, get_login_page, get_logout,
+    api_table_schema, api_delete_table_row, api_update_table_row, get_audit_logs_page, get_backups_page, get_login_page, get_logout,
     get_nodes, get_overview, get_sql_console, get_tables_page, get_users_page, post_login,
     DashboardState,
 };
@@ -92,6 +92,10 @@ pub fn create_router(state: Arc<DashboardState>) -> Router {
         .route("/api/tables", get(api_list_tables))
         .route("/api/tables/:table/schema", get(api_table_schema))
         .route("/api/tables/:table/data", get(api_table_data))
+        .route(
+            "/api/tables/:table/rows",
+            put(api_update_table_row).delete(api_delete_table_row),
+        )
         .route(
             "/api/backups",
             get(api_list_backups).post(api_create_backup),
@@ -895,5 +899,136 @@ mod tests {
         let html = String::from_utf8_lossy(&body);
         assert!(html.contains("openInspectModal"));
         assert!(html.contains("inspectModal"));
+    }
+
+    #[tokio::test]
+    async fn test_dashboard_table_row_mutation_routes() {
+        let state = Arc::new(DashboardState::new("test-cluster", None));
+        let app = create_router(state.clone());
+
+        // 1. DELETE /api/tables/pgvisor_demo/rows with valid primary key succeeds
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/tables/pgvisor_demo/rows")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"primary_keys": {"id": 1}}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let mutation: crate::models::RowMutationResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(mutation.status, "ok");
+        assert_eq!(mutation.affected_rows, 1);
+
+        // 2. PUT /api/tables/pgvisor_demo/rows with valid primary key and values succeeds
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/api/tables/pgvisor_demo/rows")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                r#"{"primary_keys": {"id": 1}, "values": {"name": "updated_alpha", "counter": 42}}"#,
+            ))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let mutation: crate::models::RowMutationResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(mutation.status, "ok");
+        assert_eq!(mutation.affected_rows, 1);
+
+        // 3. Validation: Invalid table name returns 400
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/tables/bad;drop/rows")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"primary_keys": {"id": 1}}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // 4. Validation: Empty primary keys payload returns 400
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/tables/pgvisor_demo/rows")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"primary_keys": {}}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // 5. Validation: Null primary key value returns 400
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/tables/pgvisor_demo/rows")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"primary_keys": {"id": null}}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // 6. Validation: Attempt to update primary key in values returns 400
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/api/tables/pgvisor_demo/rows")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                r#"{"primary_keys": {"id": 1}, "values": {"id": 2}}"#,
+            ))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // 7. Validation: Empty values in update returns 400
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/api/tables/pgvisor_demo/rows")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"primary_keys": {"id": 1}, "values": {}}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // 8. Validation: Malicious column identifier in update returns 400
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/api/tables/pgvisor_demo/rows")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                r#"{"primary_keys": {"id": 1}, "values": {"name'; DROP TABLE x;--": "exploit"}}"#,
+            ))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // 9. Verify AuditLog entries were recorded
+        let (logs, _) = state.audit_log.list(10, 0, None, None).await;
+        assert!(logs.iter().any(|e| e.detail.contains("Deleted row from table 'pgvisor_demo'")));
+        assert!(logs.iter().any(|e| e.detail.contains("Updated row in table 'pgvisor_demo'")));
+
+        // 10. Auth protection when token configured
+        let auth_state = Arc::new(DashboardState::new(
+            "test-cluster",
+            Some("secret123".into()),
+        ));
+        let auth_app = create_router(auth_state);
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/tables/pgvisor_demo/rows")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"primary_keys": {"id": 1}}"#))
+            .unwrap();
+        let resp = auth_app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/tables/pgvisor_demo/rows")
+            .header("Content-Type", "application/json")
+            .header("Authorization", "Bearer secret123")
+            .body(Body::from(r#"{"primary_keys": {"id": 1}}"#))
+            .unwrap();
+        let resp = auth_app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }
