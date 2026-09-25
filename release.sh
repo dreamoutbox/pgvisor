@@ -13,6 +13,8 @@ fi
 # --no-push      : we push manually
 # --execute      : actually apply (cargo-release defaults to dry-run)
 cargo release "$LEVEL" \
+    --tag-prefix "" \
+    --tag-name 'v{{version}}' \
     --no-publish \
     --no-push \
     --execute
