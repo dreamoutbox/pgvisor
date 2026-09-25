@@ -182,7 +182,9 @@
       - Containerized with Dockerfile and docker-compose.yml
       - Demonstrates L7 read/write splitting, CRUD, and cluster diagnostics
 
-- [ ] bug: failover not triggering when stop leader node (node1)
+- [x] bug: failover not triggering when stop leader node (node1)
+
+- [x] fix tests
 
 - [ ] fix `Latency StdDev (ms)` in loadtest report as 0
 
@@ -194,7 +196,7 @@
 
 - [ ] install PG extensions with web dashboard
 
-- [ ] add demo images in README.md
+- [ ] add demo images in README and Wiki
 
 ---
 
