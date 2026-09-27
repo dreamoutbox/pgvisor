@@ -54,7 +54,7 @@ jobs:
       - name: Pre-build test Docker images
         run: |
           docker pull rustfs/rustfs:latest
-          docker build -t pgvisor-test-node:latest -t pgvisor-test-proxy:latest .
+          docker build -t dreamoutbox/pgvisor:latest .
 
       - name: Ensure test log directory exists
         run: mkdir -p tests/.logs
