@@ -8,6 +8,8 @@ if [[ "$LEVEL" != "patch" && "$LEVEL" != "minor" && "$LEVEL" != "major" ]]; then
     exit 1
 fi
 
+cd "$(dirname "$0")"
+
 # Bump version in all workspace crates and create a git tag.
 # --no-publish   : do not publish to crates.io
 # --no-push      : we push manually

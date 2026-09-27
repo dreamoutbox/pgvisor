@@ -53,3 +53,8 @@ tokio-rustls = { version = "0.26", default-features = false, features = [
 ] }
 rustls-pki-types = "1"
 rustls-pemfile = "2"
+
+[workspace.metadata.release]
+pre-release-commit-message = "chore: Release {{version}}"
+tag-name = "v{{version}}"
+tag-prefix = ""
