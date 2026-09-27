@@ -82,3 +82,10 @@
 - `tests/test-swarm-add-node.sh` = isolated DinD Swarm dynamic 4th node scale-out test (proxy port 7835).
 - `test.sh` = master test runner supporting `--swarm` to execute the Swarm DinD test suite.
 - `TODO.md` = roadmap item tracking for Docker Swarm testing.
+
+### If you want to fix a flaky test caused by replication lag (write-then-read via proxy returns empty), then check:
+
+- `tests/lib/helper.sh::run_proxy_sql` = retry loop for connection failures only; does NOT retry when a query succeeds but returns empty due to lag — callers must add their own polling loop.
+- `tests/test-incremental-pitr.sh` (step 6.6, ~line 287) = INSERT then immediate SELECT via proxy; fixed with a `for _attempt in $(seq 1 10)` polling loop with `sleep 1`.
+- `tests/test-audit-logs.sh` (step 8, ~line 299) = single-shot `curl` for dashboard HTML; fixed with a `while [ $ATTEMPTS -lt 10 ]` retry loop with `sleep 1`.
+- Pattern: any test that writes via `run_sql`/`exec_sql` and then immediately reads a result back through the proxy needs a retry/polling loop — not a one-shot read.

@@ -203,6 +203,11 @@
       - Dynamic scale out with 4th node cloning & replication in `tests/test-swarm-add-node.sh`
       - Unified test runner integration via `./test.sh --swarm`
 
+- [ ] fix flaky tests
+      - [x] test-audit-logs
+      - [x] test-incremental-pitr
+      - [ ] test-swarm-add-node
+
 ---
 
 # Backlog

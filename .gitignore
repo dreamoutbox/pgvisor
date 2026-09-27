@@ -11,3 +11,5 @@ __pycache__/
 certs/
 .playwright-mcp/
 PLAN.md
+failed-test-logs-in-ci/
+failed-swarm-test-logs/

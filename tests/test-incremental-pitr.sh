@@ -284,9 +284,18 @@ if [ "${COUNT_MID}" != "2" ]; then
     exit 1
 fi
 
-# Assert write capability works normally
+# Assert write capability works normally.
+# Use a retry loop: the INSERT routes to the leader but the SELECT may hit a
+# replica with replication lag, so we poll until the row is visible.
 run_sql "INSERT INTO t_pitr (id, val) VALUES (99, 'probe');"
-PROBE_VAL=$(run_sql "SELECT val FROM t_pitr WHERE id = 99;")
+PROBE_VAL=""
+for _attempt in $(seq 1 10); do
+    PROBE_VAL=$(run_sql "SELECT val FROM t_pitr WHERE id = 99;")
+    if [ "${PROBE_VAL}" = "probe" ]; then
+        break
+    fi
+    sleep 1
+done
 if [ "${PROBE_VAL}" != "probe" ]; then
     echo "Failed to write probe row after invalid PITR requests! Got: '${PROBE_VAL}'"
     exit 1

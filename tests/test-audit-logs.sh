@@ -297,10 +297,19 @@ fi
 
 echo ""
 echo "[8/9] Verifying web dashboard HTML page (/audit-logs)..."
-PAGE_HTML=$(curl -s -L "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/audit-logs" || true)
-if echo "${PAGE_HTML}" | grep -q "Cluster Audit Logs"; then
-    echo "Dashboard HTML rendered successfully with PITR helpers and table."
-else
+ATTEMPTS=0
+FOUND_PAGE=false
+while [ $ATTEMPTS -lt 10 ]; do
+    PAGE_HTML=$(curl -s -L "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/audit-logs" || true)
+    if echo "${PAGE_HTML}" | grep -q "Cluster Audit Logs"; then
+        echo "Dashboard HTML rendered successfully with PITR helpers and table."
+        FOUND_PAGE=true
+        break
+    fi
+    ATTEMPTS=$((ATTEMPTS + 1))
+    sleep 1
+done
+if [ "${FOUND_PAGE}" != "true" ]; then
     echo "ERROR: Dashboard /audit-logs did not render expected HTML content."
     echo "PAGE_HTML response: ${PAGE_HTML}"
     exit 1
