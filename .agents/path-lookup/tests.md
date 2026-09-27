@@ -73,7 +73,7 @@
 
 ### If you want to change Docker Swarm testing, DinD test helpers, or swarm stack profiles, then check:
 
-- `tests/lib/swarm-helper.sh` = shared library for DinD lifecycle (`swarm_up`, `swarm_down`), stack deployment (`swarm_stack_deploy`), S3 bucket init (`swarm_init_s3_bucket`), and Swarm health checking.
+- `tests/lib/swarm-helper.sh` = shared library for DinD lifecycle (`swarm_up`, `swarm_down`), image caching & concurrency locking (`ensure_swarm_image_cache`), stack deployment (`swarm_stack_deploy`), S3 bucket init (`swarm_init_s3_bucket`), and Swarm health checking.
 - `stacks/docker-stack.yml` = canonical Docker Swarm stack template for PgVisor (3 nodes, proxy, minio).
 - `stacks/docker-stack.add-node.yml` = scale-out Docker Swarm stack template with 4th node.
 - `tests/test-swarm-crud.sh` = isolated DinD Swarm basic CRUD verification test (proxy port 7832).

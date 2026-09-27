@@ -234,8 +234,10 @@ for test_file in "${TEST_SCRIPTS[@]}"; do
 done
 
 echo "============================================================="
-printf "  Total: %d | Passed: %d | Failed: %d | Duration: %ds\n" \
-    "${TOTAL_TESTS}" "${PASSED_COUNT}" "${FAILED_COUNT}" "${TOTAL_DURATION}"
+echo "Total: ${TOTAL_TESTS}"
+echo "Passed: ${PASSED_COUNT}"
+echo "Failed: ${FAILED_COUNT}"
+echo "Duration: ${TOTAL_DURATION}s\n"
 echo "============================================================="
 
 if [[ ${FAILED_COUNT} -eq 0 ]]; then
@@ -244,7 +246,7 @@ if [[ ${FAILED_COUNT} -eq 0 ]]; then
 else
     echo "Failed Tests (${FAILED_COUNT}):"
     for failed_item in "${FAILED_TESTS[@]}"; do
-        echo "  - ${failed_item}"
+        echo " - ${failed_item}"
     done
     echo "============================================================="
     echo "${FAILED_COUNT} test(s) failed. Check logs above."

@@ -29,37 +29,83 @@ SWARM_STACK_NAME=""
 SWARM_PROXY_PORT=5432
 SWARM_DASHBOARD_PORT=8080
 
+SWARM_IMAGE_CACHE_DIR="${SWARM_IMAGE_CACHE_DIR:-/tmp/pgvisor-swarm-cache}"
+SWARM_IMAGE_CACHE_TAR="${SWARM_IMAGE_CACHE_DIR}/pgvisor-swarm-images.tar"
+SWARM_IMAGE_CACHE_ID_FILE="${SWARM_IMAGE_CACHE_DIR}/pgvisor-swarm-images.id"
+SWARM_IMAGE_CACHE_LOCK="${SWARM_IMAGE_CACHE_DIR}/cache.lock"
+
 # ensure_swarm_image_cache
 #
 # Caches required images to an archive on the host so DinD loads are fast and
 # independent across concurrent test executions. Re-exports if the host image ID changes.
+# Uses file locking and atomic rename to ensure safe concurrent test execution.
 ensure_swarm_image_cache() {
-    local cache_tar="/tmp/pgvisor-swarm-images.tar"
-    local cache_id_file="/tmp/pgvisor-swarm-images.id"
+    mkdir -p "${SWARM_IMAGE_CACHE_DIR}"
+
+    # Clean up legacy /tmp/pgvisor-swarm-images.tar if it exists
+    if [ -e "/tmp/pgvisor-swarm-images.tar" ]; then
+        rm -rf "/tmp/pgvisor-swarm-images.tar" 2>/dev/null || \
+            docker run --rm -v /tmp:/host_tmp dreamoutbox/pgvisor:latest rm -rf /host_tmp/pgvisor-swarm-images.tar 2>/dev/null || true
+    fi
+
+    # Acquire exclusive file lock to synchronize concurrent test executions
+    exec 200>"${SWARM_IMAGE_CACHE_LOCK}"
+    if command -v flock >/dev/null 2>&1; then
+        flock -x 200
+    fi
+
+    # Self-heal in case the cache target was previously created as a directory
+    if [ -d "${SWARM_IMAGE_CACHE_TAR}" ]; then
+        rm -rf "${SWARM_IMAGE_CACHE_TAR}" 2>/dev/null || \
+            docker run --rm -v "${SWARM_IMAGE_CACHE_DIR}:/cache_dir" dreamoutbox/pgvisor:latest rm -rf "/cache_dir/$(basename "${SWARM_IMAGE_CACHE_TAR}")" 2>/dev/null || true
+    fi
 
     local current_node_id
     current_node_id=$(docker image inspect -f '{{.Id}}' dreamoutbox/pgvisor:latest 2>/dev/null || true)
     local current_minio_id
     current_minio_id=$(docker image inspect -f '{{.Id}}' rustfs/rustfs:latest 2>/dev/null || true)
-    local current_combined="${current_node_id}_${current_minio_id}"
 
     if [ -z "${current_node_id}" ]; then
         echo "Building PgVisor image first..."
         "${SWARM_REPO_ROOT}/dev-build-image.sh" >/dev/null
         current_node_id=$(docker image inspect -f '{{.Id}}' dreamoutbox/pgvisor:latest)
-        current_combined="${current_node_id}_${current_minio_id}"
     fi
+
+    if [ -z "${current_minio_id}" ]; then
+        echo "Pulling rustfs/rustfs:latest image..."
+        docker pull rustfs/rustfs:latest >/dev/null 2>&1 || true
+        current_minio_id=$(docker image inspect -f '{{.Id}}' rustfs/rustfs:latest 2>/dev/null || true)
+    fi
+
+    local current_combined="${current_node_id}_${current_minio_id}"
 
     local cached_id=""
-    if [ -f "${cache_id_file}" ]; then
-        cached_id=$(cat "${cache_id_file}")
+    if [ -f "${SWARM_IMAGE_CACHE_ID_FILE}" ]; then
+        cached_id=$(cat "${SWARM_IMAGE_CACHE_ID_FILE}")
     fi
 
-    if [ ! -f "${cache_tar}" ] || [ "${current_combined}" != "${cached_id}" ]; then
+    if [ ! -f "${SWARM_IMAGE_CACHE_TAR}" ] || [ "${current_combined}" != "${cached_id}" ]; then
         echo "Exporting Docker images for DinD Swarm testing..."
-        docker save dreamoutbox/pgvisor:latest rustfs/rustfs:latest -o "${cache_tar}"
-        echo "${current_combined}" > "${cache_id_file}"
+        local tmp_tar="${SWARM_IMAGE_CACHE_TAR}.tmp.$$"
+        rm -f "${tmp_tar}"
+        if docker save dreamoutbox/pgvisor:latest rustfs/rustfs:latest -o "${tmp_tar}"; then
+            mv -f "${tmp_tar}" "${SWARM_IMAGE_CACHE_TAR}"
+            echo "${current_combined}" > "${SWARM_IMAGE_CACHE_ID_FILE}"
+        else
+            rm -f "${tmp_tar}"
+            echo "ERROR: Failed to export Docker images to ${SWARM_IMAGE_CACHE_TAR}" >&2
+            if command -v flock >/dev/null 2>&1; then
+                flock -u 200 2>/dev/null || true
+            fi
+            exec 200>&- 2>/dev/null || true
+            return 1
+        fi
     fi
+
+    if command -v flock >/dev/null 2>&1; then
+        flock -u 200 2>/dev/null || true
+    fi
+    exec 200>&- 2>/dev/null || true
 }
 
 # swarm_up DIND_NAME PROXY_PORT DASHBOARD_PORT [MINIO_PORT]
@@ -78,6 +124,11 @@ swarm_up() {
 
     ensure_swarm_image_cache
 
+    if [ ! -f "${SWARM_IMAGE_CACHE_TAR}" ]; then
+        echo "ERROR: Cached image archive not found at ${SWARM_IMAGE_CACHE_TAR}" >&2
+        return 1
+    fi
+
     swarm_down "${dind_name}"
 
     local port_args=(
@@ -93,7 +144,7 @@ swarm_up() {
         --name "${dind_name}" \
         "${port_args[@]}" \
         -v "${SWARM_REPO_ROOT}:/workspace:ro" \
-        -v "/tmp/pgvisor-swarm-images.tar:/images.tar:ro" \
+        -v "${SWARM_IMAGE_CACHE_TAR}:/images.tar:ro" \
         docker:dind >/dev/null
 
     echo "Waiting for DinD Docker daemon to become responsive..."
