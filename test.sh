@@ -18,6 +18,7 @@ PARALLEL=false
 MAX_JOBS=2
 
 BUILD_IMAGES=false
+SWARM_ONLY=false
 
 # Parse CLI arguments
 while [[ $# -gt 0 ]]; do
@@ -40,6 +41,10 @@ while [[ $# -gt 0 ]]; do
             MAX_JOBS="${1#*=}"
             shift
             ;;
+        --swarm)
+            SWARM_ONLY=true
+            shift
+            ;;
         -h|--help)
             echo "Usage: $0 [options]"
             echo ""
@@ -47,6 +52,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --build            Pre-build test Docker images before running tests"
             echo "  --parallel         Run tests concurrently (default max jobs: 2)"
             echo "  -j, --jobs=N       Set max parallel jobs (implies --parallel)"
+            echo "  --swarm            Run Docker Swarm DinD tests only"
             echo "  -h, --help         Show this help message"
             exit 0
             ;;
@@ -66,30 +72,39 @@ fi
 # Ensure compose profiles are up to date
 "${REPO_ROOT}/scripts/generate-test-composes.sh" > /dev/null
 
-TEST_SCRIPTS=(
-    "test-cluster-crud.sh"
-    "test-backup-restore.sh"
-    "test-incremental-pitr.sh"
-    "test-failover.sh"
-    "test-auto-rejoin.sh"
-    "test-rejoin-fenced.sh"
-    "test-add-node.sh"
-    "test-switchover.sh"
-    "test-users-permissions.sh"
-    "test-transaction.sh"
-    "test-routing.sh"
-    "test-audit-logs.sh"
-    "test-double-failure.sh"
-    "test-proxy-failover.sh"
-    "test-metrics.sh"
-    "test-timeline-divergence.sh"
-    "test-node-lifecycle.sh"
-    "test-restart-leader.sh"
-    "test-promoted-restore.sh"
-    "test-cluster-auth.sh"
-    "test-tls.sh"
-    "test-dashboard-tables-nodes.sh"
-)
+if [[ "${SWARM_ONLY}" == "true" ]]; then
+    TEST_SCRIPTS=(
+        "test-swarm-crud.sh"
+        "test-swarm-failover.sh"
+        "test-swarm-switchover.sh"
+        "test-swarm-add-node.sh"
+    )
+else
+    TEST_SCRIPTS=(
+        "test-cluster-crud.sh"
+        "test-backup-restore.sh"
+        "test-incremental-pitr.sh"
+        "test-failover.sh"
+        "test-auto-rejoin.sh"
+        "test-rejoin-fenced.sh"
+        "test-add-node.sh"
+        "test-switchover.sh"
+        "test-users-permissions.sh"
+        "test-transaction.sh"
+        "test-routing.sh"
+        "test-audit-logs.sh"
+        "test-double-failure.sh"
+        "test-proxy-failover.sh"
+        "test-metrics.sh"
+        "test-timeline-divergence.sh"
+        "test-node-lifecycle.sh"
+        "test-restart-leader.sh"
+        "test-promoted-restore.sh"
+        "test-cluster-auth.sh"
+        "test-tls.sh"
+        "test-dashboard-tables-nodes.sh"
+    )
+fi
 
 TOTAL_TESTS="${#TEST_SCRIPTS[@]}"
 START_TIME=$(date +%s)

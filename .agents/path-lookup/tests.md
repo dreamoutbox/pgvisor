@@ -70,3 +70,15 @@
 - `tests/test-double-failure.sh` = polling retry loops for `COUNT_T1` and `COUNT_T2` proxy row counts after quorum rejoin.
 - `tests/test-add-node.sh` = polling retry loop for post-scale proxy write verification.
 - `tests/test-timeline-divergence.sh` = `assert_golf_count` polling helper preventing microsecond race conditions across round-robin standbys.
+
+### If you want to change Docker Swarm testing, DinD test helpers, or swarm stack profiles, then check:
+
+- `tests/lib/swarm-helper.sh` = shared library for DinD lifecycle (`swarm_up`, `swarm_down`), stack deployment (`swarm_stack_deploy`), S3 bucket init (`swarm_init_s3_bucket`), and Swarm health checking.
+- `stacks/docker-stack.yml` = canonical Docker Swarm stack template for PgVisor (3 nodes, proxy, minio).
+- `stacks/docker-stack.add-node.yml` = scale-out Docker Swarm stack template with 4th node.
+- `tests/test-swarm-crud.sh` = isolated DinD Swarm basic CRUD verification test (proxy port 7832).
+- `tests/test-swarm-failover.sh` = isolated DinD Swarm failover and standby auto-promotion test (proxy port 7833).
+- `tests/test-swarm-switchover.sh` = isolated DinD Swarm manual leader switchover test (proxy port 7834).
+- `tests/test-swarm-add-node.sh` = isolated DinD Swarm dynamic 4th node scale-out test (proxy port 7835).
+- `test.sh` = master test runner supporting `--swarm` to execute the Swarm DinD test suite.
+- `TODO.md` = roadmap item tracking for Docker Swarm testing.

@@ -194,7 +194,14 @@
 
 - [ ] add demo images in README and Wiki
 
-- [ ] docker swarm testing
+- [x] docker swarm testing
+      - Docker-in-Docker (DinD) isolated Swarm test harness in `tests/lib/swarm-helper.sh`
+      - Swarm stack templates in `stacks/docker-stack.yml` and `stacks/docker-stack.add-node.yml`
+      - Basic CRUD & replica verification in `tests/test-swarm-crud.sh`
+      - Leader failover & auto-promotion in `tests/test-swarm-failover.sh`
+      - Manual leader switchover & old leader auto-rejoin in `tests/test-swarm-switchover.sh`
+      - Dynamic scale out with 4th node cloning & replication in `tests/test-swarm-add-node.sh`
+      - Unified test runner integration via `./test.sh --swarm`
 
 ---
 
@@ -202,7 +209,7 @@
 
 - [ ] install PG extensions with web dashboard
 
-- [ ] make proxy and sidecar export opentelemetry data. to use with prometheus/grafana.
+- [ ] make proxy and sidecar export OTEL. to use with prometheus/grafana.
 
 - [ ] web dashboard support multiple users.
 
