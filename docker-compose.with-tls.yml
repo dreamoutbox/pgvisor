@@ -42,9 +42,8 @@ services:
     entrypoint: [ "/scripts/init-s3-bucket.sh" ]
 
   pgvisor-node1:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: dreamoutbox/pgvisor:latest
+    pull_policy: never
     container_name: pgvisor-node1
     restart: unless-stopped
     cpus: 1
@@ -80,9 +79,8 @@ services:
       retries: 10
 
   pgvisor-node2:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: dreamoutbox/pgvisor:latest
+    pull_policy: never
     container_name: pgvisor-node2
     restart: unless-stopped
     cpus: 1
@@ -119,9 +117,8 @@ services:
       retries: 10
 
   pgvisor-node3:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: dreamoutbox/pgvisor:latest
+    pull_policy: never
     container_name: pgvisor-node3
     restart: unless-stopped
     cpus: 1
@@ -158,9 +155,8 @@ services:
       retries: 10
 
   pgvisor-proxy:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: dreamoutbox/pgvisor:latest
+    pull_policy: never
     container_name: pgvisor-proxy
     entrypoint: [ "pgvisor-proxy" ]
     restart: unless-stopped

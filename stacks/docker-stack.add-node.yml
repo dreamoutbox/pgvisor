@@ -34,7 +34,7 @@ services:
       retries: 10
 
   pgvisor-node1:
-    image: pgvisor-test-node:latest
+    image: dreamoutbox/pgvisor:latest
     networks:
       - pgvisor-net
     environment:
@@ -64,7 +64,7 @@ services:
       retries: 10
 
   pgvisor-node2:
-    image: pgvisor-test-node:latest
+    image: dreamoutbox/pgvisor:latest
     networks:
       - pgvisor-net
     environment:
@@ -95,7 +95,7 @@ services:
       retries: 10
 
   pgvisor-node3:
-    image: pgvisor-test-node:latest
+    image: dreamoutbox/pgvisor:latest
     networks:
       - pgvisor-net
     environment:
@@ -126,7 +126,7 @@ services:
       retries: 10
 
   pgvisor-node4:
-    image: pgvisor-test-node:latest
+    image: dreamoutbox/pgvisor:latest
     networks:
       - pgvisor-net
     environment:
@@ -157,7 +157,7 @@ services:
       retries: 10
 
   pgvisor-proxy:
-    image: pgvisor-test-proxy:latest
+    image: dreamoutbox/pgvisor:latest
     entrypoint: [ "pgvisor-proxy" ]
     networks:
       - pgvisor-net

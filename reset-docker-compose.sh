@@ -59,8 +59,8 @@ log_msg "[1/4] Stopping containers and removing persistent volumes..."
 run_cmd docker compose down -v --remove-orphans -t 1
 
 if [ "$DO_BUILD" = true ]; then
-    log_msg "[2/4] Building PgVisor Docker images (default)..."
-    run_cmd "${SCRIPT_DIR}/dev-build-image.sh" --compose
+    log_msg "[2/4] Building PgVisor Docker image (default)..."
+    run_cmd "${SCRIPT_DIR}/dev-build-image.sh"
 else
     log_msg "[2/4] Skipping Docker image build (--no-build specified)..."
 fi

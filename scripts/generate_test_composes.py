@@ -5,7 +5,7 @@ PgVisor: Test Docker Compose Profiles Generator
 Reads root docker-compose.yml as canonical template and generates isolated,
 port-offset Compose files in composes/ for concurrent test execution.
 Enforces 1GB RAM and 1 CPU limit on all containers.
-Uses shared image tags (pgvisor-test-node:latest, pgvisor-test-proxy:latest)
+Uses shared image tag (dreamoutbox/pgvisor:latest)
 so images are built once and reused across all concurrent test stacks.
 """
 
@@ -72,20 +72,6 @@ def generate_profiles():
 
         content = re.sub(r'container_name:\s*(pgvisor-[a-zA-Z0-9_-]+)', replace_container_name, content)
 
-        # Attach shared image tags to avoid redundant image rebuilding across test projects
-        # For nodes: image: pgvisor-test-node:latest
-        content = re.sub(
-            r'(pgvisor-node[123]:\s*\n\s*build:\s*\n\s*context: \.\.\s*\n\s*dockerfile: Dockerfile)',
-            r'\1\n    image: pgvisor-test-node:latest',
-            content
-        )
-        # For proxy: image: pgvisor-test-proxy:latest
-        content = re.sub(
-            r'(pgvisor-proxy:\s*\n\s*build:\s*\n\s*context: \.\.\s*\n\s*dockerfile: Dockerfile)',
-            r'\1\n    image: pgvisor-test-proxy:latest',
-            content
-        )
-
         # Replace host ports
         content = re.sub(r'"9000:9000"', f'"{minio_p}:9000"', content)
         content = re.sub(r'"9001:9001"', f'"{minio_c_p}:9001"', content)
@@ -111,10 +97,8 @@ volumes:
 
 services:
   pgvisor-node4:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-    image: pgvisor-test-node:latest
+    image: dreamoutbox/pgvisor:latest
+    pull_policy: never
     container_name: pgvisor-add-node-node4
     cpus: 1
     mem_limit: 1g
@@ -150,10 +134,8 @@ services:
     proxy2_content = """# Auto-generated overlay for pgvisor-proxy-failover testing
 services:
   pgvisor-proxy2:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-    image: pgvisor-test-proxy:latest
+    image: dreamoutbox/pgvisor:latest
+    pull_policy: never
     container_name: pgvisor-proxy-failover-proxy2
     entrypoint: [ "pgvisor-proxy" ]
     restart: unless-stopped

@@ -4,10 +4,8 @@ volumes:
 
 services:
   pgvisor-node4:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-    image: pgvisor-test-node:latest
+    image: dreamoutbox/pgvisor:latest
+    pull_policy: never
     container_name: pgvisor-add-node-node4
     cpus: 1
     mem_limit: 1g

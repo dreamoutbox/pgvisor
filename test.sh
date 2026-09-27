@@ -65,8 +65,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "${BUILD_IMAGES}" == "true" ]]; then
-    echo "Building PgVisor test images (pgvisor-test-node:latest, pgvisor-test-proxy:latest)..."
-    docker build -t pgvisor-test-node:latest -t pgvisor-test-proxy:latest "${REPO_ROOT}"
+    echo "Building PgVisor Docker image (dreamoutbox/pgvisor:latest)..."
+    "${REPO_ROOT}/dev-build-image.sh"
 fi
 
 # Ensure compose profiles are up to date

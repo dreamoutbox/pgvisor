@@ -38,15 +38,15 @@ ensure_swarm_image_cache() {
     local cache_id_file="/tmp/pgvisor-swarm-images.id"
 
     local current_node_id
-    current_node_id=$(docker image inspect -f '{{.Id}}' pgvisor-test-node:latest 2>/dev/null || true)
+    current_node_id=$(docker image inspect -f '{{.Id}}' dreamoutbox/pgvisor:latest 2>/dev/null || true)
     local current_minio_id
     current_minio_id=$(docker image inspect -f '{{.Id}}' rustfs/rustfs:latest 2>/dev/null || true)
     local current_combined="${current_node_id}_${current_minio_id}"
 
     if [ -z "${current_node_id}" ]; then
-        echo "Building PgVisor test images first..."
-        docker build -t pgvisor-test-node:latest -t pgvisor-test-proxy:latest "${SWARM_REPO_ROOT}" >/dev/null
-        current_node_id=$(docker image inspect -f '{{.Id}}' pgvisor-test-node:latest)
+        echo "Building PgVisor image first..."
+        "${SWARM_REPO_ROOT}/dev-build-image.sh" >/dev/null
+        current_node_id=$(docker image inspect -f '{{.Id}}' dreamoutbox/pgvisor:latest)
         current_combined="${current_node_id}_${current_minio_id}"
     fi
 
@@ -57,7 +57,7 @@ ensure_swarm_image_cache() {
 
     if [ ! -f "${cache_tar}" ] || [ "${current_combined}" != "${cached_id}" ]; then
         echo "Exporting Docker images for DinD Swarm testing..."
-        docker save pgvisor-test-node:latest rustfs/rustfs:latest -o "${cache_tar}"
+        docker save dreamoutbox/pgvisor:latest rustfs/rustfs:latest -o "${cache_tar}"
         echo "${current_combined}" > "${cache_id_file}"
     fi
 }
@@ -116,7 +116,6 @@ swarm_up() {
 
     echo "Loading cached images into DinD..."
     docker exec "${dind_name}" docker load -i /images.tar >/dev/null
-    docker exec "${dind_name}" docker tag pgvisor-test-node:latest pgvisor-test-proxy:latest >/dev/null 2>&1 || true
     echo "+ DinD Swarm node ready."
 }
 
@@ -302,7 +301,7 @@ swarm_run_proxy_sql() {
             if output=$(docker exec -i "${SWARM_DIND_CONTAINER}" docker run --rm \
                 --network "${SWARM_STACK_NAME}_pgvisor-net" \
                 -e PGPASSWORD="" \
-                pgvisor-test-node:latest \
+                dreamoutbox/pgvisor:latest \
                 psql -h pgvisor-proxy -p 5432 -U postgres -d postgres -t -A -c "${query}" 2>&1); then
                 echo "${output}"
                 return 0

@@ -12,4 +12,5 @@ certs/
 .playwright-mcp/
 PLAN.md
 failed-test-logs-in-ci/
+failed-ci-test-logs/
 failed-swarm-test-logs/

@@ -26,10 +26,10 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  -t, --tag TAG      Image tag to apply (can be specified multiple times)"
-            echo "  --compose          Also run 'docker compose build'"
+            echo "  --compose          Kept for backwards compatibility (no-op)"
             echo "  -h, --help         Show this help message"
             echo ""
-            echo "If no tags are specified, defaults to: pgvisor-test-node:latest pgvisor-test-proxy:latest"
+            echo "If no tags are specified, defaults to: dreamoutbox/pgvisor:latest"
             exit 0
             ;;
         *)
@@ -40,7 +40,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ "${#TAGS[@]}" -eq 0 ]; then
-    TAGS=("pgvisor-test-node:latest" "pgvisor-test-proxy:latest")
+    TAGS=("dreamoutbox/pgvisor:latest")
 fi
 
 BUILD_ARGS=()
@@ -49,7 +49,3 @@ for tag in "${TAGS[@]}"; do
 done
 
 docker build "${BUILD_ARGS[@]}" "${REPO_ROOT}"
-
-if [ "${DO_COMPOSE}" = true ]; then
-    docker compose -f "${REPO_ROOT}/docker-compose.yml" build
-fi

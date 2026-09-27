@@ -1,10 +1,8 @@
 # Auto-generated overlay for pgvisor-proxy-failover testing
 services:
   pgvisor-proxy2:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-    image: pgvisor-test-proxy:latest
+    image: dreamoutbox/pgvisor:latest
+    pull_policy: never
     container_name: pgvisor-proxy-failover-proxy2
     entrypoint: [ "pgvisor-proxy" ]
     restart: unless-stopped
