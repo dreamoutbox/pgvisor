@@ -93,7 +93,7 @@
 - `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService` forwarding log/config inspection calls to sidecar with cluster secret auth
 - `crates/pgvisor-dashboard/templates/nodes.html` = Inspect button linking to dedicated `/nodes/:node_id/inspect` page
 - `crates/pgvisor-dashboard/templates/node_inspect.html` = Dedicated full-page diagnostics layout with live server logs and configuration/diagnostic file viewer displaying absolute paths
-- `tests/test-dashboard-tables-nodes.sh` = Integration test verifying log and diagnostic file inspection endpoints
+- `tests/test-dashboard-tables-nodes.sh` = Integration test verifying log and diagnostic file inspection endpoints — **note:** `NodeSummary` JSON uses `node_id` (not `id`); use `.node_id` in jq filters
 
 ### If you want to modify table row deletion, editing, or primary key detection in the web dashboard, then check:
 

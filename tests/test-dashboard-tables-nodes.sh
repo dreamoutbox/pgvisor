@@ -84,8 +84,8 @@ if [ "${NODE_COUNT}" -lt 3 ]; then
     exit 1
 fi
 
-LEADER_ID=$(echo "${NODES_JSON}" | jq -r '.[] | select(.role == "Leader" or .role == "leader") | .id' | head -n 1)
-STANDBY_ID=$(echo "${NODES_JSON}" | jq -r '.[] | select(.role == "Standby" or .role == "standby" or .role == "Follower" or .role == "follower") | .id' | head -n 1)
+LEADER_ID=$(echo "${NODES_JSON}" | jq -r '.[] | select(.role == "Leader" or .role == "leader") | .node_id' | head -n 1)
+STANDBY_ID=$(echo "${NODES_JSON}" | jq -r '.[] | select(.role == "Standby" or .role == "standby" or .role == "Follower" or .role == "follower") | .node_id' | head -n 1)
 
 echo "Discovered cluster nodes: Leader ID=${LEADER_ID}, Standby ID=${STANDBY_ID}"
 
