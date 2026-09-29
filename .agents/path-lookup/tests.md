@@ -69,6 +69,7 @@
 - `tests/test-switchover.sh` = 10-attempt polling retry budget for streaming replication across standbys after primary switchovers.
 - `tests/test-double-failure.sh` = polling retry loops for `COUNT_T1` and `COUNT_T2` proxy row counts after quorum rejoin.
 - `tests/test-add-node.sh` = polling retry loop for post-scale proxy write verification.
+- `tests/test-metrics.sh` = self-contained metrics & telemetry charts verification test (port 6932).
 - `tests/test-timeline-divergence.sh` = `assert_golf_count` polling helper preventing microsecond race conditions across round-robin standbys.
 
 ### If you want to change Docker Swarm testing, DinD test helpers, or swarm stack profiles, then check:
@@ -88,4 +89,5 @@
 - `tests/lib/helper.sh::run_proxy_sql` = retry loop for connection failures only; does NOT retry when a query succeeds but returns empty due to lag — callers must add their own polling loop.
 - `tests/test-incremental-pitr.sh` (step 6.6, ~line 287) = INSERT then immediate SELECT via proxy; fixed with a `for _attempt in $(seq 1 10)` polling loop with `sleep 1`.
 - `tests/test-audit-logs.sh` (step 8, ~line 299) = single-shot `curl` for dashboard HTML; fixed with a `while [ $ATTEMPTS -lt 10 ]` retry loop with `sleep 1`.
+- `tests/test-metrics.sh` (step 4, ~line 154) = CREATE TABLE & INSERT then immediate SELECT via proxy; fixed with a polling loop across round-robin standbys with `sleep 1`.
 - Pattern: any test that writes via `run_sql`/`exec_sql` and then immediately reads a result back through the proxy needs a retry/polling loop — not a one-shot read.

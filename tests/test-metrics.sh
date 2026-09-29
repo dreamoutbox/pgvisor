@@ -150,12 +150,33 @@ echo "Initial proxy writes: ${INITIAL_WRITES}, reads: ${INITIAL_READS}"
 exec_sql "CREATE TABLE IF NOT EXISTS t_metrics_test (id serial primary key, val text);"
 exec_sql "INSERT INTO t_metrics_test (val) VALUES ('test_val_1'), ('test_val_2');"
 
+# Wait for streaming replication to propagate to standby replicas before executing read queries
+REPL_VERIFIED=false
+for attempt in $(seq 1 10); do
+    OUT1=$(exec_sql "SELECT count(*) FROM t_metrics_test;" 2>&1 || true)
+    OUT2=$(exec_sql "SELECT count(*) FROM t_metrics_test;" 2>&1 || true)
+    if ! echo "${OUT1}${OUT2}" | grep -q "ERROR" && echo "${OUT1}" | grep -q "2" && echo "${OUT2}" | grep -q "2"; then
+        REPL_VERIFIED=true
+        break
+    fi
+    sleep 1
+done
+
+if [ "${REPL_VERIFIED}" != "true" ]; then
+    echo "FAILED: Standby replicas did not replicate t_metrics_test in time"
+    exec_sql "SELECT * FROM t_metrics_test;"
+    exit 1
+fi
+
 # Execute read queries
 exec_sql "SELECT * FROM t_metrics_test;"
 exec_sql "SELECT count(*) FROM t_metrics_test;"
 
 NEW_WRITES=$(curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/metrics/snapshot" | grep -o '"writes_total":[0-9]*' | cut -d: -f2)
 NEW_READS=$(curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/metrics/snapshot" | grep -o '"reads_total":[0-9]*' | cut -d: -f2)
+
+NEW_WRITES="${NEW_WRITES:-0}"
+NEW_READS="${NEW_READS:-0}"
 
 echo "New proxy writes: ${NEW_WRITES}, reads: ${NEW_READS}"
 
@@ -172,11 +193,17 @@ echo "PASSED: Proxy read and write counters successfully incremented."
 echo ""
 echo "[5/6] Verifying node-level CPU, memory, and uptime telemetry..."
 # Allow topology monitor loop to collect at least one cycle of telemetry
-sleep 3
-LATEST_SNAPSHOT=$(curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/metrics/snapshot")
+NODE_COUNT=0
+LATEST_SNAPSHOT=""
+for attempt in $(seq 1 10); do
+    LATEST_SNAPSHOT=$(curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/metrics/snapshot" 2>/dev/null || echo "{}")
+    NODE_COUNT=$(echo "${LATEST_SNAPSHOT}" | grep -o '"node_id":[0-9]*' | wc -l || echo "0")
+    if [ "${NODE_COUNT}" -ge 3 ]; then
+        break
+    fi
+    sleep 1
+done
 
-# Verify nodes array contains at least 3 nodes
-NODE_COUNT=$(echo "${LATEST_SNAPSHOT}" | grep -o '"node_id":[0-9]*' | wc -l)
 if [ "${NODE_COUNT}" -lt 3 ]; then
     echo "FAILED: Expected at least 3 nodes in telemetry, found ${NODE_COUNT}"
     exit 1
@@ -204,10 +231,17 @@ BACKUP_RES=$(curl -s -f -X POST "${AUTH_HEADER[@]}" -H "Content-Type: applicatio
 echo "Backup triggered: ${BACKUP_RES}"
 
 # Verify snapshot reflects backup
-sleep 2
-BACKUP_SNAPSHOT=$(curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/metrics/snapshot")
-TOTAL_BACKUPS=$(echo "${BACKUP_SNAPSHOT}" | grep -o '"total_backups":[0-9]*' | cut -d: -f2)
-if [ "${TOTAL_BACKUPS}" -lt 1 ]; then
+TOTAL_BACKUPS=0
+for attempt in $(seq 1 10); do
+    BACKUP_SNAPSHOT=$(curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/metrics/snapshot" 2>/dev/null || echo "{}")
+    TOTAL_BACKUPS=$(echo "${BACKUP_SNAPSHOT}" | grep -o '"total_backups":[0-9]*' | cut -d: -f2 || echo "0")
+    if [ -n "${TOTAL_BACKUPS}" ] && [ "${TOTAL_BACKUPS}" -ge 1 ]; then
+        break
+    fi
+    sleep 1
+done
+
+if [ -z "${TOTAL_BACKUPS}" ] || [ "${TOTAL_BACKUPS}" -lt 1 ]; then
     echo "FAILED: total_backups not updated in metrics snapshot"
     exit 1
 fi
