@@ -209,6 +209,10 @@
       - [x] test-swarm-add-node
       - [x] test-dashboard-tables-nodes
 
+- [x] CI fixes
+      - [x] make release.sh include version in commit message
+      - [x] add `--ci` flag to output failed test logs in CI.
+
 ---
 
 # Backlog
