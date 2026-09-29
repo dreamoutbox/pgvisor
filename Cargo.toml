@@ -55,6 +55,8 @@ rustls-pki-types = "1"
 rustls-pemfile = "2"
 
 [workspace.metadata.release]
+shared-version = true
+consolidate-commits = true
 pre-release-commit-message = "chore: Release {{version}}"
 tag-name = "v{{version}}"
 tag-prefix = ""
