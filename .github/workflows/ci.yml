@@ -51,10 +51,17 @@ jobs:
       - name: Generate test Docker Compose profiles
         run: ./scripts/generate-test-composes.sh
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Pre-build test Docker images
-        run: |
-          docker pull rustfs/rustfs:latest
-          docker build -t dreamoutbox/pgvisor:latest .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: dreamoutbox/pgvisor:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Ensure test log directory exists
         run: mkdir -p tests/.logs
