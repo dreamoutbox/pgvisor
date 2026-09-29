@@ -20,6 +20,11 @@ MAX_JOBS=2
 BUILD_IMAGES=false
 SWARM_ONLY=false
 
+CI_MODE=false
+if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    CI_MODE=true
+fi
+
 # Parse CLI arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -45,6 +50,10 @@ while [[ $# -gt 0 ]]; do
             SWARM_ONLY=true
             shift
             ;;
+        --ci)
+            CI_MODE=true
+            shift
+            ;;
         -h|--help)
             echo "Usage: $0 [options]"
             echo ""
@@ -53,6 +62,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --parallel         Run tests concurrently (default max jobs: 2)"
             echo "  -j, --jobs=N       Set max parallel jobs (implies --parallel)"
             echo "  --swarm            Run Docker Swarm DinD tests only"
+            echo "  --ci               Print failed test logs directly to console (auto in CI)"
             echo "  -h, --help         Show this help message"
             exit 0
             ;;
@@ -205,6 +215,7 @@ TOTAL_DURATION=$((TOTAL_END - START_TIME))
 PASSED_COUNT=0
 FAILED_COUNT=0
 FAILED_TESTS=()
+FAILED_LOG_ENTRIES=()
 
 echo ""
 echo "============================================================="
@@ -225,11 +236,13 @@ for test_file in "${TEST_SCRIPTS[@]}"; do
             printf "  %-26s : FAILED (%ds) -> %s\n" "${test_file}" "${dur}" "${log_file}"
             FAILED_COUNT=$((FAILED_COUNT + 1))
             FAILED_TESTS+=("${test_file} (${dur}s): ${log_file}")
+            FAILED_LOG_ENTRIES+=("${test_file}|${log_file}|${dur}")
         fi
     else
         printf "  %-26s : UNKNOWN -> %s\n" "${test_file}" "${log_file}"
         FAILED_COUNT=$((FAILED_COUNT + 1))
         FAILED_TESTS+=("${test_file} (unknown): ${log_file}")
+        FAILED_LOG_ENTRIES+=("${test_file}|${log_file}|unknown")
     fi
 done
 
@@ -237,7 +250,7 @@ echo "============================================================="
 echo "Total: ${TOTAL_TESTS}"
 echo "Passed: ${PASSED_COUNT}"
 echo "Failed: ${FAILED_COUNT}"
-echo "Duration: ${TOTAL_DURATION}s\n"
+echo "Duration: ${TOTAL_DURATION}s"
 echo "============================================================="
 
 if [[ ${FAILED_COUNT} -eq 0 ]]; then
@@ -249,6 +262,70 @@ else
         echo " - ${failed_item}"
     done
     echo "============================================================="
+
+    if [[ "${CI_MODE}" == "true" ]]; then
+        echo ""
+        echo "================================================================================"
+        echo "  CI Error Details (${FAILED_COUNT} test(s) failed)"
+        echo "================================================================================"
+        for entry in "${FAILED_LOG_ENTRIES[@]}"; do
+            t_name=$(echo "${entry}" | cut -d'|' -f1)
+            t_log=$(echo "${entry}" | cut -d'|' -f2)
+            t_dur=$(echo "${entry}" | cut -d'|' -f3)
+
+            if [[ "${t_dur}" != "unknown" ]]; then
+                dur_info="duration: ${t_dur}s"
+            else
+                dur_info="duration: unknown"
+            fi
+
+            echo ""
+            echo "================================================================================"
+            echo "====== BEGIN OF ${t_name} (${dur_info}) ======"
+            echo "================================================================================"
+            if [[ -f "${t_log}" ]]; then
+                cat "${t_log}"
+            else
+                echo "(Log file not found: ${t_log})"
+            fi
+            echo ""
+            echo "================================================================================"
+            echo "====== END OF ${t_name} ======"
+            echo "================================================================================"
+        done
+
+        if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]] && ( touch "${GITHUB_STEP_SUMMARY}" ) 2>/dev/null; then
+            {
+                echo "### ❌ Failed Integration Tests (${FAILED_COUNT})"
+                echo ""
+                for entry in "${FAILED_LOG_ENTRIES[@]}"; do
+                    t_name=$(echo "${entry}" | cut -d'|' -f1)
+                    t_log=$(echo "${entry}" | cut -d'|' -f2)
+                    t_dur=$(echo "${entry}" | cut -d'|' -f3)
+                    if [[ "${t_dur}" != "unknown" ]]; then
+                        dur_info="${t_dur}s"
+                    else
+                        dur_info="unknown"
+                    fi
+
+                    echo "<details open>"
+                    echo "<summary><b>Failed: <code>${t_name}</code> (${dur_info})</b></summary>"
+                    echo ""
+                    echo '```text'
+                    if [[ -f "${t_log}" ]]; then
+                        cat "${t_log}"
+                    else
+                        echo "(Log file not found: ${t_log})"
+                    fi
+                    echo '```'
+                    echo ""
+                    echo "</details>"
+                    echo ""
+                done
+            } >> "${GITHUB_STEP_SUMMARY}"
+        fi
+    fi
+
     echo "${FAILED_COUNT} test(s) failed. Check logs above."
     exit 1
 fi

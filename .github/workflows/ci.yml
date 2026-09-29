@@ -60,7 +60,7 @@ jobs:
         run: mkdir -p tests/.logs
 
       - name: Run integration test suite
-        run: ./test.sh -j 2
+        run: ./test.sh -j 2 --ci
 
       - name: Upload test logs
         if: always()
