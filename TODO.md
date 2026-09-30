@@ -154,8 +154,6 @@
 - [x] make backup snapshot ID include the optional label.
 - [x] add backup metadata.json. inside backup dir.
 
-- [ ] user manually upload backup file to s3, then restore with web dashboard.
-
 - [x] prevent invalid PITR input error make database can’t start (error → offline hang not restart). 
 
 - [x] store multiple audit logs in a json file. rotate if too large.
@@ -192,8 +190,6 @@
 
 - [x] edit/delete tables rows from web dashboard
 
-- [ ] add demo images in README and Wiki
-
 - [x] docker swarm testing
       - Docker-in-Docker (DinD) isolated Swarm test harness in `tests/lib/swarm-helper.sh`
       - Swarm stack templates in `stacks/docker-stack.yml` and `stacks/docker-stack.add-node.yml`
@@ -213,9 +209,13 @@
       - [x] make release.sh include version in commit message
       - [x] add `--ci` flag to output failed test logs in CI.
 
+- [x] add demo images in README and Wiki
+
 ---
 
 # Backlog
+
+- [ ] user manually upload backup file to s3, then restore with web dashboard.
 
 - [ ] install PG extensions with web dashboard
 

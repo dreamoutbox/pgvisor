@@ -5,6 +5,8 @@
 
 **PgVisor** is a lightweight, developer-friendly PostgreSQL High Availability cluster supervisor and proxy — built in Rust. It replaces the operational sprawl of Patroni + PgBouncer + Etcd + pgBackRest with a single, unified binary architecture that just works.
 
+![pgvisor web dashboard overview page](pgvisor-images/overview-1.png)
+
 ---
 
 ## Features
