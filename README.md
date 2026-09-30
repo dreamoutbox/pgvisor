@@ -1,10 +1,9 @@
 # PgVisor
 
 [![CI & Docker Publish](https://github.com/dreamoutbox/pgvisor/actions/workflows/ci.yml/badge.svg)](https://github.com/dreamoutbox/pgvisor/actions/workflows/ci.yml)
-
 [![Docker Image](https://img.shields.io/docker/v/dreamoutbox/pgvisor?sort=semver&label=docker%20image)](https://hub.docker.com/r/dreamoutbox/pgvisor)
 
-**PgVisor** is a lightweight, developer-friendly PostgreSQL High Availability cluster supervisor and proxy — built entirely in pure Rust. It replaces the operational sprawl of Patroni + PgBouncer + Etcd + pgBackRest with a single, unified binary architecture that just works.
+**PgVisor** is a lightweight, developer-friendly PostgreSQL High Availability cluster supervisor and proxy — built in Rust. It replaces the operational sprawl of Patroni + PgBouncer + Etcd + pgBackRest with a single, unified binary architecture that just works.
 
 ---
 
@@ -44,7 +43,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for full architecture specifications and 
 
 ## Getting Started
 
-PgVisor provides a production-like 3-node PostgreSQL 18 High-Availability (HA) cluster with an L7 connection proxy, automatic Raft consensus failover, continuous S3/MinIO backup archiving, and an embedded web dashboard.
+PgVisor provides a PostgreSQL 18 High-Availability (HA) cluster with an L7 connection proxy, automatic Raft consensus failover, continuous S3/MinIO backup archiving, and an embedded web dashboard.
 
 ### Prerequisites (For Users)
 

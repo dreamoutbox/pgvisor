@@ -142,7 +142,7 @@ pgvisor/
 │   ├── pgvisor-sidecar/    # PID 1 supervisor, Raft node, backup worker
 │   └── pgvisor-dashboard/  # Axum + Askama web UI & REST API
 ├── examples/               # User / consumer deployment configuration
-│   ├── docker-compose.yml  # Production-like 3-node HA cluster compose template
+│   ├── docker-compose.yml  # 3 nodes HA cluster compose template
 │   ├── .env.example        # Environment variable template for user deployment
 │   ├── setup.sh            # Consumer cluster bootstrap & management script
 │   └── scripts/            # S3 bucket initializer

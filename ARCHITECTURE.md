@@ -2,7 +2,7 @@
 
 ## 1. System Overview
 
-**PgVisor** is a lightweight, simplified PostgreSQL High Availability (HA) cluster supervisor, L7 wire protocol proxy, and cloud backup pipeline built entirely in pure Rust. It replaces the operational sprawl of Patroni, PgBouncer, Consul/Etcd, and pgBackRest with a unified, cohesive binary architecture.
+**PgVisor** is a lightweight, simplified PostgreSQL High Availability (HA) cluster supervisor, L7 wire protocol proxy, and cloud backup pipeline built in Rust. It replaces the operational sprawl of Patroni, PgBouncer, Consul/Etcd, and pgBackRest with a unified, cohesive binary architecture.
 
 ```mermaid
 graph TD

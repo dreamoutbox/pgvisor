@@ -86,7 +86,7 @@ When performing node maintenance (e.g. OS upgrades, resizing instances), adminis
 
 ## 3. Guarded SQL Console (`/sql`)
 
-The web dashboard embeds an interactive SQL editor designed for safe production inspections. It is protected by a multi-layer **SQL Security Guard**:
+The web dashboard embeds an interactive SQL editor designed for inspections. It is protected by a multi-layer **SQL Security Guard**:
 
 ### Security Layers
 
@@ -111,7 +111,7 @@ The web dashboard embeds an interactive SQL editor designed for safe production 
   </TabItem>
 </Tabs>
 
-<Aside type="caution" title="Production Safety">
+<Aside type="caution" title="Safety">
 Any query attempting mutating operations or DDL returns an immediate `PERMISSION_DENIED` error without ever contacting PostgreSQL backends.
 </Aside>
 

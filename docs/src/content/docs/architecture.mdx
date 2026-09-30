@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-**PgVisor** replaces traditional PostgreSQL High Availability toolchains (Patroni + PgBouncer + Consul/Etcd + pgBackRest) with a unified, high-performance binary architecture implemented entirely in pure Rust.
+**PgVisor** replaces traditional PostgreSQL High Availability toolchains (Patroni + PgBouncer + Consul/Etcd + pgBackRest) with a unified, high-performance binary architecture implemented in Rust.
 
 ---
 
@@ -150,4 +150,4 @@ The management dashboard runs inside `pgvisor-proxy` (port `8080`) built with Ax
 - **Real-Time Topology**: Node states, roles, and consensus terms.
 - **Administrative Switchover**: Graceful leader step-down trigger.
 - **Backup Management**: Snapshot history, on-demand backups, and PITR restore initiation.
-- **Guarded SQL Console**: Read-only AST validation protecting production databases from accidental mutations.
+- **Guarded SQL Console**: Read-only AST validation protecting databases from accidental mutations.

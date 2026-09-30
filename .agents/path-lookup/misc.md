@@ -36,7 +36,7 @@
 
 ### If you want to modify user-facing quickstart, consumer setup, or example compose files, then check:
 
-- `examples/docker-compose.yml` = Production-ready 3-node HA cluster compose template with S3 backup storage and L7 proxy
+- `examples/docker-compose.yml` = 3 nodes HA cluster compose template with S3 backup storage and L7 proxy
 - `examples/setup.sh` = Interactive and automated cluster bootstrap & management script (start, stop, restart, status, clean)
 - `examples/.env.example` = Template of configurable environment variables (ports, tokens, credentials, S3 endpoints)
 - `examples/scripts/init-s3-bucket.sh` = S3 bucket initialization script mounted into minio-init container
