@@ -116,21 +116,10 @@ Run the full integration test suite:
 ./test.sh
 
 # Run tests in parallel across isolated compose projects
-./test.sh -j 5
+./test.sh -j 4
 ```
 
-Individual test suites located in `tests/`:
-
-| Script | What it tests |
-|---|---|
-| `test-failover.sh` | Leader failure → automatic promotion → proxy rerouting → rejoin as standby |
-| `test-backup-restore.sh` | Full basebackup snapshot and restore |
-| `test-pitr.sh` | Point-in-time recovery using WAL replay |
-| `test-add-node.sh` | Dynamically adding a new standby node |
-| `test-transaction.sh` | Transaction correctness through the proxy |
-| `test-read-write-split.sh` | Read queries route to replicas, writes route to leader |
-| `test-auto-rejoin.sh` | Standby partition recovery and automatic rejoin |
-| `test-rejoin-fenced.sh` | Fenced leader rejoin as standby replica verification |
+Individual test suites located in `tests/`
 
 ### Project Structure
 

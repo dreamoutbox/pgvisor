@@ -590,7 +590,7 @@ impl PostgresSupervisor {
                 clean_config.primary_conninfo = None;
                 clean_config.recovery_target_time = None;
                 clean_config.recovery_target_action = None;
-                let _ = ConfigGenerator::write_configs(&self.data_dir, &clean_config);
+                let _ = ConfigGenerator::write_conf_only(&self.data_dir, &clean_config);
 
                 return Err(e);
             }
@@ -606,8 +606,10 @@ impl PostgresSupervisor {
             post_restore_config.primary_conninfo = None;
             post_restore_config.recovery_target_time = None;
             post_restore_config.recovery_target_action = None;
-            // Intentionally ignore failure to rewrite configs post-promote as Postgres is already running
-            let _ = ConfigGenerator::write_configs(&self.data_dir, &post_restore_config);
+            // Use write_conf_only: Postgres's startup process is still running and owns
+            // recovery.signal removal as part of its promote sequence. Touching it here
+            // would race Postgres and cause a FATAL "could not remove file" crash.
+            let _ = ConfigGenerator::write_conf_only(&self.data_dir, &post_restore_config);
         }
 
         info!("PostgreSQL restore from snapshot completed");

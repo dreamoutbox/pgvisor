@@ -1,3 +1,8 @@
+### If you want to modify recovery.signal / standby.signal creation and lifecycle, or fix PITR promote races, then check:
+
+- `crates/pgvisor-sidecar/src/config.rs` = `write_configs` (creates/removes signal files before Postgres starts) vs `write_conf_only` (rewrites only `.conf` files while Postgres is running — never touches signal files Postgres still owns)
+- `crates/pgvisor-sidecar/src/supervisor.rs::restore_from_snapshot` = post-restore reconfig must call `write_conf_only`, not `write_configs`, because Postgres's startup process removes `recovery.signal` itself during promote and will FATAL if the sidecar races it
+
 ### If you want to modify PostgreSQL sidecar process supervision, configuration templating, signals, or fencing, then check:
 
 - `crates/pgvisor-sidecar/src/config.rs` = PostgreSQL configuration generator for `postgresql.conf`, `pg_hba.conf`, replication `standby.signal`, and PITR `recovery.signal` / `restore_command`
