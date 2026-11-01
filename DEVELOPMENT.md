@@ -107,7 +107,7 @@ To start or reset the developer test cluster (wiping test volumes and rebuilding
 ./reset-docker-compose.sh
 ```
 
-> **Note**: `./reset-docker-compose.sh` is an internal developer and CI tool that wipes all persistent test volumes and forces a container image rebuild. For general usage preserving database data, use `./setup.sh`.
+> **Note**: `./dev-reset-docker-compose.sh` is an internal developer and CI tool that wipes all persistent test volumes and forces a container image rebuild. For general usage preserving database data, use `./pgvisorctl.sh`.
 
 Run the full integration test suite:
 
@@ -133,14 +133,13 @@ pgvisor/
 ├── examples/               # User / consumer deployment configuration
 │   ├── docker-compose.yml  # 3 nodes HA cluster compose template
 │   ├── .env.example        # Environment variable template for user deployment
-│   ├── setup.sh            # Consumer cluster bootstrap & management script
+│   ├── pgvisorctl.sh       # Consumer cluster bootstrap & management script
 │   └── scripts/            # S3 bucket initializer
 ├── tests/                  # Integration test scripts
 ├── scripts/                # Developer and CI helper scripts
 ├── composes/               # Test-specific Docker Compose profiles
 ├── docker-compose.yml      # Local dev/test 3-node cluster + MinIO setup
 ├── reset-docker-compose.sh # Dev helper: wipe volumes, rebuild images, launch test cluster
-├── setup.sh                # Root shortcut delegating to examples/setup.sh
 ├── test.sh                 # Integration test orchestrator
 ├── Dockerfile              # Multi-binary container image recipe
 ├── ARCHITECTURE.md         # Architecture specification

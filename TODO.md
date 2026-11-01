@@ -1,8 +1,11 @@
 # TODO
 
 - [x] assert MVP working.
+
 - [x] web dashboard. add page to list/view table data. (like adminer, but simpler)
+
 - [x] the web dashboard should have menu and page for viewing available backups.
+
 - [x] we should able to backup/restore with web dashboard.
 
 - [x] write script to test backup/restore.
@@ -215,7 +218,9 @@
 
 # Backlog
 
-- [ ] user manually upload backup file to s3, then restore with web dashboard.
+- [ ] user manually upload backup file, store to s3. then restore with web dashboard.
+
+- [ ] multiple s3 storage.
 
 - [ ] install PG extensions with web dashboard
 
@@ -230,8 +235,6 @@
       - new node send join cluster request to leader node
       - leader node register new node
       - leader node replicate (send all) cluster data (all nodes data/cluster data/status/etc.) to all nodes. incase the leader failed, so new leader can take over with up to date data.
-
-- [ ] multiple s3 storage.
 
 - [ ] Multi-Availability Zone (Multi-AZ) support
 

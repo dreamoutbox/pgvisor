@@ -56,7 +56,7 @@ Start the PgVisor HA cluster first (e.g. from the `examples` directory):
 
 ```bash
 cd examples
-./setup.sh up
+./pgvisorctl.sh up
 ```
 
 This starts the PgVisor 3-node cluster and exposes the proxy at `127.0.0.1:5432` and web dashboard at `http://127.0.0.1:8080`.

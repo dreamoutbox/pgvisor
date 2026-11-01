@@ -60,7 +60,7 @@ To bootstrap a complete 3-node HA PostgreSQL cluster with S3 backup storage and 
 
 ```bash
 cd examples/
-./setup.sh
+./pgvisorctl.sh
 ```
 
 
@@ -129,26 +129,26 @@ http://localhost:8080
 
 ### Cluster Lifecycle & Operations
 
-Manage your cluster using `./setup.sh`:
+Manage your cluster using `./pgvisorctl.sh`:
 
 ```bash
 # View live container logs
-./setup.sh logs
+./pgvisorctl.sh logs
 
 # View logs of a specific service (e.g., proxy or node1)
-./setup.sh logs pgvisor-proxy
+./pgvisorctl.sh logs pgvisor-proxy
 
 # Check cluster status and node health
-./setup.sh status
+./pgvisorctl.sh status
 
 # Restart the cluster containers
-./setup.sh restart
+./pgvisorctl.sh restart
 
 # Stop the cluster (all database volumes and data preserved)
-./setup.sh down
+./pgvisorctl.sh down
 
 # Stop the cluster and wipe persistent data volumes (clean reset)
-./setup.sh clean
+./pgvisorctl.sh clean
 ```
 
 ---

@@ -38,10 +38,10 @@ PgVisor includes a bootstrap script that orchestrates the entire cluster setup:
   </Step>
 
   <Step title="Run the Bootstrap Script">
-    Execute `setup.sh` to initialize environment variables, start containers, and verify health checks:
+    Execute `pgvisorctl.sh` to initialize environment variables, start containers, and verify health checks:
 
     ```bash
-    ./setup.sh
+    ./pgvisorctl.sh
     ```
   </Step>
 
@@ -144,37 +144,37 @@ PgVisor includes transparent failover query buffering. If the leader fails mid-f
 
 ## Management Commands
 
-The `setup.sh` script provides lifecycle helpers:
+The `pgvisorctl.sh` script provides lifecycle helpers:
 
 <Tabs>
   <TabItem label="Logs">
     ```bash
     # View all cluster logs
-    ./setup.sh logs
+    ./pgvisorctl.sh logs
 
     # View logs for a specific container
-    ./setup.sh logs pgvisor-proxy
-    ./setup.sh logs pgvisor-node1
+    ./pgvisorctl.sh logs pgvisor-proxy
+    ./pgvisorctl.sh logs pgvisor-node1
     ```
   </TabItem>
 
   <TabItem label="Status">
     ```bash
     # Check health and container states
-    ./setup.sh status
+    ./pgvisorctl.sh status
     ```
   </TabItem>
 
   <TabItem label="Lifecycle">
     ```bash
     # Restart all containers
-    ./setup.sh restart
+    ./pgvisorctl.sh restart
 
     # Stop cluster (volumes preserved)
-    ./setup.sh down
+    ./pgvisorctl.sh down
 
     # Wipe volumes and start clean
-    ./setup.sh clean
+    ./pgvisorctl.sh clean
     ```
   </TabItem>
 </Tabs>

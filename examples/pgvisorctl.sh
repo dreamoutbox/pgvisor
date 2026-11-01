@@ -17,7 +17,7 @@ SILENT=false
 LOG_ARGS=()
 
 usage() {
-    echo "Usage: ./setup.sh [command] [options]"
+    echo "Usage: ./pgvisorctl.sh [command] [options]"
     echo ""
     echo "Commands:"
     echo "  up (default)    Start the PgVisor HA cluster and wait for healthchecks"
@@ -257,9 +257,9 @@ if [ "${SILENT}" = false ]; then
     echo "  Admin Token: ${ADMIN_TOKEN}"
     echo ""
     echo "--- Cluster Management ---"
-    echo "  Check cluster status:    ./setup.sh status"
-    echo "  View live logs:          ./setup.sh logs"
-    echo "  Stop cluster:            ./setup.sh down"
-    echo "  Wipe data and reset:     ./setup.sh clean"
+    echo "  Check cluster status:    ./pgvisorctl.sh status"
+    echo "  View live logs:          ./pgvisorctl.sh logs"
+    echo "  Stop cluster:            ./pgvisorctl.sh down"
+    echo "  Wipe data and reset:     ./pgvisorctl.sh clean"
     echo "========================================================="
 fi
