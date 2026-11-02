@@ -33,8 +33,8 @@
 - `composes/docker-compose.proxy-failover-proxy2.yml` = compose overlay defining the second proxy (pgvisor-proxy2) on ports 6833/9481.
 - `reset-docker-compose.sh` = developer cluster reset script; builds images by default, supports `--no-build` and `-s`/`--silent`.
 - `dev-dump-logs.sh` = developer helper script to dump logs from pgvisor nodes 1-3 into `logs/` directory, supporting timestamps, tail, and proxy/minio options.
-- `dev-setup-demo-data.sh` = developer helper script to seed demo schema and initial records, take full backup 'f1', execute delayed inserts (echo, foxtrot, golf), and trigger incremental backup 'incr2'.
-- `scripts/dev-setup-demo-data.sh` = symlink pointing to root `dev-setup-demo-data.sh`.
+- `dev-mock-data.sh` = developer helper script to seed demo schema and initial records, take full backup 'f1', execute delayed inserts (echo, foxtrot, golf), and trigger incremental backup 'incr2'.
+- `scripts/dev-mock-data.sh` = symlink pointing to root `dev-mock-data.sh`.
 
 ### If you want to add a new integration test (new test script + compose profile), then check:
 
@@ -95,5 +95,5 @@
 
 ### If you want to change test suite failure reporting or CI test execution, then check:
 
-- `test.sh` = master test suite runner supporting `--ci` flag, failure delimiter printing, and `$GITHUB_STEP_SUMMARY` markdown output.
+- `test.sh` = master test suite runner supporting `--ci` and `--fail-fast` flags, failure delimiter printing, and `$GITHUB_STEP_SUMMARY` markdown output.
 - `.github/workflows/ci.yml` = CI workflow executing `./test.sh -j 2 --ci` and uploading test log artifacts.

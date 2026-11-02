@@ -214,13 +214,19 @@
 
 - [x] add demo images in README and Wiki
 
+- [ ] make backup record show last timestamp for PITR backup time
+
+- [ ] Database Explorer page. support switch between multiple databases
+
+- [ ] add CPU/RAM/DISK usage of each node in web dashboard
+
 ---
 
 # Backlog
 
 - [ ] user manually upload backup file, store to s3. then restore with web dashboard.
 
-- [ ] multiple s3 storage.
+- [ ] multiple s3 storage support.
 
 - [ ] install PG extensions with web dashboard
 

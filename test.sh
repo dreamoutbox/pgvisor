@@ -19,6 +19,7 @@ MAX_JOBS=2
 
 BUILD_IMAGES=false
 SWARM_ONLY=false
+FAIL_FAST=false
 
 CI_MODE=false
 if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
@@ -50,6 +51,10 @@ while [[ $# -gt 0 ]]; do
             SWARM_ONLY=true
             shift
             ;;
+        --fail-fast)
+            FAIL_FAST=true
+            shift
+            ;;
         --ci)
             CI_MODE=true
             shift
@@ -62,6 +67,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --parallel         Run tests concurrently (default max jobs: 2)"
             echo "  -j, --jobs=N       Set max parallel jobs (implies --parallel)"
             echo "  --swarm            Run Docker Swarm DinD tests only"
+            echo "  --fail-fast        Stop running remaining tests immediately after the first failure"
             echo "  --ci               Print failed test logs directly to console (auto in CI)"
             echo "  -h, --help         Show this help message"
             exit 0
@@ -156,10 +162,16 @@ run_single_test() {
     if [[ ${rc} -eq 0 ]]; then
         echo "[PASSED ] ${test_name} (${duration}s)"
         echo "PASS:${duration}" > "${LOG_DIR}/${test_name%.sh}.result"
+        return 0
     else
         echo "[FAILED ] ${test_name} (${duration}s, exit: ${rc}) - See ${log_file}"
         echo "FAIL:${duration}:${rc}" > "${LOG_DIR}/${test_name%.sh}.result"
+        return "${rc}"
     fi
+}
+
+has_any_failure() {
+    grep -q "^FAIL:" "${LOG_DIR}"/*.result 2>/dev/null
 }
 
 # Clean old result markers
@@ -184,16 +196,24 @@ if [[ "${PARALLEL}" == "true" ]]; then
     # Concurrency control using background jobs and job pool
     running=0
     for ((i=0; i<TOTAL_TESTS; i++)); do
+        if [[ "${FAIL_FAST}" == "true" ]] && has_any_failure; then
+            echo "[FAIL-FAST] Failure detected, skipping remaining queued tests..."
+            break
+        fi
         test_file="${TEST_SCRIPTS[i]}"
         # If this test was waiting initially, print [STARTED] as it launches now
         if [[ ${i} -ge ${concurrency} ]]; then
             echo "[STARTED] ${test_file}"
         fi
-        run_single_test "${test_file}" &
+        ( run_single_test "${test_file}" || true ) &
         running=$((running + 1))
         if [[ ${running} -ge ${MAX_JOBS} ]]; then
             wait -n 2>/dev/null || wait
             running=$((running - 1))
+            if [[ "${FAIL_FAST}" == "true" ]] && has_any_failure; then
+                echo "[FAIL-FAST] Failure detected, waiting for active jobs to finish cleanup..."
+                break
+            fi
         fi
     done
     wait
@@ -204,7 +224,12 @@ else
         if [[ ${i} -ge ${concurrency} ]]; then
             echo "[STARTED] ${test_file}"
         fi
-        run_single_test "${test_file}"
+        if ! run_single_test "${test_file}"; then
+            if [[ "${FAIL_FAST}" == "true" ]]; then
+                echo "[FAIL-FAST] Stopping test suite after first failure (${test_file})."
+                break
+            fi
+        fi
     done
 fi
 
@@ -214,6 +239,7 @@ TOTAL_DURATION=$((TOTAL_END - START_TIME))
 # Collate results
 PASSED_COUNT=0
 FAILED_COUNT=0
+SKIPPED_COUNT=0
 FAILED_TESTS=()
 FAILED_LOG_ENTRIES=()
 
@@ -238,6 +264,9 @@ for test_file in "${TEST_SCRIPTS[@]}"; do
             FAILED_TESTS+=("${test_file} (${dur}s): ${log_file}")
             FAILED_LOG_ENTRIES+=("${test_file}|${log_file}|${dur}")
         fi
+    elif [[ "${FAIL_FAST}" == "true" ]]; then
+        printf "  %-26s : SKIPPED (fail-fast)\n" "${test_file}"
+        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
     else
         printf "  %-26s : UNKNOWN -> %s\n" "${test_file}" "${log_file}"
         FAILED_COUNT=$((FAILED_COUNT + 1))
@@ -250,6 +279,9 @@ echo "============================================================="
 echo "Total: ${TOTAL_TESTS}"
 echo "Passed: ${PASSED_COUNT}"
 echo "Failed: ${FAILED_COUNT}"
+if [[ ${SKIPPED_COUNT} -gt 0 ]]; then
+    echo "Skipped: ${SKIPPED_COUNT}"
+fi
 echo "Duration: ${TOTAL_DURATION}s"
 echo "============================================================="
 

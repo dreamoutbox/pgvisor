@@ -1,1 +1,1 @@
-../dev-setup-demo-data.sh
+../dev-mock-data.sh

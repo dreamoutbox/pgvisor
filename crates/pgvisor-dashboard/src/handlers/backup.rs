@@ -160,8 +160,9 @@ pub trait BackupService: Send + Sync {
         let parsed_target = parse_target_timestamp(target_time)?;
         let backups = self.list_backups().await?;
         let best = find_best_backup_snapshot(&backups, parsed_target)?.clone();
+        let formatted_target = parsed_target.format("%Y-%m-%d %H:%M:%S UTC").to_string();
         let msg = self
-            .restore_backup(&best.snapshot_id, Some(target_time.to_string()))
+            .restore_backup(&best.snapshot_id, Some(formatted_target))
             .await?;
         Ok((best, msg))
     }
@@ -704,5 +705,23 @@ mod tests {
         let target_after = t2 + chrono::Duration::minutes(15);
         let best2 = find_best_backup_snapshot(&backups, target_after).unwrap();
         assert_eq!(best2.snapshot_id, "snap-2");
+    }
+
+    #[tokio::test]
+    async fn test_quick_restore_formats_rfc3339_for_postgres() {
+        let svc = StandaloneBackupService::new();
+        let backups = svc.list_backups().await.unwrap();
+        let target_dt = backups[0].created_at + chrono::Duration::minutes(10);
+        let target_rfc3339 = target_dt.to_rfc3339();
+        let expected_pg_format = target_dt.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+        let (_best, msg) = svc.quick_restore(&target_rfc3339).await.unwrap();
+        assert!(
+            msg.contains(&expected_pg_format),
+            "Expected formatted UTC timestamp '{expected_pg_format}' in restore message, got: {msg}"
+        );
+        assert!(
+            !msg.contains(&target_rfc3339),
+            "Must not pass raw RFC 3339 '{target_rfc3339}' to restore_backup: {msg}"
+        );
     }
 }

@@ -41,7 +41,18 @@ echo "========================================================="
 TMP_ARCHIVE_T0="/tmp/pitr-t0-$$.tar.gz"
 TMP_ARCHIVE_T2="/tmp/pitr-t2-$$.tar.gz"
 
+TEST_SUCCESS=0
 cleanup() {
+    if [ "${TEST_SUCCESS:-0}" -ne 1 ]; then
+        echo "=== Dump on Failure: Node 1 ==="
+        docker logs --tail 80 "pgvisor-pitr-node1" 2>&1 || true
+        echo "=== Dump on Failure: Node 2 ==="
+        docker logs --tail 80 "pgvisor-pitr-node2" 2>&1 || true
+        echo "=== Dump on Failure: Node 3 ==="
+        docker logs --tail 80 "pgvisor-pitr-node3" 2>&1 || true
+        echo "=== Dump on Failure: Proxy ==="
+        docker logs --tail 80 "pgvisor-pitr-proxy" 2>&1 || true
+    fi
     echo "Tearing down cluster ${PROJECT_NAME}..."
     rm -f "${TMP_ARCHIVE_T0}" "${TMP_ARCHIVE_T2}"
     cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
@@ -124,6 +135,7 @@ echo "✓ Snapshot T0 archive verified ($(wc -c < "${TMP_ARCHIVE_T0}") bytes)."
 # ------------------------------------------------------------------------------
 echo ""
 echo "[4/9] Inserting row 2 ('beta') at T1 and archiving WAL..."
+sleep 2
 run_sql "INSERT INTO t_pitr (id, val) VALUES (2, 'beta');"
 VAL_B=""
 for attempt in 1 2 3 4 5; do
@@ -137,9 +149,18 @@ if [ "${VAL_B}" != "beta" ]; then
     echo "Failed to insert 'beta'. Got: '${VAL_B}'"
     exit 1
 fi
-echo "✓ Inserted row 2: val='beta' (T1 state established)"
+sleep 1
+T1_RFC3339=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+echo "✓ Inserted row 2: val='beta' (T1 state established at ${T1_RFC3339})"
+sleep 2
 
-# Switch WAL on leader so the WAL segment containing 'beta' is flushed and archived
+# Insert and delete 'gamma' AFTER T1_RFC3339 so that the WAL stream contains a
+# commit timestamp strictly greater than T1_RFC3339, while leaving the final
+# table state as ('alpha', 'beta').
+run_sql "INSERT INTO t_pitr (id, val) VALUES (3, 'gamma');"
+run_sql "DELETE FROM t_pitr WHERE id = 3;"
+
+# Switch WAL on leader so the WAL segment containing 'beta' and 'gamma' is flushed and archived
 echo "  Switching WAL on leader to trigger archive_command..."
 run_sql "BEGIN; SELECT pg_switch_wal(); COMMIT;" > /dev/null 2>&1 || \
     docker exec -i "${NODE_CONTAINER}" psql -U postgres -d postgres -t -A -c "SELECT pg_switch_wal();" > /dev/null 2>&1 || true
@@ -307,6 +328,48 @@ wait_for_healthy 10 "pgvisor-pitr-node1" "pgvisor-pitr-node2" "pgvisor-pitr-node
 echo "✓ Cluster remained 100% operational with zero node crashes or hung states."
 
 # ------------------------------------------------------------------------------
+# [6.5/9] Quick-restore PITR using ISO-8601 / RFC 3339 timestamp (T1_RFC3339)
+# ------------------------------------------------------------------------------
+echo ""
+echo "[6.5/9] Testing Quick-Restore PITR with RFC 3339 timestamp (${T1_RFC3339})..."
+QUICK_HTTP=$(curl -s -o /tmp/pitr_quick_$$.txt -w "%{http_code}" -X POST "${DASHBOARD_URL}/api/backups/quick-restore" \
+    "${AUTH_HEADER[@]}" \
+    -H "Content-Type: application/json" \
+    -d "{\"recovery_target_time\": \"${T1_RFC3339}\"}")
+QUICK_RESP=$(cat /tmp/pitr_quick_$$.txt)
+rm -f /tmp/pitr_quick_$$.txt
+echo "  Quick-restore API status=${QUICK_HTTP}, response: ${QUICK_RESP}"
+if [ "${QUICK_HTTP}" != "200" ]; then
+    echo "Quick-restore failed with HTTP ${QUICK_HTTP}: ${QUICK_RESP}"
+    exit 1
+fi
+QUICK_SNAP=$(echo "${QUICK_RESP}" | json_extract "snapshot_id")
+if [ "${QUICK_SNAP}" != "${SNAP_T0}" ]; then
+    echo "Expected quick-restore to select snapshot T0 (${SNAP_T0}), got '${QUICK_SNAP}'"
+    exit 1
+fi
+
+wait_for_healthy 60 "pgvisor-pitr-node1" "pgvisor-pitr-node2" "pgvisor-pitr-node3"
+wait_for_proxy_ready "${DASHBOARD_URL}" 30 "${AUTH_HEADER[@]}"
+sleep 3
+
+COUNT_QUICK_T1=""
+for _attempt in $(seq 1 20); do
+    if COUNT_QUICK_T1=$(run_sql "SELECT COUNT(*) FROM t_pitr;" 2> /dev/null); then
+        if [ "${COUNT_QUICK_T1}" = "2" ]; then
+            break
+        fi
+    fi
+    sleep 3
+done
+
+if [ "${COUNT_QUICK_T1}" != "2" ]; then
+    echo "Quick-restore RFC 3339 PITR verification failed: expected 2 rows ('alpha' + 'beta'), got '${COUNT_QUICK_T1}'"
+    exit 1
+fi
+echo "✓ Quick-restore with RFC 3339 timestamp (${T1_RFC3339}) replayed WAL from T0 to T1 ('alpha' and 'beta' present)."
+
+# ------------------------------------------------------------------------------
 # [7/9] Restore from T0 backup at T3 -> verify table has only 'alpha'
 # ------------------------------------------------------------------------------
 echo ""
@@ -391,6 +454,7 @@ curl -s "${AUTH_HEADER[@]}" -X DELETE "${DASHBOARD_URL}/api/backups/${SNAP_T0}" 
 curl -s "${AUTH_HEADER[@]}" -X DELETE "${DASHBOARD_URL}/api/backups/${SNAP_T2}" > /dev/null 2>&1 || true
 echo "✓ Cleanup complete."
 
+TEST_SUCCESS=1
 echo ""
 echo "========================================================="
 echo "  Incremental Backup & PITR Test PASSED Successfully!    "

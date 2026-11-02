@@ -13,6 +13,21 @@ pub enum ConfigError {
     MissingDataDir(PathBuf),
 }
 
+/// Converts an RFC 3339 timestamp (e.g. `2026-11-02T00:29:36Z`) into the
+/// `YYYY-MM-DD HH:MM:SS[.f]+00` form accepted by Postgres `recovery_target_time`
+/// (Postgres rejects the `T`/`Z` form). Non-RFC 3339 input is returned unchanged.
+///
+/// Example: `to_postgres_timestamp("2026-11-02T00:29:36Z") == "2026-11-02 00:29:36+00"`
+pub fn to_postgres_timestamp(input: &str) -> String {
+    match chrono::DateTime::parse_from_rfc3339(input.trim()) {
+        Ok(dt) => dt
+            .with_timezone(&chrono::Utc)
+            .format("%Y-%m-%d %H:%M:%S%.f+00")
+            .to_string(),
+        Err(_) => input.to_string(),
+    }
+}
+
 /// Postgres instance configuration parameters.
 #[derive(Debug, Clone)]
 pub struct PostgresConfig {
@@ -147,7 +162,8 @@ impl ConfigGenerator {
         }
 
         if let Some(target_time) = &config.recovery_target_time {
-            conf_content.push_str(&format!("recovery_target_time = '{target_time}'\n"));
+            let pg_time = to_postgres_timestamp(target_time);
+            conf_content.push_str(&format!("recovery_target_time = '{pg_time}'\n"));
             conf_content.push_str("recovery_target_timeline = 'current'\n");
         }
 
@@ -234,6 +250,22 @@ mod tests {
         assert!(!conf.contains("restore_command"));
         assert!(dir.path().join("standby.signal").exists());
         assert!(!dir.path().join("recovery.signal").exists());
+    }
+
+    #[test]
+    fn test_to_postgres_timestamp_converts_rfc3339() {
+        assert_eq!(
+            to_postgres_timestamp("2026-11-02T00:29:36Z"),
+            "2026-11-02 00:29:36+00"
+        );
+        assert_eq!(
+            to_postgres_timestamp("2026-11-02T07:29:36+07:00"),
+            "2026-11-02 00:29:36+00"
+        );
+        assert_eq!(
+            to_postgres_timestamp("2026-09-13 18:32:49"),
+            "2026-09-13 18:32:49"
+        );
     }
 
     #[test]
