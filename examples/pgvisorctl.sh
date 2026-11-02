@@ -185,7 +185,7 @@ if [ "${ACTION}" = "restart" ]; then
     docker compose -f "${COMPOSE_FILE}" restart
 else
     if [ "${SILENT}" = false ]; then
-        echo "Starting PgVisor cluster (MinIO + 3 Nodes + 1 Proxy)..."
+        echo "Starting PgVisor cluster (RustFS + 3 Nodes + 1 Proxy)..."
     fi
     docker compose -f "${COMPOSE_FILE}" up -d
 fi
@@ -193,7 +193,7 @@ fi
 # Wait for healthy services
 HEALTH_TIMEOUT=90
 DEADLINE=$(( $(date +%s) + HEALTH_TIMEOUT ))
-REQUIRED_CONTAINERS=("pgvisor-minio" "pgvisor-node1" "pgvisor-node2" "pgvisor-node3")
+REQUIRED_CONTAINERS=("pgvisor-rustfs" "pgvisor-node1" "pgvisor-node2" "pgvisor-node3")
 
 if [ "${SILENT}" = false ]; then
     echo "Waiting for cluster services to become healthy..."
@@ -243,7 +243,7 @@ if [ "${SILENT}" = false ]; then
     echo "========================================================="
     echo "  - PostgreSQL L7 Proxy:     localhost:${PROXY_PORT}"
     echo "  - Web Management UI:       http://localhost:${DASHBOARD_PORT}"
-    echo "  - MinIO S3 Web Console:    http://localhost:${S3_WEB_PORT} (minioadmin / minioadmin)"
+    echo "  - RustFS S3 Web Console:   http://localhost:${S3_WEB_PORT} (minioadmin / minioadmin)"
     echo ""
     echo "--- How to Connect ---"
     echo "  psql CLI:"

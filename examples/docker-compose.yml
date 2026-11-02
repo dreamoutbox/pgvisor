@@ -5,20 +5,20 @@
 #   - 1 Leader node (PostgreSQL 18 + OpenRaft sidecar supervisor)
 #   - 2 Standby replica nodes (streaming replication from leader)
 #   - 1 L7 Postgres proxy (read/write splitting, failover buffer, web dashboard)
-#   - 1 S3 storage service (MinIO / RustFS for continuous WAL archiving & PITR)
+#   - 1 S3 storage service (RustFS for continuous WAL archiving & PITR)
 # ==============================================================================
 
 volumes:
-  minio_data:
+  rustfs_data:
   node1_data:
   node2_data:
   node3_data:
 
 services:
   # S3-compatible object storage for basebackup snapshots & WAL archives
-  minio:
+  rustfs:
     image: rustfs/rustfs:latest
-    container_name: pgvisor-minio
+    container_name: pgvisor-rustfs
     restart: unless-stopped
     cpus: 1
     mem_limit: 1g
@@ -32,7 +32,11 @@ services:
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
       RUSTFS_CONSOLE_ENABLE: "true"
     volumes:
-      - minio_data:/data
+      - rustfs_data:/data
+    networks:
+      default:
+        aliases:
+          - minio
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://127.0.0.1:9000/health" ]
       interval: 5s
@@ -40,18 +44,18 @@ services:
       retries: 5
 
   # One-shot initializer ensuring S3 backup bucket exists
-  minio-init:
+  rustfs-init:
     image: rustfs/rustfs:latest
-    container_name: pgvisor-minio-init
+    container_name: pgvisor-rustfs-init
     cpus: 1
     mem_limit: 1g
     depends_on:
-      minio:
+      rustfs:
         condition: service_healthy
     volumes:
       - ./scripts:/scripts:ro
     environment:
-      S3_ENDPOINT: http://minio:9000
+      S3_ENDPOINT: http://rustfs:9000
       S3_BUCKET: ${S3_BUCKET:-pgvisor-backups}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
@@ -77,7 +81,7 @@ services:
       PGVISOR_NODE_ID: 1
       PGVISOR_ROLE: leader
       PGVISOR_PEERS: http://pgvisor-node1:8080,http://pgvisor-node2:8080,http://pgvisor-node3:8080
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://rustfs:9000}
       S3_BUCKET: ${S3_BUCKET:-pgvisor-backups}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
@@ -85,7 +89,7 @@ services:
     volumes:
       - node1_data:/var/lib/postgresql/data
     depends_on:
-      minio-init:
+      rustfs-init:
         condition: service_completed_successfully
     healthcheck:
       test: [ "CMD", "pg_isready", "-U", "postgres", "-h", "127.0.0.1" ]
@@ -113,7 +117,7 @@ services:
       PGVISOR_NODE_ID: 2
       PGVISOR_ROLE: standby
       PGVISOR_PEERS: http://pgvisor-node1:8080,http://pgvisor-node2:8080,http://pgvisor-node3:8080
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://rustfs:9000}
       S3_BUCKET: ${S3_BUCKET:-pgvisor-backups}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
@@ -149,7 +153,7 @@ services:
       PGVISOR_NODE_ID: 3
       PGVISOR_ROLE: standby
       PGVISOR_PEERS: http://pgvisor-node1:8080,http://pgvisor-node2:8080,http://pgvisor-node3:8080
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://rustfs:9000}
       S3_BUCKET: ${S3_BUCKET:-pgvisor-backups}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
@@ -186,7 +190,7 @@ services:
       PGVISOR_STANDBY_ADDRS: pgvisor-node2:5432,pgvisor-node3:5432
       PGVISOR_CLUSTER_ID: ${PGVISOR_CLUSTER_ID:-pgvisor-cluster}
       PGVISOR_ADMIN_TOKEN: ${PGVISOR_ADMIN_TOKEN:-postgres}
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://rustfs:9000}
       S3_BUCKET: ${S3_BUCKET:-pgvisor-backups}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
