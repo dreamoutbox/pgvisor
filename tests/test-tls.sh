@@ -125,7 +125,13 @@ CREATE TABLE tls_test_table (id INT PRIMARY KEY, secret_msg TEXT);
 INSERT INTO tls_test_table VALUES (1, 'pgvisor-tls-verified');
 EOF
 
-val=$(psql "sslmode=require host=${PROXY_HOST} port=${PROXY_PORT} user=postgres dbname=postgres" -t -A -c "SELECT secret_msg FROM tls_test_table WHERE id = 1;")
+# Reads may hit a lagging replica; poll until the row is replicated.
+val=""
+for attempt in $(seq 1 10); do
+    val=$(psql "sslmode=require host=${PROXY_HOST} port=${PROXY_PORT} user=postgres dbname=postgres" -t -A -c "SELECT secret_msg FROM tls_test_table WHERE id = 1;" 2>/dev/null || true)
+    [ "${val}" = "pgvisor-tls-verified" ] && break
+    sleep 1
+done
 if [ "${val}" = "pgvisor-tls-verified" ]; then
     echo "PASS: Table created, data inserted, and read back over TLS successfully: '${val}'."
 else

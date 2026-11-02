@@ -90,6 +90,7 @@
 - `tests/test-incremental-pitr.sh` (step 6.6, ~line 287) = INSERT then immediate SELECT via proxy; fixed with a `for _attempt in $(seq 1 10)` polling loop with `sleep 1`.
 - `tests/test-audit-logs.sh` (step 8, ~line 299) = single-shot `curl` for dashboard HTML; fixed with a `while [ $ATTEMPTS -lt 10 ]` retry loop with `sleep 1`.
 - `tests/test-metrics.sh` (step 4, ~line 154) = CREATE TABLE & INSERT then immediate SELECT via proxy; fixed with a polling loop across round-robin standbys with `sleep 1`.
+- `tests/test-tls.sh` (step 5, ~line 128) = SELECT right after DDL/INSERT via proxy; fixed with a 10-attempt polling loop.
 - Pattern: any test that writes via `run_sql`/`exec_sql` and then immediately reads a result back through the proxy needs a retry/polling loop — not a one-shot read.
 
 ### If you want to change test suite failure reporting or CI test execution, then check:

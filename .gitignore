@@ -15,3 +15,4 @@ failed-test-logs-in-ci/
 failed-ci-test-logs/
 failed-swarm-test-logs/
 failed-local-test-logs/
+*.log
