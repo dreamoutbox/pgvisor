@@ -40,8 +40,17 @@
 - `examples/pgvisorctl.sh` = Interactive and automated cluster bootstrap & management script (start, stop, restart, status, clean)
 - `examples/.env.example` = Template of configurable environment variables (ports, tokens, credentials, S3 endpoints)
 - `examples/scripts/init-s3-bucket.sh` = S3 bucket initialization script mounted into rustfs-init container
+- `demo-launcher-entrypoint.sh` = DigitalOcean droplet cloud-init startup script automating Docker installation, git cloning, `./pgvisorctl.sh up`, and `dev-mock-data.sh` execution for demo showcase
+- `dev-mock-data.sh` = Demo table schema initialization, seed data insertion, and full/incremental backup trigger script
 - `README.md` = Consumer Getting Started instructions, connection details, and dashboard guide
 - `DEVELOPMENT.md` = Developer prerequisites, build/test commands, crate layout, tech stack, and configuration reference
+
+### If you want to modify DigitalOcean droplet startup, cloud-init user-data, or demo showcase bootstrapping, then check:
+
+- `demo-launcher-entrypoint.sh` = Droplet cloud-init startup script automating Docker installation, git cloning, `./pgvisorctl.sh up`, and `dev-mock-data.sh` execution
+- `examples/pgvisorctl.sh` = HA cluster bootstrap and management controller invoked by launcher
+- `dev-mock-data.sh` = Demo table schema initialization, seed data insertion, and full/incremental backup trigger script
+- `README.md` = Quickstart and 1-click cloud droplet showcase instructions
 
 ### If you want to modify lifecycle highlight logging (start, stop, backup, restore, listen to new leader, become leader), then check:
 
