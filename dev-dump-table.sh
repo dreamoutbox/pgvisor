@@ -102,7 +102,7 @@ run_psql_query() {
     # Fallback to docker exec if local psql connection fails or is unavailable
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${NODE_CONTAINER}$"; then
         # shellcheck disable=SC2086
-        if output=$(docker exec -i "${NODE_CONTAINER}" psql -U "${PGUSER}" -d "${PGDATABASE}" ${extra_flags} -c "${query}" 2>&1); then
+        if output=$(docker exec -i "${NODE_CONTAINER}" psql -h 127.0.0.1 -U "${PGUSER}" -d "${PGDATABASE}" ${extra_flags} -c "${query}" 2>&1); then
             echo "${output}"
             return 0
         fi

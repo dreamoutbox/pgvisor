@@ -50,6 +50,7 @@
 - `demo-launcher-entrypoint.sh` = Droplet cloud-init startup script automating Docker installation, git cloning, `./pgvisorctl.sh up`, and `dev-mock-data.sh` execution
 - `examples/pgvisorctl.sh` = HA cluster bootstrap and management controller invoked by launcher
 - `dev-mock-data.sh` = Demo table schema initialization, seed data insertion, and full/incremental backup trigger script
+- `dev-dump-table.sh` = Table dump verification script invoked by `dev-mock-data.sh`
 - `README.md` = Quickstart and 1-click cloud droplet showcase instructions
 
 ### If you want to modify lifecycle highlight logging (start, stop, backup, restore, listen to new leader, become leader), then check:

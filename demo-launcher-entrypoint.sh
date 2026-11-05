@@ -142,27 +142,28 @@ setup_swap_if_needed() {
 
 # ------------------------------------------------------------------------------
 # Function: install_prerequisites
-# Purpose : Ensure essential utility packages (git, curl, ca-certificates, jq)
-#           are installed via apt on Debian/Ubuntu systems.
+# Purpose : Ensure essential utility packages (git, curl, ca-certificates, jq,
+#           postgresql-client) are installed via apt on Debian/Ubuntu systems.
 # Inputs  : None
 # Example : install_prerequisites
 # ------------------------------------------------------------------------------
 install_prerequisites() {
     if command -v git >/dev/null 2>&1 && \
        command -v curl >/dev/null 2>&1 && \
-       command -v jq >/dev/null 2>&1; then
-        log_info "Prerequisite packages (git, curl, jq) already available."
+       command -v jq >/dev/null 2>&1 && \
+       command -v psql >/dev/null 2>&1; then
+        log_info "Prerequisite packages (git, curl, jq, psql) already available."
         return 0
     fi
 
-    log_info "Installing prerequisite packages (git, curl, ca-certificates, jq)..."
+    log_info "Installing prerequisite packages (git, curl, ca-certificates, jq, postgresql-client)..."
     wait_for_apt_locks
 
     local max_retries=3
     local attempt=1
     while [ "${attempt}" -le "${max_retries}" ]; do
         if apt-get update -y && \
-           apt-get install -y --no-install-recommends git curl ca-certificates jq; then
+           apt-get install -y --no-install-recommends git curl ca-certificates jq postgresql-client; then
             log_info "Prerequisites installed successfully."
             return 0
         fi

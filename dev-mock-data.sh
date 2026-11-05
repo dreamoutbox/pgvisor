@@ -108,7 +108,7 @@ run_sql() {
 
         # Fallback to docker exec if local psql connection fails or is unavailable
         if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${NODE_CONTAINER}$"; then
-            if output=$(docker exec -i "${NODE_CONTAINER}" psql -U "${PGUSER}" -d "${PGDATABASE}" -c "${query}" 2>&1); then
+            if output=$(docker exec -i "${NODE_CONTAINER}" psql -h 127.0.0.1 -U "${PGUSER}" -d "${PGDATABASE}" -c "${query}" 2>&1); then
                 echo "${output}"
                 return 0
             fi
@@ -137,7 +137,7 @@ trigger_backup() {
 # Helper to flush and rotate WAL segment so changes are archived immediately
 switch_wal() {
     run_sql "BEGIN; SELECT pg_switch_wal(); COMMIT;" > /dev/null 2>&1 || \
-        docker exec -i "${NODE_CONTAINER}" psql -U postgres -d postgres -t -A -c "SELECT pg_switch_wal();" > /dev/null 2>&1 || true
+        docker exec -i "${NODE_CONTAINER}" psql -h 127.0.0.1 -U postgres -d postgres -t -A -c "SELECT pg_switch_wal();" > /dev/null 2>&1 || true
 }
 
 echo "============================================================="
