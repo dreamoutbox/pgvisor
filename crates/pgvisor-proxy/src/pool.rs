@@ -53,6 +53,7 @@ pub struct PooledConnection {
     pub stream: BackendStream,
     pub role: BackendRole,
     pub addr: String,
+    pub database: String,
     pub created_at: Instant,
 }
 
@@ -61,6 +62,7 @@ impl std::fmt::Debug for PooledConnection {
         f.debug_struct("PooledConnection")
             .field("role", &self.role)
             .field("addr", &self.addr)
+            .field("database", &self.database)
             .field("created_at", &self.created_at)
             .finish()
     }
@@ -131,11 +133,9 @@ impl PooledConnection {
         // 1. Send StartupMessage to backend
         let mut startup_buf = BytesMut::new();
         let mut params = HashMap::new();
+        let db_name = database.unwrap_or("postgres").to_string();
         params.insert("user".to_string(), user.unwrap_or("postgres").to_string());
-        params.insert(
-            "database".to_string(),
-            database.unwrap_or("postgres").to_string(),
-        );
+        params.insert("database".to_string(), db_name.clone());
         params.insert("client_encoding".to_string(), "UTF8".to_string());
 
         let startup = StartupMessage {
@@ -167,6 +167,7 @@ impl PooledConnection {
                             stream,
                             role,
                             addr: addr.to_string(),
+                            database: db_name,
                             created_at: Instant::now(),
                         });
                     }
@@ -301,6 +302,7 @@ impl ConnectionPool {
         user: Option<&str>,
         database: Option<&str>,
     ) -> Result<PooledConnection, PoolError> {
+        let req_db = database.unwrap_or("postgres");
         let (idle_opt, target_addr) = {
             let mut inner = self.inner.lock().await;
             match role {
@@ -308,7 +310,11 @@ impl ConnectionPool {
                     let addr = inner.leader_addr.clone().ok_or_else(|| {
                         PoolError::BackendUnavailable("No active Raft leader registered".into())
                     })?;
-                    let conn = inner.idle_leaders.pop_front();
+                    let conn = if let Some(pos) = inner.idle_leaders.iter().position(|c| c.database == req_db) {
+                        inner.idle_leaders.remove(pos)
+                    } else {
+                        None
+                    };
                     (conn, addr)
                 }
                 BackendRole::Standby => {
@@ -321,12 +327,20 @@ impl ConnectionPool {
                         let conn = inner
                             .idle_standbys
                             .get_mut(&addr)
-                            .and_then(|q| q.pop_front());
+                            .and_then(|q| {
+                                let pos = q.iter().position(|c| c.database == req_db)?;
+                                q.remove(pos)
+                            });
 
                         (conn, addr)
                     } else if let Some(addr) = inner.leader_addr.clone() {
                         // Fallback to leader if no standby is currently registered
-                        (inner.idle_leaders.pop_front(), addr)
+                        let conn = if let Some(pos) = inner.idle_leaders.iter().position(|c| c.database == req_db) {
+                            inner.idle_leaders.remove(pos)
+                        } else {
+                            None
+                        };
+                        (conn, addr)
                     } else {
                         return Err(PoolError::BackendUnavailable(
                             "No database instances available".into(),

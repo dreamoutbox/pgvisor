@@ -34,6 +34,8 @@ pub struct SqlConsoleTemplate {
 #[derive(Template)]
 #[template(path = "tables.html")]
 pub struct TablesTemplate<'a> {
+    pub databases: &'a [String],
+    pub active_db: &'a str,
     pub tables: &'a [TableSummary],
     pub active_table: Option<&'a str>,
     pub active_tab: &'a str,
@@ -50,6 +52,10 @@ pub struct TablesTemplate<'a> {
 }
 
 impl<'a> TablesTemplate<'a> {
+    pub fn is_active_db(&self, db: &str) -> bool {
+        self.active_db == db
+    }
+
     pub fn is_active_table(&self, name: &str) -> bool {
         self.active_table == Some(name)
     }

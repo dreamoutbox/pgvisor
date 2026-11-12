@@ -216,11 +216,11 @@
 
 - [ ] user import backups from file upload with web dashboard, store to s3. then backend perform restore process.
 
-- [ ] show `last_transaction_time` & `last_transaction_xid` in backup list table in `http://localhost:8080/backups`
+- [x] show `last_transaction_time` & `last_transaction_xid` in backup list table in `http://localhost:8080/backups`
 
-- [ ] Database Explorer page. add dropdown switch between multiple databases
+- [x] Database Explorer page. add dropdown switch between multiple databases
 
-- [ ] pgvisor add interactive slider drag for PITR target time 
+- [x] pgvisor add interactive slider drag for PITR target time 
 
 - [ ] add CPU/RAM/DISK usage of each node in web dashboard
 
@@ -244,7 +244,7 @@
 
 - [ ] remove `crates/pgvisor-proxy` and use `https://github.com/pgdogdev/pgdog`
 
-- [ ] move web dashboard to separate standalone module. separate from `pgvisor-proxy`
+- [ ] move web dashboard to separate standalone module. separate from `pgvisor-proxy`. use list of pgvisor-sidecar URLs as connection string. ping all sidecars and find leader.
 
 - [ ] multiple s3 buckets/storages support.
 

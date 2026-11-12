@@ -15,7 +15,7 @@ use std::sync::Arc;
 use crate::handlers::{
     api_alter_user, api_create_backup, api_create_user, api_delete_backup, api_download_backup,
     api_drop_user, api_execute_sql, api_find_best_backup, api_get_privileges, api_get_user,
-    api_grant_membership, api_list_audit_logs, api_list_backups, api_list_tables, api_list_users,
+    api_grant_membership, api_list_audit_logs, api_list_backups, api_list_databases, api_list_tables, api_list_users,
     api_metrics_history, api_metrics_snapshot, api_node_action, api_node_config, api_node_logs,
     api_nodes, api_pitr_window, api_quick_restore, api_restart_node, api_restore_backup, api_revoke_membership,
     api_set_privilege, api_start_node, api_status, api_stop_node, api_switchover, api_table_data,
@@ -91,6 +91,7 @@ pub fn create_router(state: Arc<DashboardState>) -> Router {
         .route("/api/metrics/history", get(api_metrics_history))
         .route("/api/audit-logs", get(api_list_audit_logs))
         .route("/api/sql", post(api_execute_sql))
+        .route("/api/databases", get(api_list_databases))
         .route("/api/tables", get(api_list_tables))
         .route("/api/tables/:table/schema", get(api_table_schema))
         .route("/api/tables/:table/data", get(api_table_data))
@@ -229,12 +230,46 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        // 7. Test GET /api/tables
+        // 7. Test GET /api/databases and GET /api/tables
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/api/tables")
+                    .uri("/api/databases")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let dbs: Vec<String> = serde_json::from_slice(&body).unwrap();
+        assert!(dbs.contains(&"postgres".to_string()));
+        assert!(dbs.contains(&"pgvisor_test".to_string()));
+
+        // 7a. Test GET /tables with ?db=
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/tables?db=pgvisor_test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("DB: pgvisor_test"));
+        assert!(html.contains("id=\"db-select\""));
+
+        // 7b. Test GET /api/tables with valid and invalid db
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/tables?db=pgvisor_test")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -242,12 +277,24 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        // 8. Test GET /api/tables/pgvisor_demo/schema
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/api/tables/pgvisor_demo/schema")
+                    .uri("/api/tables?db=invalid-db-name!")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // 8. Test GET /api/tables/pgvisor_demo/schema with valid and invalid db
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/tables/pgvisor_demo/schema?db=pgvisor_test")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -255,18 +302,65 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        // 9. Test GET /api/tables/pgvisor_demo/data
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/api/tables/pgvisor_demo/data")
+                    .uri("/api/tables/pgvisor_demo/schema?db=invalid-db!")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // 9. Test GET /api/tables/pgvisor_demo/data with valid and invalid db
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/tables/pgvisor_demo/data?db=pgvisor_test")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/tables/pgvisor_demo/data?db=invalid-db!")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // 9a. Test POST /api/sql with target database
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/sql")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                r#"{"query": "SELECT * FROM pgvisor_demo LIMIT 50;", "database": "pgvisor_test"}"#,
+            ))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/sql")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                r#"{"query": "SELECT * FROM pgvisor_demo LIMIT 50;", "database": "invalid-db!"}"#,
+            ))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         // 10. Test GET /backups page
         let response = app

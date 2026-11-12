@@ -71,6 +71,8 @@ pub struct ClusterOverview {
 pub struct SqlQueryRequest {
     pub query: String,
     pub max_rows: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database: Option<String>,
 }
 
 /// Result of a successfully executed console SQL query.

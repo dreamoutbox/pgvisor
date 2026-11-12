@@ -18,10 +18,11 @@ pub use cluster::{
     api_status, api_stop_node, api_switchover, get_node_inspect_page, get_nodes, get_overview,
     ClusterService, StandaloneClusterService,
 };
-pub(crate) use sql::api_list_tables;
 pub use sql::{
-    api_delete_table_row, api_execute_sql, api_table_data, api_table_schema, api_update_table_row,
-    get_sql_console, get_tables_page, SqlExecutor, StandaloneSqlExecutor, TablesQuery,
+    api_delete_table_row, api_execute_sql, api_list_databases, api_list_tables, api_table_data,
+    api_table_schema, api_update_table_row, fetch_table_primary_keys,
+    fetch_table_primary_keys_on_db, get_sql_console, get_tables_page, SqlExecutor,
+    StandaloneSqlExecutor, TablesQuery,
 };
 pub use state::DashboardState;
 pub use users::{

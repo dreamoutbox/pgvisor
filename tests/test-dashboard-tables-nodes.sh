@@ -49,7 +49,7 @@ echo "  PgVisor Dashboard Inspection & Row Mutation Test       "
 echo "  Project: ${PROJECT_NAME} | Port: ${PROXY_PORT}         "
 echo "========================================================="
 
-echo "[0/8] Starting isolated test cluster ${PROJECT_NAME}..."
+echo "[0/9] Starting isolated test cluster ${PROJECT_NAME}..."
 cluster_down "${PROJECT_NAME}" "${COMPOSE_FILE}"
 cluster_up   "${PROJECT_NAME}" "${COMPOSE_FILE}"
 
@@ -57,13 +57,18 @@ echo "Waiting for cluster containers to report healthy..."
 wait_for_healthy 120 "${PROJECT_NAME}-minio" "${NODE1_CONTAINER}" "${NODE2_CONTAINER}" "${NODE3_CONTAINER}"
 wait_for_proxy_ready "${DASHBOARD_URL}" 60 "${AUTH_HEADER[@]}"
 
-exec_sql() {
-    local sql="$1"
+exec_sql_db() {
+    local db="$1"
+    local sql="$2"
     if command -v psql &> /dev/null; then
-        PGPASSWORD="" psql -h "${PROXY_HOST}" -p "${PROXY_PORT}" -U postgres -d postgres -c "${sql}"
+        PGPASSWORD="" psql -h "${PROXY_HOST}" -p "${PROXY_PORT}" -U postgres -d "${db}" -c "${sql}"
     else
-        docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" exec -T pgvisor-proxy psql -h localhost -p 5432 -U postgres -d postgres -c "${sql}"
+        docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" exec -T pgvisor-proxy psql -h localhost -p 5432 -U postgres -d "${db}" -c "${sql}"
     fi
+}
+
+exec_sql() {
+    exec_sql_db postgres "$1"
 }
 
 echo ""
@@ -269,7 +274,7 @@ fi
 echo "Verified: Row id=1 successfully deleted from database"
 
 echo ""
-echo "[8/8] Verifying audit log records for row mutations..."
+echo "[8/9] Verifying audit log records for row mutations..."
 AUDIT_RESP=$(curl -s "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/audit-logs?limit=20")
 HAS_DELETE_AUDIT=$(echo "${AUDIT_RESP}" | jq -r '.events[] | select(.detail | contains("Deleted row from table '\''inventory'\''")) | .detail' | head -n 1)
 HAS_UPDATE_AUDIT=$(echo "${AUDIT_RESP}" | jq -r '.events[] | select(.detail | contains("Updated row in table '\''inventory'\''")) | .detail' | head -n 1)
@@ -287,6 +292,62 @@ if [ -z "${HAS_UPDATE_AUDIT}" ]; then
     exit 1
 fi
 echo "Verified audit entry: ${HAS_UPDATE_AUDIT}"
+
+echo ""
+echo "[9/9] Testing multiple database support in Database Explorer..."
+exec_sql "CREATE DATABASE test_extra_db;"
+exec_sql_db test_extra_db "CREATE TABLE products (id serial primary key, name text, price integer);"
+exec_sql_db test_extra_db "INSERT INTO products (name, price) VALUES ('Widget A', 100), ('Widget B', 250);"
+
+DBS_JSON=""
+for attempt in $(seq 1 10); do
+    DBS_JSON=$(curl -s "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/databases" || true)
+    if echo "${DBS_JSON}" | grep -q "test_extra_db"; then
+        break
+    fi
+    sleep 1
+done
+
+if ! echo "${DBS_JSON}" | grep -q "test_extra_db"; then
+    echo "Error: /api/databases did not return test_extra_db!"
+    echo "Response: ${DBS_JSON}"
+    exit 1
+fi
+echo "Discovered databases via /api/databases: ${DBS_JSON}"
+
+TABLES_JSON=""
+for attempt in $(seq 1 10); do
+    TABLES_JSON=$(curl -s "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/tables?db=test_extra_db" || true)
+    if echo "${TABLES_JSON}" | grep -q "products"; then
+        break
+    fi
+    sleep 1
+done
+
+if ! echo "${TABLES_JSON}" | grep -q "products"; then
+    echo "Error: /api/tables?db=test_extra_db did not return 'products' table!"
+    echo "Response: ${TABLES_JSON}"
+    exit 1
+fi
+echo "Verified table discovery on test_extra_db: products table found"
+
+SCHEMA_RESP=$(curl -s "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/tables/products/schema?db=test_extra_db")
+if ! echo "${SCHEMA_RESP}" | grep -q "price"; then
+    echo "Error: products schema did not return 'price' column!"
+    echo "Response: ${SCHEMA_RESP}"
+    exit 1
+fi
+echo "Verified products table schema on test_extra_db"
+
+TABLES_PAGE_HTML=$(curl -s "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/tables?db=test_extra_db")
+if ! echo "${TABLES_PAGE_HTML}" | grep -q "DB: test_extra_db"; then
+    echo "Error: /tables?db=test_extra_db HTML does not display DB: test_extra_db"
+    exit 1
+fi
+echo "Verified /tables page rendered with active database test_extra_db"
+
+exec_sql "DROP DATABASE test_extra_db;"
+echo "Cleaned up test_extra_db"
 
 echo ""
 echo "========================================================="

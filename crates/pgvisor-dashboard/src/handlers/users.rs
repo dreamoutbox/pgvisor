@@ -508,7 +508,10 @@ pub async fn get_users_page(
         Vec::new()
     };
 
-    let all_tables = api_list_tables(State(state.clone())).await.0;
+    let all_tables = api_list_tables(State(state.clone()), Query(Default::default()))
+        .await
+        .map(|Json(t)| t)
+        .unwrap_or_default();
 
     let template = UsersTemplate {
         roles: &roles,

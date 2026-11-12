@@ -47,8 +47,12 @@ pub fn format_sql_literal(value: &serde_json::Value) -> String {
     }
 }
 
-/// Fetch primary key column names for a given table from the PostgreSQL catalog.
-pub async fn fetch_table_primary_keys(sql_executor: &dyn SqlExecutor, table: &str) -> Vec<String> {
+/// Fetch primary key column names for a given table from the PostgreSQL catalog on an optional target database.
+pub async fn fetch_table_primary_keys_on_db(
+    sql_executor: &dyn SqlExecutor,
+    table: &str,
+    db: Option<&str>,
+) -> Vec<String> {
     if !is_valid_identifier(table) {
         return Vec::new();
     }
@@ -56,7 +60,7 @@ pub async fn fetch_table_primary_keys(sql_executor: &dyn SqlExecutor, table: &st
         "SELECT kcu.column_name FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema WHERE tc.table_name = '{}' AND tc.table_schema = 'public' AND tc.constraint_type = 'PRIMARY KEY' ORDER BY kcu.ordinal_position;",
         table
     );
-    if let Ok(res) = sql_executor.execute(&pk_sql, 100).await {
+    if let Ok(res) = sql_executor.execute_on_db(&pk_sql, 100, db).await {
         res.rows
             .into_iter()
             .filter_map(|mut r| r.drain(..).next())
@@ -66,10 +70,24 @@ pub async fn fetch_table_primary_keys(sql_executor: &dyn SqlExecutor, table: &st
     }
 }
 
+/// Fetch primary key column names for a given table from the PostgreSQL catalog.
+pub async fn fetch_table_primary_keys(sql_executor: &dyn SqlExecutor, table: &str) -> Vec<String> {
+    fetch_table_primary_keys_on_db(sql_executor, table, None).await
+}
+
 /// Abstraction for executing SQL queries on PostgreSQL backends.
 #[async_trait::async_trait]
 pub trait SqlExecutor: Send + Sync {
-    async fn execute(&self, sql: &str, max_rows: usize) -> Result<SqlQueryResult, String>;
+    async fn execute(&self, sql: &str, max_rows: usize) -> Result<SqlQueryResult, String> {
+        self.execute_on_db(sql, max_rows, None).await
+    }
+
+    async fn execute_on_db(
+        &self,
+        sql: &str,
+        max_rows: usize,
+        db: Option<&str>,
+    ) -> Result<SqlQueryResult, String>;
 }
 
 /// In-memory or proxy-connected executor for the dashboard console.
@@ -77,7 +95,12 @@ pub struct StandaloneSqlExecutor;
 
 #[async_trait::async_trait]
 impl SqlExecutor for StandaloneSqlExecutor {
-    async fn execute(&self, sql: &str, max_rows: usize) -> Result<SqlQueryResult, String> {
+    async fn execute_on_db(
+        &self,
+        sql: &str,
+        max_rows: usize,
+        _db: Option<&str>,
+    ) -> Result<SqlQueryResult, String> {
         let start = Instant::now();
         // Safe standard catalog query simulation for standalone dashboard mode
         let upper = sql.to_uppercase();
@@ -181,6 +204,11 @@ impl SqlExecutor for StandaloneSqlExecutor {
                     ],
                 ],
             )
+        } else if upper.contains("PG_DATABASE") {
+            (
+                vec!["datname".into()],
+                vec![vec!["postgres".into()], vec!["pgvisor_test".into()]],
+            )
         } else if upper.contains("PG_STAT_DATABASE") {
             (
                 vec![
@@ -228,6 +256,7 @@ impl SqlExecutor for StandaloneSqlExecutor {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct TablesQuery {
+    pub db: Option<String>,
     pub table: Option<String>,
     pub tab: Option<String>,
     pub page: Option<usize>,
@@ -240,10 +269,46 @@ pub async fn get_tables_page(
     State(state): State<Arc<DashboardState>>,
     Query(params): Query<TablesQuery>,
 ) -> Result<Html<String>, StatusCode> {
+    let dbs_sql = "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname ASC;";
+    let dbs_res = state
+        .sql_executor
+        .execute(dbs_sql, 100)
+        .await
+        .unwrap_or_else(|_| SqlQueryResult {
+            columns: vec!["datname".into()],
+            rows: vec![vec!["postgres".into()]],
+            execution_time_ms: 0,
+            row_count: 1,
+            truncated: false,
+        });
+
+    let databases: Vec<String> = {
+        let mut list: Vec<String> = dbs_res
+            .rows
+            .into_iter()
+            .filter_map(|mut r| r.drain(..).next())
+            .filter(|d| is_valid_identifier(d))
+            .collect();
+        if list.is_empty() {
+            list.push("postgres".into());
+        }
+        list
+    };
+
+    let active_db = if let Some(ref d) = params.db {
+        if is_valid_identifier(d) && databases.iter().any(|db| db == d) {
+            d.as_str()
+        } else {
+            databases.first().map(|s| s.as_str()).unwrap_or("postgres")
+        }
+    } else {
+        databases.first().map(|s| s.as_str()).unwrap_or("postgres")
+    };
+
     let tables_sql = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name;";
     let tables_res = state
         .sql_executor
-        .execute(tables_sql, 100)
+        .execute_on_db(tables_sql, 100, Some(active_db))
         .await
         .unwrap_or_else(|_| SqlQueryResult {
             columns: vec!["table_name".into()],
@@ -288,13 +353,13 @@ pub async fn get_tables_page(
 
     if let Some(tbl) = active_table_name {
         if is_valid_identifier(tbl) {
-            primary_keys = fetch_table_primary_keys(&*state.sql_executor, tbl).await;
+            primary_keys = fetch_table_primary_keys_on_db(&*state.sql_executor, tbl, Some(active_db)).await;
             if active_tab == "schema" {
                 let schema_sql = format!(
                     "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '{}' ORDER BY ordinal_position;",
                     tbl
                 );
-                if let Ok(res) = state.sql_executor.execute(&schema_sql, 200).await {
+                if let Ok(res) = state.sql_executor.execute_on_db(&schema_sql, 200, Some(active_db)).await {
                     for row in res.rows {
                         if row.len() >= 3 {
                             let name = row[0].clone();
@@ -320,7 +385,7 @@ pub async fn get_tables_page(
                 }
             } else if active_tab == "data" {
                 let count_sql = format!("SELECT count(*) FROM {};", tbl);
-                if let Ok(count_res) = state.sql_executor.execute(&count_sql, 1).await {
+                if let Ok(count_res) = state.sql_executor.execute_on_db(&count_sql, 1, Some(active_db)).await {
                     if let Some(r) = count_res.rows.first() {
                         if let Some(c_str) = r.first() {
                             total_rows = c_str.parse().unwrap_or(0);
@@ -329,7 +394,7 @@ pub async fn get_tables_page(
                 }
 
                 let data_sql = format!("SELECT * FROM {} LIMIT {} OFFSET {};", tbl, limit, offset);
-                if let Ok(data_res) = state.sql_executor.execute(&data_sql, limit).await {
+                if let Ok(data_res) = state.sql_executor.execute_on_db(&data_sql, limit, Some(active_db)).await {
                     data_columns = data_res.columns;
                     data_rows = data_res
                         .rows
@@ -350,6 +415,8 @@ pub async fn get_tables_page(
     };
 
     let template = TablesTemplate {
+        databases: &databases,
+        active_db,
         tables: &tables,
         active_table: active_table_name,
         active_tab,
@@ -385,20 +452,41 @@ pub async fn get_sql_console(
     .await
 }
 
+/// GET /api/databases -> Returns JSON list of non-template databases
+pub async fn api_list_databases(
+    State(state): State<Arc<DashboardState>>,
+) -> Result<Json<Vec<String>>, (StatusCode, String)> {
+    let sql = "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname ASC;";
+    let res = state
+        .sql_executor
+        .execute(sql, 100)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let dbs = res
+        .rows
+        .into_iter()
+        .filter_map(|mut r| r.drain(..).next())
+        .collect();
+    Ok(Json(dbs))
+}
+
 /// GET /api/tables -> Returns JSON list of public tables
-pub async fn api_list_tables(State(state): State<Arc<DashboardState>>) -> Json<Vec<TableSummary>> {
+pub async fn api_list_tables(
+    State(state): State<Arc<DashboardState>>,
+    Query(params): Query<TablesQuery>,
+) -> Result<Json<Vec<TableSummary>>, (StatusCode, String)> {
+    if let Some(ref db) = params.db {
+        if !is_valid_identifier(db) {
+            return Err((StatusCode::BAD_REQUEST, "Invalid database identifier".into()));
+        }
+    }
     let sql = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name;";
     let res = state
         .sql_executor
-        .execute(sql, 200)
+        .execute_on_db(sql, 200, params.db.as_deref())
         .await
-        .unwrap_or_else(|_| SqlQueryResult {
-            columns: vec!["table_name".into()],
-            rows: Vec::new(),
-            execution_time_ms: 0,
-            row_count: 0,
-            truncated: false,
-        });
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     let tables = res
         .rows
@@ -414,26 +502,32 @@ pub async fn api_list_tables(State(state): State<Arc<DashboardState>>) -> Json<V
         })
         .collect();
 
-    Json(tables)
+    Ok(Json(tables))
 }
 
 /// GET /api/tables/:table/schema -> Returns column metadata for a table
 pub async fn api_table_schema(
     State(state): State<Arc<DashboardState>>,
     Path(table): Path<String>,
+    Query(params): Query<TablesQuery>,
 ) -> Result<Json<Vec<ColumnInfo>>, (StatusCode, String)> {
     if !is_valid_identifier(&table) {
         return Err((StatusCode::BAD_REQUEST, "Invalid table name".into()));
     }
+    if let Some(ref db) = params.db {
+        if !is_valid_identifier(db) {
+            return Err((StatusCode::BAD_REQUEST, "Invalid database identifier".into()));
+        }
+    }
 
-    let primary_keys = fetch_table_primary_keys(&*state.sql_executor, &table).await;
+    let primary_keys = fetch_table_primary_keys_on_db(&*state.sql_executor, &table, params.db.as_deref()).await;
     let sql = format!(
         "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '{}' ORDER BY ordinal_position;",
         table
     );
     let res = state
         .sql_executor
-        .execute(&sql, 200)
+        .execute_on_db(&sql, 200, params.db.as_deref())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
@@ -476,17 +570,22 @@ pub async fn api_table_data(
     if !is_valid_identifier(&table) {
         return Err((StatusCode::BAD_REQUEST, "Invalid table name".into()));
     }
+    if let Some(ref db) = params.db {
+        if !is_valid_identifier(db) {
+            return Err((StatusCode::BAD_REQUEST, "Invalid database identifier".into()));
+        }
+    }
 
     let limit = params.limit.unwrap_or(50).min(100).max(1);
     let page = params.page.unwrap_or(1).max(1);
     let offset = (page - 1) * limit;
 
-    let primary_keys = fetch_table_primary_keys(&*state.sql_executor, &table).await;
+    let primary_keys = fetch_table_primary_keys_on_db(&*state.sql_executor, &table, params.db.as_deref()).await;
 
     let count_sql = format!("SELECT count(*) FROM {};", table);
     let total_rows = state
         .sql_executor
-        .execute(&count_sql, 1)
+        .execute_on_db(&count_sql, 1, params.db.as_deref())
         .await
         .ok()
         .and_then(|r| r.rows.first()?.first()?.parse::<u64>().ok())
@@ -495,7 +594,7 @@ pub async fn api_table_data(
     let sql = format!("SELECT * FROM {} LIMIT {} OFFSET {};", table, limit, offset);
     let res = state
         .sql_executor
-        .execute(&sql, limit)
+        .execute_on_db(&sql, limit, params.db.as_deref())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
@@ -518,10 +617,16 @@ pub async fn api_table_data(
 pub async fn api_delete_table_row(
     State(state): State<Arc<DashboardState>>,
     Path(table): Path<String>,
+    Query(params): Query<TablesQuery>,
     Json(payload): Json<DeleteRowRequest>,
 ) -> Result<Json<RowMutationResponse>, (StatusCode, String)> {
     if !is_valid_identifier(&table) {
         return Err((StatusCode::BAD_REQUEST, "Invalid table name".into()));
+    }
+    if let Some(ref db) = params.db {
+        if !is_valid_identifier(db) {
+            return Err((StatusCode::BAD_REQUEST, "Invalid database identifier".into()));
+        }
     }
 
     if payload.primary_keys.is_empty() {
@@ -531,7 +636,7 @@ pub async fn api_delete_table_row(
         ));
     }
 
-    let pks = fetch_table_primary_keys(&*state.sql_executor, &table).await;
+    let pks = fetch_table_primary_keys_on_db(&*state.sql_executor, &table, params.db.as_deref()).await;
     if pks.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -587,7 +692,7 @@ pub async fn api_delete_table_row(
 
     let res = state
         .sql_executor
-        .execute(&sql, 1)
+        .execute_on_db(&sql, 1, params.db.as_deref())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
@@ -640,10 +745,16 @@ pub async fn api_delete_table_row(
 pub async fn api_update_table_row(
     State(state): State<Arc<DashboardState>>,
     Path(table): Path<String>,
+    Query(params): Query<TablesQuery>,
     Json(payload): Json<UpdateRowRequest>,
 ) -> Result<Json<RowMutationResponse>, (StatusCode, String)> {
     if !is_valid_identifier(&table) {
         return Err((StatusCode::BAD_REQUEST, "Invalid table name".into()));
+    }
+    if let Some(ref db) = params.db {
+        if !is_valid_identifier(db) {
+            return Err((StatusCode::BAD_REQUEST, "Invalid database identifier".into()));
+        }
     }
 
     if payload.primary_keys.is_empty() {
@@ -660,7 +771,7 @@ pub async fn api_update_table_row(
         ));
     }
 
-    let pks = fetch_table_primary_keys(&*state.sql_executor, &table).await;
+    let pks = fetch_table_primary_keys_on_db(&*state.sql_executor, &table, params.db.as_deref()).await;
     if pks.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -736,7 +847,7 @@ pub async fn api_update_table_row(
 
     let res = state
         .sql_executor
-        .execute(&sql, 1)
+        .execute_on_db(&sql, 1, params.db.as_deref())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
@@ -791,8 +902,22 @@ pub async fn api_update_table_row(
 /// POST /api/sql -> Validates read-only safety, enforces statement timeout, executes SQL
 pub async fn api_execute_sql(
     State(state): State<Arc<DashboardState>>,
+    Query(params): Query<TablesQuery>,
     Json(payload): Json<SqlQueryRequest>,
 ) -> Result<Json<SqlQueryResult>, (StatusCode, Json<SqlQueryError>)> {
+    let target_db = payload.database.as_deref().or(params.db.as_deref());
+    if let Some(db) = target_db {
+        if !is_valid_identifier(db) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(SqlQueryError {
+                    code: "INVALID_DATABASE".into(),
+                    message: format!("Invalid database identifier: '{}'", db),
+                }),
+            ));
+        }
+    }
+
     let max_rows = payload
         .max_rows
         .unwrap_or(state.security_guard.max_result_rows)
@@ -823,12 +948,17 @@ pub async fn api_execute_sql(
         }
     };
 
-    info!(sql = %safe_sql, max_rows, "Executing guarded SQL console query");
+    info!(sql = %safe_sql, max_rows, ?target_db, "Executing guarded SQL console query");
 
     // 2. Execute query under statement timeout protection
     let timeout = state.security_guard.max_execution_timeout;
-    let exec_res =
-        tokio::time::timeout(timeout, state.sql_executor.execute(&safe_sql, max_rows)).await;
+    let exec_res = tokio::time::timeout(
+        timeout,
+        state
+            .sql_executor
+            .execute_on_db(&safe_sql, max_rows, target_db),
+    )
+    .await;
 
     match exec_res {
         Ok(Ok(result)) => Ok(Json(result)),

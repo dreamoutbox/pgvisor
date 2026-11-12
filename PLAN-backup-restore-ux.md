@@ -53,13 +53,13 @@ Foundations (metadata surfaced in UI, validation) -> restore features that depen
   - [x] Handler test for window endpoint.
 - Done when: dashboard tests pass; manual check: slider bounds match validator, out-of-range impossible from UI.
 
-### Phase 5: Database Explorer database dropdown [STATUS: TODO]
+### Phase 5: Database Explorer database dropdown [STATUS: DONE]
 - Goal: Switch among databases on the Tables page.
 - Tasks:
-  - [ ] Extend `SqlExecutor` with an optional database parameter; implement for `ProxySqlExecutor` (connect with `dbname`) and the standalone executor.
-  - [ ] Add `/api/databases` (list non-template DBs) and `?db=` on table endpoints; validate db name with `is_valid_identifier`.
-  - [ ] Dropdown in `tables.html`; persist selection in query string.
-  - [ ] Check `SqlSecurityGuard` still applies; unit + route tests.
+  - [x] Extend `SqlExecutor` with an optional database parameter; implement for `ProxySqlExecutor` (connect with `dbname`) and the standalone executor.
+  - [x] Add `/api/databases` (list non-template DBs) and `?db=` on table endpoints; validate db name with `is_valid_identifier`.
+  - [x] Dropdown in `tables.html`; persist selection in query string.
+  - [x] Check `SqlSecurityGuard` still applies; unit + route tests.
 - Done when: unit tests pass; extend `tests/test-dashboard-tables-nodes.sh` to create a second DB and browse its tables.
 
 ### Phase 6: Per-node CPU/RAM/DISK in dashboard [STATUS: TODO]

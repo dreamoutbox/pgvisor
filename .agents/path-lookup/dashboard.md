@@ -1,12 +1,12 @@
 ### If you want to modify the web dashboard, Askama HTML templates, or SQL console security, then check:
 
-- `crates/pgvisor-dashboard/src/models.rs` = Data transfer models for cluster overview, node summaries, SQL query request/response, TableSummary, ColumnInfo, TableDataResponse, backup models, PgRole, TablePrivilege, TablePrivilegeKind, and user management request models
+- `crates/pgvisor-dashboard/src/models.rs` = Data transfer models for cluster overview, node summaries, SQL query request/response (including optional `database`), TableSummary, ColumnInfo, TableDataResponse, backup models, PgRole, TablePrivilege, TablePrivilegeKind, and user management request models
 - `crates/pgvisor-dashboard/src/security.rs` = `SqlSecurityGuard` (comment stripping, multi-statement rejection, read-only validation, `validate_user_management_ddl`) and admin token authentication (`verify_admin_token`, `extract_token_from_headers`)
-- `crates/pgvisor-dashboard/src/templates.rs` = Askama template structs (`OverviewTemplate`, `NodesTemplate`, `SqlConsoleTemplate`, `TablesTemplate`, `BackupsTemplate`, `UsersTemplate`, `LoginTemplate`)
-- `crates/pgvisor-dashboard/templates/` = HTML templates (`base.html`, `overview.html`, `nodes.html`, `sql.html`, `tables.html`, `backups.html`, `users.html`, `login.html`)
+- `crates/pgvisor-dashboard/src/templates.rs` = Askama template structs (`OverviewTemplate`, `NodesTemplate`, `SqlConsoleTemplate`, `TablesTemplate` with `databases` and `active_db`, `BackupsTemplate`, `UsersTemplate`, `LoginTemplate`)
+- `crates/pgvisor-dashboard/templates/` = HTML templates (`base.html`, `overview.html`, `nodes.html`, `sql.html`, `tables.html` with database selector, `backups.html`, `users.html`, `login.html`)
 - `crates/pgvisor-dashboard/src/handlers/mod.rs` = Sparse module root with explicit re-exports of all dashboard handler services and endpoints
 - `crates/pgvisor-dashboard/src/handlers/state.rs` = `DashboardState` struct and initialization
-- `crates/pgvisor-dashboard/src/handlers/sql.rs` = `SqlExecutor` trait, `StandaloneSqlExecutor`, `TablesQuery`, and SQL explorer / table schema endpoints
+- `crates/pgvisor-dashboard/src/handlers/sql.rs` = `SqlExecutor` trait (`execute_on_db`), `StandaloneSqlExecutor`, `TablesQuery` with `db`, `/api/databases` endpoint, and SQL explorer / table schema endpoints
 - `crates/pgvisor-dashboard/src/handlers/backup.rs` = `BackupService` trait, `StandaloneBackupService`, snapshot selection, and backup / PITR restore endpoints
 - `crates/pgvisor-dashboard/src/handlers/cluster.rs` = `ClusterService` trait (`get_node_logs`, `get_node_config`), `StandaloneClusterService`, `/api/nodes/:node_id/logs`, and `/api/nodes/:node_id/config/:config_type` endpoints
 - `crates/pgvisor-dashboard/src/handlers/users.rs` = `UserService` trait, `StandaloneUserService`, `SqlUserService`, and role / permission management endpoints
@@ -15,7 +15,8 @@
 - `crates/pgvisor-dashboard/src/lib.rs` = Router assembly, `auth_middleware`, and unit tests
 - `crates/pgvisor-dashboard/src/main.rs` = Standalone HTTP server binary
 - `crates/pgvisor-proxy/src/main.rs` = Proxy server entrypoint, injects `ProxySqlExecutor`, `ProxyBackupService`, `ProxyClusterService`, and `SqlUserService` into dashboard state
-- `crates/pgvisor-proxy/src/executor.rs` = `ProxySqlExecutor` running dashboard queries against live Postgres cluster connections
+- `crates/pgvisor-proxy/src/pool.rs` = `ConnectionPool::acquire_for` matching database and `PooledConnection.database`
+- `crates/pgvisor-proxy/src/executor.rs` = `ProxySqlExecutor::execute_with_role_and_db` running dashboard queries against live Postgres cluster connections on specific databases
 - `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService` orchestrating OpenDAL backups and restores for the proxy dashboard
 - `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService` orchestrating manual leader switchover, standby repointing, node logs forwarding, and config inspection for the proxy dashboard
 

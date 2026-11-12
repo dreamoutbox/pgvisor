@@ -74,12 +74,24 @@ impl ProxySqlExecutor {
         max_rows: usize,
         role: BackendRole,
     ) -> Result<SqlQueryResult, String> {
+        self.execute_with_role_and_db(sql, max_rows, role, None).await
+    }
+
+    /// Executes a SQL query directly against a specific backend role (Leader or Standby)
+    /// targeting an optional specific database.
+    pub async fn execute_with_role_and_db(
+        &self,
+        sql: &str,
+        max_rows: usize,
+        role: BackendRole,
+        database: Option<&str>,
+    ) -> Result<SqlQueryResult, String> {
         let start = Instant::now();
 
-        // Acquire a connection from the pool for the required role
+        // Acquire a connection from the pool for the required role and database
         let mut backend = self
             .pool
-            .acquire_with_retry(role, &self.failover_config, None, None)
+            .acquire_with_retry(role, &self.failover_config, None, database)
             .await
             .map_err(|e| format!("Failed to acquire backend connection: {}", e))?;
 
@@ -182,12 +194,17 @@ impl ProxySqlExecutor {
 
 #[async_trait::async_trait]
 impl SqlExecutor for ProxySqlExecutor {
-    async fn execute(&self, sql: &str, max_rows: usize) -> Result<SqlQueryResult, String> {
+    async fn execute_on_db(
+        &self,
+        sql: &str,
+        max_rows: usize,
+        db: Option<&str>,
+    ) -> Result<SqlQueryResult, String> {
         let role = if is_leader_required(sql) {
             BackendRole::Leader
         } else {
             BackendRole::Standby
         };
-        self.execute_with_role(sql, max_rows, role).await
+        self.execute_with_role_and_db(sql, max_rows, role, db).await
     }
 }

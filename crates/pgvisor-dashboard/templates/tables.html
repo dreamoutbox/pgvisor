@@ -12,6 +12,7 @@
         </p>
     </div>
     <div style="display: flex; gap: 10px; align-items: center;">
+        <span class="badge badge-primary">DB: {{ active_db }}</span>
         <span class="badge badge-standby">Schema: public</span>
         <span class="badge badge-healthy">Read-Only Guarded</span>
     </div>
@@ -21,11 +22,24 @@
 <div style="display: flex; gap: 24px; align-items: flex-start;">
     <!-- Left Panel: Table List -->
     <div class="card" style="width: 280px; padding: 16px; flex-shrink: 0;">
+        <div style="margin-bottom: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <label for="db-select" style="font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 0;">Database</label>
+                <span style="font-size: 0.75rem; color: var(--primary); font-family: monospace;">{{ active_db }}</span>
+            </div>
+            <select id="db-select" onchange="switchDatabase(this.value)"
+                    style="width: 100%; background: #0b0f19; border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; color: var(--text-main); font-size: 0.85rem;">
+                {% for db in databases %}
+                <option value="{{ db }}" {% if self.is_active_db(db) %}selected{% endif %}>{{ db }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
             <h3 style="margin: 0; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">
                 Tables ({{ tables.len() }})
             </h3>
-            <a href="/tables" style="font-size: 0.8rem; color: var(--primary); text-decoration: none;">Refresh</a>
+            <a href="/tables?db={{ active_db }}" style="font-size: 0.8rem; color: var(--primary); text-decoration: none;">Refresh</a>
         </div>
 
         <input type="text" id="table-search" placeholder="Filter tables..." oninput="filterTableList()"
@@ -33,7 +47,7 @@
 
         <div id="table-list" style="display: flex; flex-direction: column; gap: 4px; max-height: 520px; overflow-y: auto;">
             {% for tbl in tables %}
-            <a href="/tables?table={{ tbl.name }}&tab=data" 
+            <a href="/tables?db={{ active_db }}&table={{ tbl.name }}&tab=data" 
                class="table-item {% if self.is_active_table(tbl.name) %}active-table{% endif %}"
                data-name="{{ tbl.name }}"
                style="display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; border-radius: 6px; text-decoration: none; color: var(--text-main); font-size: 0.9rem; transition: background 0.15s;">
@@ -57,21 +71,21 @@
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
             <div style="display: flex; gap: 8px;">
                 {% if let Some(active) = active_table %}
-                <a href="/tables?table={{ active }}&tab=data" class="tab-btn {% if active_tab == "data" %}active-tab{% endif %}">
+                <a href="/tables?db={{ active_db }}&table={{ active }}&tab=data" class="tab-btn {% if active_tab == "data" %}active-tab{% endif %}">
                     Data (Browse)
                 </a>
-                <a href="/tables?table={{ active }}&tab=schema" class="tab-btn {% if active_tab == "schema" %}active-tab{% endif %}">
+                <a href="/tables?db={{ active_db }}&table={{ active }}&tab=schema" class="tab-btn {% if active_tab == "schema" %}active-tab{% endif %}">
                     Structure
                 </a>
                 {% endif %}
-                <a href="/tables?tab=sql{% if let Some(active) = active_table %}&table={{ active }}{% endif %}" class="tab-btn {% if active_tab == "sql" %}active-tab{% endif %}">
+                <a href="/tables?db={{ active_db }}&tab=sql{% if let Some(active) = active_table %}&table={{ active }}{% endif %}" class="tab-btn {% if active_tab == "sql" %}active-tab{% endif %}">
                     SQL Console
                 </a>
             </div>
 
             <div style="display: flex; gap: 8px; align-items: center;">
                 {% if let Some(active) = active_table %}
-                <a href="/tables?tab=sql&sql=SELECT%20*%20FROM%20{{ active }}%20LIMIT%2050;" 
+                <a href="/tables?db={{ active_db }}&tab=sql&sql=SELECT%20*%20FROM%20{{ active }}%20LIMIT%2050;" 
                    style="background: rgba(56, 189, 248, 0.15); color: var(--primary); border: 1px solid var(--primary); padding: 6px 12px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; text-decoration: none;">
                     Query in SQL &rarr;
                 </a>
@@ -193,10 +207,10 @@
 
                 <div style="display: flex; gap: 8px; align-items: center;">
                     {% if page > 1 %}
-                    <a href="/tables?table={{ active }}&tab=data&page={{ page - 1 }}&limit={{ limit }}" class="page-nav-btn">&larr; Previous</a>
+                    <a href="/tables?db={{ active_db }}&table={{ active }}&tab=data&page={{ page - 1 }}&limit={{ limit }}" class="page-nav-btn">&larr; Previous</a>
                     {% endif %}
                     {% if page < total_pages %}
-                    <a href="/tables?table={{ active }}&tab=data&page={{ page + 1 }}&limit={{ limit }}" class="page-nav-btn">Next &rarr;</a>
+                    <a href="/tables?db={{ active_db }}&table={{ active }}&tab=data&page={{ page + 1 }}&limit={{ limit }}" class="page-nav-btn">Next &rarr;</a>
                     {% endif %}
                 </div>
             </div>
@@ -461,6 +475,15 @@
 </style>
 
 <script>
+function switchDatabase(dbName) {
+    if (!dbName) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('db', dbName);
+    url.searchParams.delete('table');
+    url.searchParams.delete('page');
+    window.location.href = url.toString();
+}
+
 function filterTableList() {
     const query = document.getElementById('table-search').value.toLowerCase();
     const items = document.querySelectorAll('.table-item');
@@ -495,10 +518,15 @@ async function executeSql() {
     errorBox.style.display = 'none';
 
     try {
+        const activeDb = document.getElementById('db-select') ? document.getElementById('db-select').value : null;
+        const payload = { query: sql, max_rows: 500 };
+        if (activeDb) {
+            payload.database = activeDb;
+        }
         const resp = await fetch('/api/sql', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query: sql, max_rows: 500 })
+            body: JSON.stringify(payload)
         });
         const data = await resp.json();
 
@@ -603,7 +631,9 @@ async function confirmDeleteRow() {
     errBox.style.display = 'none';
 
     try {
-        const resp = await fetch(`/api/tables/${encodeURIComponent(meta.tableName)}/rows`, {
+        const activeDb = document.getElementById('db-select') ? document.getElementById('db-select').value : '';
+        const dbQuery = activeDb ? `?db=${encodeURIComponent(activeDb)}` : '';
+        const resp = await fetch(`/api/tables/${encodeURIComponent(meta.tableName)}/rows${dbQuery}`, {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ primary_keys: targetDeletePk })
@@ -755,7 +785,9 @@ async function submitEditRow(e) {
     });
 
     try {
-        const resp = await fetch(`/api/tables/${encodeURIComponent(meta.tableName)}/rows`, {
+        const activeDb = document.getElementById('db-select') ? document.getElementById('db-select').value : '';
+        const dbQuery = activeDb ? `?db=${encodeURIComponent(activeDb)}` : '';
+        const resp = await fetch(`/api/tables/${encodeURIComponent(meta.tableName)}/rows${dbQuery}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
