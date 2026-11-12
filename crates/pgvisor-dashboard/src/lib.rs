@@ -365,6 +365,22 @@ mod tests {
         let response = app.clone().oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
+        // 14d. Test POST /api/backups/:id/restore with target time earlier than snapshot finish date
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/backups/snap-20260904-210000/restore")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"recovery_target_time": "1999-01-01 00:00:00"}"#))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let err_msg = String::from_utf8(body.to_vec()).unwrap();
+        assert!(err_msg.contains("earlier than basebackup finish time"));
+        assert!(err_msg.contains("cannot roll backward"));
+
         // 15. Test GET /users page
         let response = app
             .clone()

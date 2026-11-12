@@ -18,97 +18,10 @@ use crate::models::{
 use crate::templates::BackupsTemplate;
 
 /// Helper to parse a target recovery timestamp flexibly.
+///
+/// Delegates parsing and format normalization to [`pgvisor_core::backup::parse_target_timestamp`].
 pub fn parse_target_timestamp(raw: &str) -> Result<chrono::DateTime<Utc>, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err("Recovery target timestamp cannot be empty".to_string());
-    }
-
-    let parsed = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(trimmed) {
-        dt.with_timezone(&Utc)
-    } else if let Ok(dt) = chrono::DateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S%z") {
-        dt.with_timezone(&Utc)
-    } else {
-        // Normalize potential single-digit hours/minutes/seconds e.g. "2026-09-16 00:35:0" -> "2026-09-16 00:35:00"
-        let normalized = {
-            let parts: Vec<&str> = trimmed.split_whitespace().collect();
-            if parts.len() == 2 {
-                let date_part = parts[0];
-                let time_parts: Vec<&str> = parts[1].split(':').collect();
-                if time_parts.len() == 3 {
-                    let h = if time_parts[0].len() == 1 {
-                        format!("0{}", time_parts[0])
-                    } else {
-                        time_parts[0].to_string()
-                    };
-                    let m = if time_parts[1].len() == 1 {
-                        format!("0{}", time_parts[1])
-                    } else {
-                        time_parts[1].to_string()
-                    };
-                    let s = if time_parts[2].len() == 1 {
-                        format!("0{}", time_parts[2])
-                    } else {
-                        time_parts[2].to_string()
-                    };
-                    format!("{} {}:{}:{}", date_part, h, m, s)
-                } else if time_parts.len() == 2 {
-                    let h = if time_parts[0].len() == 1 {
-                        format!("0{}", time_parts[0])
-                    } else {
-                        time_parts[0].to_string()
-                    };
-                    let m = if time_parts[1].len() == 1 {
-                        format!("0{}", time_parts[1])
-                    } else {
-                        time_parts[1].to_string()
-                    };
-                    format!("{} {}:{}", date_part, h, m)
-                } else {
-                    trimmed.to_string()
-                }
-            } else {
-                trimmed.to_string()
-            }
-        };
-
-        let formats = [
-            "%Y-%m-%d %H:%M:%S%.f",
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%dT%H:%M:%S%.f",
-            "%Y-%m-%dT%H:%M:%S",
-            "%Y-%m-%d %H:%M",
-            "%Y-%m-%dT%H:%M",
-        ];
-
-        let mut matched = None;
-        for fmt in &formats {
-            if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&normalized, fmt) {
-                matched = Some(chrono::DateTime::<Utc>::from_naive_utc_and_offset(
-                    naive, Utc,
-                ));
-                break;
-            }
-        }
-
-        matched.ok_or_else(|| {
-            format!(
-                "Invalid timestamp '{}'. Expected format: YYYY-MM-DD HH:MM:SS (UTC) or ISO-8601 (e.g. 2026-09-14 03:00:00)",
-                raw
-            )
-        })?
-    };
-
-    let now = Utc::now();
-    if parsed > now + chrono::Duration::seconds(10) {
-        return Err(format!(
-            "Recovery target timestamp ({}) cannot be in the future. Cluster current time is {}.",
-            parsed.format("%Y-%m-%d %H:%M:%S UTC"),
-            now.format("%Y-%m-%d %H:%M:%S UTC")
-        ));
-    }
-
-    Ok(parsed)
+    pgvisor_core::backup::parse_target_timestamp(raw).map_err(|e| e.to_string())
 }
 
 /// Helper to select the best basebackup snapshot for forward Point-In-Time-Recovery.
@@ -454,31 +367,27 @@ pub async fn api_restore_backup(
         if trimmed.is_empty() {
             None
         } else {
-            let parsed =
-                parse_target_timestamp(trimmed).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-
-            // Validate against snapshot creation date
+            // Validate against snapshot metadata using shared core validator
             let backups = state
                 .backup_service
                 .list_backups()
                 .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
-            if let Some(snap) = backups
+            let parsed = if let Some(snap) = backups
                 .iter()
                 .find(|b| b.snapshot_id == snapshot_id || b.label.as_deref() == Some(&snapshot_id))
             {
-                if parsed < snap.created_at - chrono::Duration::seconds(60) {
-                    return Err((
-                        StatusCode::BAD_REQUEST,
-                        format!(
-                            "Recovery target timestamp ({}) is earlier than snapshot creation time ({}). PostgreSQL forward recovery cannot roll backward.",
-                            parsed.format("%Y-%m-%d %H:%M:%S UTC"),
-                            snap.created_at.format("%Y-%m-%d %H:%M:%S UTC"),
-                        ),
-                    ));
-                }
-            }
+                pgvisor_core::backup::validate_recovery_target_time(
+                    trimmed,
+                    snap,
+                    &backups,
+                    Utc::now(),
+                )
+                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
+            } else {
+                parse_target_timestamp(trimmed).map_err(|e| (StatusCode::BAD_REQUEST, e))?
+            };
             Some(parsed.format("%Y-%m-%d %H:%M:%S UTC").to_string())
         }
     } else {

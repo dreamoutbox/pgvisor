@@ -23,6 +23,9 @@ pub enum BackupError {
 
     #[error("Basebackup snapshot {0} not found in storage")]
     SnapshotNotFound(String),
+
+    #[error("Invalid recovery target: {0}")]
+    InvalidRecoveryTarget(String),
 }
 
 /// Type of backup snapshot performed.

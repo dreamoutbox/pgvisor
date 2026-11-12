@@ -26,13 +26,13 @@ Foundations (metadata surfaced in UI, validation) -> restore features that depen
   - [x] Update `.agents/path-lookup/backup.md`.
 - Done when: `cargo nextest run -p pgvisor-dashboard -p pgvisor-proxy` passes; `/api/backups` JSON and `/backups` page show the values for a new backup.
 
-### Phase 2: PITR target time validation against backup metadata [STATUS: TODO]
+### Phase 2: PITR target time validation against backup metadata [STATUS: DONE]
 - Goal: Reject invalid PITR target before any restore starts.
 - Tasks:
-  - [ ] Add shared pure validator in `pgvisor-core` (`backup/`): target must parse, be >= snapshot `backup_finish_date`, and <= latest available WAL/last transaction time of newest backup chain (fallback: now). Typed error in `BackupError`.
-  - [ ] Call validator in `ProxyBackupService::restore_backup_inner` before notifying sidecars; surface a 400 with clear message through dashboard handler.
-  - [ ] Unit tests: before backup finish, after coverage, malformed, valid, missing metadata (skip upper bound).
-  - [ ] Extend `tests/test-incremental-pitr.sh` (or new script) to assert invalid target is rejected and cluster stays untouched (use polling retries per AGENTS.md).
+  - [x] Add shared pure validator in `pgvisor-core` (`backup/`): target must parse, be >= snapshot `backup_finish_date`, and <= latest available WAL/last transaction time of newest backup chain (fallback: now). Typed error in `BackupError`.
+  - [x] Call validator in `ProxyBackupService::restore_backup_inner` before notifying sidecars; surface a 400 with clear message through dashboard handler.
+  - [x] Unit tests: before backup finish, after coverage, malformed, valid, missing metadata (skip upper bound).
+  - [x] Extend `tests/test-incremental-pitr.sh` (or new script) to assert invalid target is rejected and cluster stays untouched (use polling retries per AGENTS.md).
 - Done when: unit tests pass; integration script asserts rejection with no leadership change.
 
 ### Phase 3: Restore with XID [STATUS: TODO]

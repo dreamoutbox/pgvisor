@@ -517,35 +517,32 @@ impl ProxyBackupService {
             "Executing cluster restore request"
         );
 
-        // Pause client traffic on connection pool while restore is in progress
-        if let Some(pool) = &self.pool {
-            pool.pause_client_traffic().await;
-        }
-
-        // Validate recovery target timestamp before notifying standbys or leader
+        // Validate recovery target timestamp against snapshot metadata before pausing client traffic or notifying nodes
         if let Some(target) = target_time.as_deref() {
             let trimmed = target.trim();
             if !trimmed.is_empty() {
-                let parsed_dt = chrono::DateTime::parse_from_rfc3339(trimmed)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .or_else(|_| {
-                        chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S")
-                            .map(|ndt| chrono::DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
-                    });
-                if let Ok(dt) = parsed_dt {
-                    let now = Utc::now();
-                    if dt > now + chrono::Duration::seconds(10) {
-                        if let Some(pool) = &self.pool {
-                            pool.resume_client_traffic().await;
-                        }
-                        return Err(format!(
-                            "Recovery target timestamp ({}) cannot be in the future. Cluster current time is {}.",
-                            dt.format("%Y-%m-%d %H:%M:%S UTC"),
-                            now.format("%Y-%m-%d %H:%M:%S UTC")
-                        ));
-                    }
+                let list = self.backup_manager.list_basebackups().await.unwrap_or_default();
+                let snapshot = list.iter().find(|b| {
+                    b.snapshot_id == snapshot_id || b.label.as_deref() == Some(snapshot_id)
+                });
+                if let Some(snap) = snapshot {
+                    pgvisor_core::backup::validate_recovery_target_time(
+                        trimmed,
+                        snap,
+                        &list,
+                        Utc::now(),
+                    )
+                    .map_err(|e| e.to_string())?;
+                } else {
+                    pgvisor_core::backup::parse_target_timestamp(trimmed)
+                        .map_err(|e| e.to_string())?;
                 }
             }
+        }
+
+        // Pause client traffic on connection pool while restore is in progress
+        if let Some(pool) = &self.pool {
+            pool.pause_client_traffic().await;
         }
 
         // 1. Determine leader host
