@@ -119,6 +119,7 @@ else
         "test-cluster-auth.sh"
         "test-tls.sh"
         "test-dashboard-tables-nodes.sh"
+        "test-restore-failure-rollback.sh"
     )
 fi
 

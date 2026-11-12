@@ -59,11 +59,11 @@ Implement a non-destructive, atomic shadow-recovery restore process on the clust
 
 ---
 
-### Phase 5: Election Monitor Leadership Retention & End-to-End Test [STATUS: TODO]
+### Phase 5: Election Monitor Leadership Retention & End-to-End Test [STATUS: DONE]
 - Goal: Prevent standbys from attempting elections when restore fails, and provide regression test reproducing the invalid target time scenario.
 - Tasks:
-  - [ ] Verify `crates/pgvisor-sidecar/src/election.rs` treats leader as active while restoring, and leader immediately returns to `Running` (never `Stopped`) if restore fails.
-  - [ ] Create test script `tests/test-restore-failure-rollback.sh`:
+  - [x] Verify `crates/pgvisor-sidecar/src/election.rs` treats leader as active while restoring, and leader immediately returns to `Running` (never `Stopped`) if restore fails.
+  - [x] Create test script `tests/test-restore-failure-rollback.sh`:
     - Seed test data on cluster.
     - Attempt restore with invalid future/uncovered target time.
     - Assert restore returns HTTP error.

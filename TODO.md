@@ -214,17 +214,17 @@
 
 - [x] add demo images in README and Wiki
 
-- [ ] make backup record show last timestamp for PITR backup time
+- [ ] user import backups from file upload with web dashboard, store to s3. then backend perform restore process.
 
-- [ ] Database Explorer page. support switch between multiple databases
+- [ ] show `last_transaction_time` & `last_transaction_xid` in backup list table in `http://localhost:8080/backups`
+
+- [ ] Database Explorer page. add dropdown switch between multiple databases
 
 - [ ] add CPU/RAM/DISK usage of each node in web dashboard
 
-- [ ] pgvisor add interactive slider drag for PITR target time 
-
 - [ ] restore function. add validation for PITR time. check from backup json.
 
-- [ ] show `last_transaction_time` & `last_transaction_xid` in backup list table in `http://localhost:8080/backups`
+- [ ] pgvisor add interactive slider drag for PITR target time 
 
 - [ ] restore add restore with xid.
 
@@ -232,7 +232,7 @@
 
 ## Bug
 
-- [ ] currently. if leader failed to restore. leader node pgvisor-sidecar stopped. but container still running. 
+- [x] currently. if leader failed to restore. leader node pgvisor-sidecar stopped. but container still running. 
 
 expected behavior: if leader failed to restore. it should not stop leader pgvisor-sidecar. it should restart back to previous state before backup. 
 
@@ -258,9 +258,7 @@ and it should keep leader role and follower nodes should not take the leader rol
 
 # Backlog
 
-- [ ] user manually upload backup file, store to s3. then restore with web dashboard.
-
-- [ ] multiple s3 storage support.
+- [ ] multiple s3 buckets/storages support.
 
 - [ ] install PG extensions with web dashboard
 

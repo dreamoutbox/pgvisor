@@ -44,6 +44,7 @@ PROFILES = [
     ("cluster-auth", "cluster-auth", 7532, 10180, 11100, 11101),
     ("tls", "tls", 7632, 10280, 11200, 11201),
     ("tables-nodes", "tables-nodes", 7732, 10380, 11300, 11301),
+    ("restore-failure", "restore-failure", 7832, 10480, 11400, 11401),
 ]
 
 
