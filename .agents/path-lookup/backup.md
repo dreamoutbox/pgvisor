@@ -22,15 +22,16 @@
 
 ### If you want to modify backup metadata (labels, notes, WAL ranges, timeline), snapshot triggering, archive filtering, or backup table views, then check:
 
-- `crates/pgvisor-core/src/backup/archive.rs` = `generate_snapshot_id`, `parse_backup_label`, `process_basebackup_archive` excluding `backup_label.old` and injecting `metadata.json`, and `create_simulated_basebackup`
-- `crates/pgvisor-core/src/backup/mod.rs` = re-exports for archive processing and manager
-- `crates/pgvisor-core/src/backup/manager.rs` = `BasebackupMeta` metadata struct (`snapshot_id`, `backup_id`, `label`, `backup_start_date`, `backup_finish_date`, `timeline`, `start_lsn`, `checkpoint_location`, `backup_from`, `pg_version`, `last_transaction_time`, `last_transaction_xid`) and OpenDAL storage manager
-- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::create_backup` formatting snapshot ID with label, capturing leader last committed transaction timestamp and xid via `fetch_last_committed_transaction`, running `pg_basebackup`, and invoking `process_basebackup_archive`
+- `crates/pgvisor-core/src/backup/archive.rs` = `generate_snapshot_id`, `parse_backup_label`, `process_basebackup_archive` excluding `backup_label.old` and injecting `metadata.json`, `inspect_and_prepare_import_archive` validating and preparing uploaded basebackup archives, and `create_simulated_basebackup`
+- `crates/pgvisor-core/src/backup/mod.rs` = re-exports for archive processing, manager, and import validation
+- `crates/pgvisor-core/src/backup/manager.rs` = `BasebackupMeta` metadata struct (`snapshot_id`, `backup_id`, `label`, `backup_start_date`, `backup_finish_date`, `timeline`, `start_lsn`, `checkpoint_location`, `backup_from`, `pg_version`, `last_transaction_time`, `last_transaction_xid`), `BackupError::ArchiveFormat`, and OpenDAL storage manager
+- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::create_backup` formatting snapshot ID with label, capturing leader last committed transaction timestamp and xid via `fetch_last_committed_transaction`, running `pg_basebackup`, invoking `process_basebackup_archive`, and `ProxyBackupService::import_backup` validating uploaded files and saving to OpenDAL with cluster backup lock
 - `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor::restore_from_snapshot` cleaning up `backup_label.old` defense-in-depth
 - `crates/pgvisor-dashboard/src/models.rs` = `CreateBackupRequest` and `BackupItemView` view models (including `last_transaction_time` and `last_transaction_xid`)
-- `crates/pgvisor-dashboard/src/handlers.rs` = Backup creation and list endpoints (`/api/backups`) and page renderer mapping metadata to `BackupItemView`
-- `crates/pgvisor-dashboard/templates/backups.html` = Dashboard UI table displaying backup items (Snapshot ID, Type, Source Node, Optional Label / Note, Created At, Last Tx Time, Last Tx XID, Size, WAL range, actions) and creation modal
-- `tests/test-backup-restore.sh` = Automated test asserting snapshot ID label prefix, `metadata.json` archive inclusion, and `backup_label.old` exclusion
+- `crates/pgvisor-dashboard/src/handlers.rs` = Backup creation, upload/import (`api_upload_backup`), and list endpoints (`/api/backups`) and page renderer mapping metadata to `BackupItemView`
+- `crates/pgvisor-dashboard/src/lib.rs` = Route registrations for `/api/backups` and `/api/backups/upload` with configurable `max_upload_bytes` body limit
+- `crates/pgvisor-dashboard/templates/backups.html` = Dashboard UI table displaying backup items, backup creation modal, and archive import modal (`#uploadModal`) with file upload progress
+- `tests/test-backup-restore.sh` = Automated test asserting snapshot ID label prefix, `metadata.json` archive inclusion, `backup_label.old` exclusion, and upload/import endpoint (`/api/backups/upload`) verification
 - `scripts/lib/s3-common.sh` = S3 client utility functions (list, get, put, delete, wipe) using curl with AWS SigV4
 - `scripts/lib/parse-s3-xml.py` = S3 XML response parser extracting keys, truncation status, and continuation tokens
 - `dev-take-backups-snapshot-s3.sh` = Exports entire S3 backups bucket to local snapshot directory for offline bug reproduction

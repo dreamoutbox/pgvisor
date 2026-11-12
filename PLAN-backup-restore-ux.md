@@ -71,14 +71,14 @@ Foundations (metadata surfaced in UI, validation) -> restore features that depen
   - [x] Update metrics test.
 - Done when: unit tests pass; `tests/test-metrics.sh` (or tables-nodes test) asserts the new fields are non-zero.
 
-### Phase 7: Upload backup file and restore [STATUS: TODO]
+### Phase 7: Upload backup file and restore [STATUS: DONE]
 - Goal: Import a backup archive via dashboard, store to S3, then restore it.
 - Tasks:
-  - [ ] Define accepted format: archive produced by existing backups (tar + `metadata.json`); validate via `process_basebackup_archive`/metadata parse; reject otherwise. Enforce size limit config.
-  - [ ] Add multipart upload endpoint (streamed, not fully buffered) in dashboard; `BackupService::import_backup` in proxy writes to OpenDAL under `basebackups/` with a new snapshot id.
-  - [ ] Import appears in list; restore reuses existing flow (including Phases 2-3 validation).
-  - [ ] Upload form in `backups.html`; audit log event for import.
-  - [ ] Tests: unit for validation, integration: download backup from S3, delete, upload, restore, check data.
+  - [x] Define accepted format: archive produced by existing backups (tar + `metadata.json`); validate via `process_basebackup_archive`/metadata parse; reject otherwise. Enforce size limit config.
+  - [x] Add multipart upload endpoint (streamed, not fully buffered) in dashboard; `BackupService::import_backup` in proxy writes to OpenDAL under `basebackups/` with a new snapshot id.
+  - [x] Import appears in list; restore reuses existing flow (including Phases 2-3 validation).
+  - [x] Upload form in `backups.html`; audit log event for import.
+  - [x] Tests: unit for validation, integration: download backup from S3, delete, upload, restore, check data.
 - Done when: unit + integration pass; imported snapshot restorable end-to-end.
 
 ---

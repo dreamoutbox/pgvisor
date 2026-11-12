@@ -10,8 +10,9 @@ pub use audit::{api_list_audit_logs, get_audit_logs_page, AuditQuery};
 pub use auth::{get_login_page, get_logout, post_login, LoginForm};
 pub use backup::{
     api_create_backup, api_delete_backup, api_download_backup, api_find_best_backup,
-    api_list_backups, api_pitr_window, api_quick_restore, api_restore_backup, find_best_backup_snapshot,
-    get_backups_page, parse_target_timestamp, BackupService, StandaloneBackupService,
+    api_list_backups, api_pitr_window, api_quick_restore, api_restore_backup, api_upload_backup,
+    find_best_backup_snapshot, get_backups_page, max_upload_bytes, parse_target_timestamp,
+    BackupService, StandaloneBackupService,
 };
 pub use cluster::{
     api_node_action, api_node_config, api_node_logs, api_nodes, api_restart_node, api_start_node,

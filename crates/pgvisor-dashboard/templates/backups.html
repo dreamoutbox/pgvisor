@@ -204,6 +204,14 @@
             </svg>
             Refresh
         </button>
+        <button class="btn btn-secondary" onclick="openUploadModal()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            Import Backup
+        </button>
         <button class="btn btn-primary" onclick="openBackupModal()">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -425,6 +433,46 @@
     </div>
 </div>
 
+<!-- Upload / Import Backup Modal -->
+<div id="uploadModal" class="modal-backdrop">
+    <div class="modal">
+        <h2>Import Backup Archive</h2>
+        <p>Upload a PostgreSQL basebackup archive (<code>.tar.gz</code> or <code>.tar</code>). It will be validated, saved to OpenDAL / S3 storage, and made available for cluster restore or PITR.</p>
+
+        <div class="form-group">
+            <label for="uploadBackupFile">Select Backup Archive (*.tar.gz, *.tgz, *.tar)</label>
+            <input type="file" id="uploadBackupFile" class="form-control" accept=".tar.gz,.tgz,.tar" style="padding: 8px;" />
+        </div>
+
+        <div class="form-group">
+            <label for="uploadBackupLabel">Custom Label / Note (optional)</label>
+            <input type="text" id="uploadBackupLabel" class="form-control" placeholder="e.g. migration-import" />
+        </div>
+
+        <div class="form-group" style="display: flex; align-items: center; gap: 8px; margin-top: 12px;">
+            <input type="checkbox" id="uploadRestoreNow" style="width: 16px; height: 16px; cursor: pointer;" />
+            <label for="uploadRestoreNow" style="margin: 0; cursor: pointer; font-size: 0.9rem;">
+                Restore database from this backup immediately after import
+            </label>
+        </div>
+
+        <div id="uploadProgressContainer" style="display: none; margin-top: 14px;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 4px;">
+                <span id="uploadProgressLabel" style="color: var(--text-muted);">Uploading archive...</span>
+                <span id="uploadProgressPercent" style="font-family: monospace; color: var(--primary);">0%</span>
+            </div>
+            <div style="background: var(--border); border-radius: 4px; height: 6px; overflow: hidden;">
+                <div id="uploadProgressBar" style="width: 0%; height: 100%; background: var(--primary); transition: width 0.2s;"></div>
+            </div>
+        </div>
+
+        <div class="modal-actions" style="margin-top: 20px;">
+            <button class="btn btn-secondary" onclick="closeUploadModal()">Cancel</button>
+            <button id="btnSubmitUpload" class="btn btn-primary" onclick="submitBackupUpload()">Import Archive</button>
+        </div>
+    </div>
+</div>
+
 <!-- Restore Modal -->
 <div id="restoreModal" class="modal-backdrop">
     <div class="modal">
@@ -559,6 +607,104 @@
 
     function closeBackupModal() {
         document.getElementById('backupModal').style.display = 'none';
+    }
+
+    function openUploadModal() {
+        document.getElementById('uploadBackupFile').value = '';
+        document.getElementById('uploadBackupLabel').value = '';
+        document.getElementById('uploadRestoreNow').checked = false;
+        document.getElementById('uploadProgressContainer').style.display = 'none';
+        document.getElementById('uploadModal').style.display = 'flex';
+    }
+
+    function closeUploadModal() {
+        document.getElementById('uploadModal').style.display = 'none';
+    }
+
+    function submitBackupUpload() {
+        const fileInput = document.getElementById('uploadBackupFile');
+        const labelInput = document.getElementById('uploadBackupLabel');
+        const restoreNow = document.getElementById('uploadRestoreNow').checked;
+        const btn = document.getElementById('btnSubmitUpload');
+        const progressContainer = document.getElementById('uploadProgressContainer');
+        const progressBar = document.getElementById('uploadProgressBar');
+        const progressPercent = document.getElementById('uploadProgressPercent');
+        const progressLabel = document.getElementById('uploadProgressLabel');
+
+        if (!fileInput.files || fileInput.files.length === 0) {
+            showToast('Please select a backup archive file to upload', true);
+            return;
+        }
+
+        const file = fileInput.files[0];
+        const formData = new FormData();
+        formData.append('file', file);
+        if (labelInput.value.trim()) {
+            formData.append('label', labelInput.value.trim());
+        }
+        if (restoreNow) {
+            formData.append('restore', 'true');
+        }
+
+        btn.disabled = true;
+        btn.textContent = 'Uploading...';
+        progressContainer.style.display = 'block';
+        progressBar.style.width = '0%';
+        progressPercent.textContent = '0%';
+        progressLabel.textContent = 'Uploading archive to S3...';
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/backups/upload', true);
+
+        xhr.upload.onprogress = function(e) {
+            if (e.lengthComputable) {
+                const pct = Math.round((e.loaded / e.total) * 100);
+                progressBar.style.width = pct + '%';
+                progressPercent.textContent = pct + '%';
+                if (pct >= 100) {
+                    progressLabel.textContent = restoreNow ? 'Validating & initiating restore...' : 'Validating & saving to storage...';
+                }
+            }
+        };
+
+        xhr.onload = function() {
+            btn.disabled = false;
+            btn.textContent = 'Import Archive';
+            if (xhr.status >= 200 && xhr.status < 300) {
+                try {
+                    const res = JSON.parse(xhr.responseText);
+                    closeUploadModal();
+                    if (restoreNow) {
+                        showToast(`Backup ${res.snapshot_id} imported and restore initiated! Reloading...`);
+                        setTimeout(() => { window.location.href = '/nodes'; }, 1500);
+                    } else {
+                        showToast(`Backup ${res.snapshot_id} imported successfully!`);
+                        setTimeout(() => { window.location.reload(); }, 1200);
+                    }
+                } catch (err) {
+                    closeUploadModal();
+                    showToast('Backup imported successfully!');
+                    setTimeout(() => { window.location.reload(); }, 1200);
+                }
+            } else {
+                let errMsg = 'Failed to import backup archive';
+                try {
+                    const errRes = JSON.parse(xhr.responseText);
+                    errMsg = errRes.error || errRes.message || xhr.responseText;
+                } catch (_) {
+                    if (xhr.responseText) errMsg = xhr.responseText;
+                }
+                showToast(errMsg, true);
+            }
+        };
+
+        xhr.onerror = function() {
+            btn.disabled = false;
+            btn.textContent = 'Import Archive';
+            showToast('Network error during backup archive upload', true);
+        };
+
+        xhr.send(formData);
     }
 
     async function submitBackup() {

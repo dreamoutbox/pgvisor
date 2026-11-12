@@ -3,8 +3,8 @@ use std::sync::Arc;
 use chrono::Utc;
 use pgvisor_core::audit::{AuditEventKind, AuditLog};
 use pgvisor_core::backup::{
-    create_simulated_basebackup, generate_snapshot_id, process_basebackup_archive, BackupManager,
-    BackupType, BasebackupMeta,
+    create_simulated_basebackup, generate_snapshot_id, inspect_and_prepare_import_archive,
+    process_basebackup_archive, BackupManager, BackupType, BasebackupMeta,
 };
 use pgvisor_dashboard::handlers::BackupService;
 use tempfile::tempdir;
@@ -472,6 +472,69 @@ impl ProxyBackupService {
         Ok(meta)
     }
 
+    async fn import_backup_inner(
+        &self,
+        archive_path: std::path::PathBuf,
+        label: Option<String>,
+    ) -> Result<BasebackupMeta, String> {
+        let file = std::fs::File::open(&archive_path)
+            .map_err(|e| format!("Failed to open uploaded backup file: {}", e))?;
+
+        let out_temp_file = tempfile::NamedTempFile::new()
+            .map_err(|e| format!("Failed to create temporary output file: {}", e))?;
+        let out_path = out_temp_file.path().to_path_buf();
+        let out_writer = std::fs::File::create(&out_path)
+            .map_err(|e| format!("Failed to open output temp file: {}", e))?;
+
+        let mut meta = inspect_and_prepare_import_archive(
+            file,
+            out_writer,
+            label.as_deref(),
+        )
+        .map_err(|e| format!("Invalid backup archive: {}", e))?;
+
+        let tar_data = fs::read(&out_path)
+            .await
+            .map_err(|e| format!("Failed to read processed backup archive: {}", e))?;
+        meta.total_bytes = tar_data.len() as u64;
+
+        self.backup_manager
+            .save_basebackup(&meta, tar_data)
+            .await
+            .map_err(|e| format!("Failed to save imported basebackup to OpenDAL: {}", e))?;
+
+        let backup_name = meta.label.as_deref().unwrap_or(&meta.snapshot_id);
+        pgvisor_core::log_highlight(&pgvisor_core::format_backup_highlight(
+            "IMPORTED BACKUP",
+            backup_name,
+        ));
+
+        info!(
+            snapshot_id = %meta.snapshot_id,
+            bytes = meta.total_bytes,
+            "Imported basebackup saved and registered successfully"
+        );
+
+        if let Some(audit) = self.audit_log.as_ref() {
+            let label_str = meta.label.as_deref().unwrap_or("none");
+            let detail = format!(
+                "Imported {:?} physical basebackup snapshot '{}' (label: '{}', size: {} bytes)",
+                meta.backup_type, meta.snapshot_id, label_str, meta.total_bytes
+            );
+            audit
+                .append(
+                    AuditEventKind::BackupCreated,
+                    None,
+                    Some("imported"),
+                    detail,
+                    None,
+                )
+                .await;
+        }
+
+        Ok(meta)
+    }
+
     async fn restore_backup_inner(
         &self,
         snapshot_id: &str,
@@ -808,6 +871,18 @@ impl BackupService for ProxyBackupService {
             .map_err(|e| format!("Failed to get basebackup archive: {}", e))
     }
 
+    async fn import_backup(
+        &self,
+        archive_path: std::path::PathBuf,
+        label: Option<String>,
+    ) -> Result<BasebackupMeta, String> {
+        let (leader_host, lock_token) = self.acquire_backup_lock_on_leader().await?;
+        let res = self.import_backup_inner(archive_path, label).await;
+        self.release_backup_lock_on_leader(&leader_host, &lock_token)
+            .await;
+        res
+    }
+
     fn storage_info(&self) -> (String, String, u32, Option<usize>) {
         (
             self.endpoint.clone(),
@@ -989,5 +1064,44 @@ mod tests {
             .unwrap();
         assert_eq!(stored_meta.last_transaction_time, meta.last_transaction_time);
         assert_eq!(stored_meta.last_transaction_xid, meta.last_transaction_xid);
+    }
+
+    #[tokio::test]
+    async fn test_import_backup_stores_to_opendal_and_lists() {
+        let (server_port, _lock_state) = spawn_mock_control_server().await;
+        let (service, _dir) = build_test_service(
+            Some("127.0.0.1:5432".into()),
+            vec!["127.0.0.1:5433".into()],
+            server_port,
+        );
+
+        let mut sim_meta = BasebackupMeta::new(
+            "imported-base",
+            Utc::now(),
+            BackupType::Full,
+            "000000010000000000000005",
+            200,
+        )
+        .with_last_transaction(Some(Utc::now()), Some("12345".to_string()));
+
+        let tar_gz = create_simulated_basebackup(&mut sim_meta).unwrap();
+        let upload_temp = tempfile::NamedTempFile::new().unwrap();
+        tokio::fs::write(upload_temp.path(), &tar_gz).await.unwrap();
+
+        let imported = service
+            .import_backup(upload_temp.path().to_path_buf(), Some("my-import".to_string()))
+            .await
+            .unwrap();
+
+        assert!(imported.snapshot_id.starts_with("my-import-snap-"));
+        assert_eq!(imported.label.as_deref(), Some("my-import"));
+        assert_eq!(imported.source_node.as_deref(), Some("imported"));
+        assert_eq!(imported.last_transaction_xid.as_deref(), Some("12345"));
+
+        // Verify it appears in list_backups
+        let list = service.list_backups().await.unwrap();
+        let found = list.iter().find(|b| b.snapshot_id == imported.snapshot_id);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().last_transaction_xid.as_deref(), Some("12345"));
     }
 }

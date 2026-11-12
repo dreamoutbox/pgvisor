@@ -7,6 +7,7 @@ use axum::response::{Html, IntoResponse};
 use axum::Json;
 use chrono::Utc;
 use pgvisor_core::backup::{generate_snapshot_id, BackupType, BasebackupMeta};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tracing::error;
 
@@ -88,6 +89,11 @@ pub trait BackupService: Send + Sync {
         &self,
         snapshot_id: &str,
     ) -> Result<(BasebackupMeta, Vec<u8>), String>;
+    async fn import_backup(
+        &self,
+        archive_path: std::path::PathBuf,
+        label: Option<String>,
+    ) -> Result<BasebackupMeta, String>;
     fn storage_info(&self) -> (String, String, u32, Option<usize>) {
         (
             "http://127.0.0.1:9000".into(),
@@ -255,6 +261,35 @@ impl BackupService for StandaloneBackupService {
         Ok((meta, dummy_tar_gz))
     }
 
+    async fn import_backup(
+        &self,
+        archive_path: std::path::PathBuf,
+        label: Option<String>,
+    ) -> Result<BasebackupMeta, String> {
+        let file = std::fs::File::open(&archive_path)
+            .map_err(|e| format!("Failed to open uploaded backup file: {}", e))?;
+        let mut out = Vec::new();
+        let mut meta = pgvisor_core::backup::inspect_and_prepare_import_archive(
+            file,
+            &mut out,
+            label.as_deref(),
+        )
+        .map_err(|e| format!("Invalid backup archive: {}", e))?;
+
+        meta.total_bytes = out.len() as u64;
+
+        let mut lock = self.backups.write().await;
+        lock.push(meta.clone());
+
+        let backup_name = meta.label.as_deref().unwrap_or(&meta.snapshot_id);
+        pgvisor_core::log_highlight(&pgvisor_core::format_backup_highlight(
+            "IMPORTED BACKUP",
+            backup_name,
+        ));
+
+        Ok(meta)
+    }
+
     fn storage_info(&self) -> (String, String, u32, Option<usize>) {
         (self.endpoint.clone(), self.bucket.clone(), 7, Some(10))
     }
@@ -365,6 +400,166 @@ pub async fn api_download_backup(
     Ok((headers, tar_bytes))
 }
 
+/// Returns the maximum allowed backup upload size in bytes (defaults to 1 GiB; configurable via `PGVISOR_BACKUP_MAX_UPLOAD_BYTES`).
+pub fn max_upload_bytes() -> usize {
+    std::env::var("PGVISOR_BACKUP_MAX_UPLOAD_BYTES")
+        .or_else(|_| std::env::var("BACKUP_MAX_UPLOAD_BYTES"))
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(1024 * 1024 * 1024)
+}
+
+/// POST /api/backups/upload -> Ingests an uploaded PostgreSQL basebackup archive via multipart form-data.
+///
+/// Validates archive structure, ensures presence of `backup_label`, generates fresh snapshot metadata,
+/// saves the archive to S3 storage via [`BackupService::import_backup`], and optionally initiates
+/// cluster restoration if `restore=true` query parameter or form field is provided.
+///
+/// # Arguments
+/// * `state` - Dashboard shared state containing backup and cluster services
+/// * `query_params` - Optional URL query parameters (e.g. `?restore=true`)
+/// * `multipart` - Streaming multipart form-data containing the `file` and optional `label`/`restore` fields
+///
+/// # Example
+/// ```bash
+/// curl -X POST -F "file=@base.tar.gz" -F "label=migrated-db" -F "restore=true" http://localhost:8080/api/backups/upload
+/// ```
+pub async fn api_upload_backup(
+    State(state): State<Arc<DashboardState>>,
+    Query(query_params): Query<std::collections::HashMap<String, String>>,
+    mut multipart: axum::extract::Multipart,
+) -> Result<Json<BasebackupMeta>, (StatusCode, String)> {
+    let max_bytes = max_upload_bytes();
+    let mut custom_label: Option<String> = None;
+    let mut restore_requested = query_params
+        .get("restore")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+
+    let temp_file = tempfile::NamedTempFile::new().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create temporary upload file: {}", e),
+        )
+    })?;
+    let temp_path = temp_file.path().to_path_buf();
+    let mut uploaded_bytes = 0u64;
+    let mut file_received = false;
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Failed reading multipart field: {}", e),
+        )
+    })? {
+        let name = field.name().unwrap_or_default().to_string();
+        if name == "label" {
+            if let Ok(text) = field.text().await {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    custom_label = Some(trimmed.to_string());
+                }
+            }
+        } else if name == "restore" {
+            if let Ok(text) = field.text().await {
+                let trimmed = text.trim();
+                if trimmed == "true" || trimmed == "1" {
+                    restore_requested = true;
+                }
+            }
+        } else if name == "file" || name == "backup" || name == "archive" {
+            file_received = true;
+            let mut stream = field;
+            let mut async_file = tokio::fs::File::create(&temp_path).await.map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to create upload file: {}", e),
+                )
+            })?;
+
+            while let Some(chunk) = stream.chunk().await.map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("Failed reading upload chunk: {}", e),
+                )
+            })? {
+                uploaded_bytes += chunk.len() as u64;
+                if uploaded_bytes > max_bytes as u64 {
+                    let _ = tokio::fs::remove_file(&temp_path).await;
+                    return Err((
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        format!("Upload exceeds maximum allowed size of {} bytes", max_bytes),
+                    ));
+                }
+                async_file.write_all(&chunk).await.map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Failed writing upload chunk: {}", e),
+                    )
+                })?;
+            }
+            async_file.flush().await.map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed flushing upload file: {}", e),
+                )
+            })?;
+        }
+    }
+
+    if !file_received || uploaded_bytes == 0 {
+        let _ = tokio::fs::remove_file(&temp_path).await;
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "No backup archive file provided in multipart upload (expected field 'file')"
+                .to_string(),
+        ));
+    }
+
+    let import_res = state
+        .backup_service
+        .import_backup(temp_path.clone(), custom_label)
+        .await;
+
+    let _ = tokio::fs::remove_file(&temp_path).await;
+
+    let meta = match import_res {
+        Ok(m) => m,
+        Err(e) if e.contains("already in progress") => {
+            return Err((StatusCode::CONFLICT, e));
+        }
+        Err(e)
+            if e.contains("Invalid backup archive")
+                || e.contains("missing backup_label")
+                || e.contains("too short")
+                || e.contains("Corrupted") =>
+        {
+            return Err((StatusCode::BAD_REQUEST, e));
+        }
+        Err(e) => {
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, e));
+        }
+    };
+
+    if restore_requested {
+        if let Err(e) = state
+            .backup_service
+            .restore_backup(&meta.snapshot_id, None)
+            .await
+        {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "Imported backup {}, but cluster restore failed: {}",
+                    meta.snapshot_id, e
+                ),
+            ));
+        }
+    }
+
+    Ok(Json(meta))
+}
+
 /// POST /api/backups/:id/restore -> Triggers restore of database from snapshot
 pub async fn api_restore_backup(
     State(state): State<Arc<DashboardState>>,
@@ -390,19 +585,12 @@ pub async fn api_restore_backup(
         } else {
             match t {
                 pgvisor_core::backup::RecoveryTarget::Time(raw) => {
-                    parse_target_timestamp(raw)
-                        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+                    parse_target_timestamp(raw).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
                 }
                 pgvisor_core::backup::RecoveryTarget::Xid(raw) => {
                     pgvisor_core::backup::validate_recovery_target_xid(
                         raw,
-                        &BasebackupMeta::new(
-                            &snapshot_id,
-                            Utc::now(),
-                            BackupType::Full,
-                            "0/0",
-                            0,
-                        ),
+                        &BasebackupMeta::new(&snapshot_id, Utc::now(), BackupType::Full, "0/0", 0),
                     )
                     .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
                 }
@@ -717,12 +905,9 @@ mod tests {
     #[tokio::test]
     async fn test_api_pitr_window() {
         let state = Arc::new(DashboardState::new("test-cluster", None));
-        let Json(res) = api_pitr_window(
-            State(state),
-            Path("snap-20260904-210000".to_string()),
-        )
-        .await
-        .unwrap();
+        let Json(res) = api_pitr_window(State(state), Path("snap-20260904-210000".to_string()))
+            .await
+            .unwrap();
 
         assert_eq!(res.snapshot_id, "snap-20260904-210000");
         assert!(res.min_timestamp <= res.max_timestamp);

@@ -214,7 +214,7 @@
 
 - [x] add demo images in README and Wiki
 
-- [ ] user import backups from file upload with web dashboard, store to s3. then backend perform restore process.
+- [x] user import backups from file upload with web dashboard, store to s3. then backend perform restore process.
 
 - [x] show `last_transaction_time` & `last_transaction_xid` in backup list table in `http://localhost:8080/backups`
 
@@ -224,9 +224,9 @@
 
 - [x] add CPU/RAM/DISK usage of each node in web dashboard
 
-- [ ] restore function. add validation for PITR time. check from backup json.
+- [x] restore function. add validation for PITR time. check from backup json.
 
-- [ ] restore add restore with xid.
+- [x] restore add restore with xid.
 
 ---
 

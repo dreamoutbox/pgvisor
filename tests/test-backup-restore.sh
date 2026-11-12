@@ -244,6 +244,50 @@ fi
 echo "✓ Verified metadata.json fields: backup_id='${META_BACKUP_ID}', label='${META_LABEL}', type='${META_TYPE}', start_date='${META_START_DATE}', timeline='${META_TIMELINE}', tx_time='${META_TX_TIME}', tx_xid='${META_TX_XID}'."
 
 # ------------------------------------------------------------------------------
+# [4c/7] Verify backup upload / import endpoint (POST /api/backups/upload)
+# ------------------------------------------------------------------------------
+echo ""
+echo "[4c/7] Verifying backup archive upload and import endpoint..."
+UPLOAD_RESP=$(curl -s -f -X POST "${DASHBOARD_URL}/api/backups/upload" \
+    "${AUTH_HEADER[@]}" \
+    -F "file=@${TMP_ARCHIVE}" \
+    -F "label=imported-e2e-test")
+
+IMPORTED_SNAPSHOT_ID=$(echo "${UPLOAD_RESP}" | json_extract "snapshot_id")
+IMPORTED_NODE=$(echo "${UPLOAD_RESP}" | json_extract "source_node")
+
+if [ -z "${IMPORTED_SNAPSHOT_ID}" ] || [[ ! "${IMPORTED_SNAPSHOT_ID}" =~ ^imported-e2e-test-snap- ]]; then
+    echo "FAILED: upload response missing or unexpected snapshot_id: ${UPLOAD_RESP}"
+    exit 1
+fi
+if [ "${IMPORTED_NODE}" != "imported" ]; then
+    echo "FAILED: imported snapshot source_node should be 'imported', got: '${IMPORTED_NODE}'"
+    exit 1
+fi
+echo "✓ Uploaded backup archive registered as '${IMPORTED_SNAPSHOT_ID}'."
+
+# Verify listed in /api/backups
+UPDATED_LIST=$(curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/backups")
+if ! echo "${UPDATED_LIST}" | grep -q "${IMPORTED_SNAPSHOT_ID}"; then
+    echo "FAILED: Imported snapshot ID ${IMPORTED_SNAPSHOT_ID} not found in /api/backups list!"
+    exit 1
+fi
+echo "✓ Verified imported snapshot is discovered in backup list."
+
+# Test upload with invalid file returns HTTP 400
+INVALID_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${DASHBOARD_URL}/api/backups/upload" \
+    "${AUTH_HEADER[@]}" \
+    -F "file=@${SCRIPT_DIR}/test-backup-restore.sh")
+if [ "${INVALID_CODE}" != "400" ]; then
+    echo "FAILED: uploading non-archive should return 400 Bad Request, got: ${INVALID_CODE}"
+    exit 1
+fi
+echo "✓ Uploading invalid non-archive returned expected HTTP 400 Bad Request."
+
+# Clean up imported snapshot
+curl -s "${AUTH_HEADER[@]}" -X DELETE "${DASHBOARD_URL}/api/backups/${IMPORTED_SNAPSHOT_ID}" > /dev/null 2>&1 || true
+
+# ------------------------------------------------------------------------------
 # [5/7] Simulate disaster: Drop table 't1'
 # ------------------------------------------------------------------------------
 echo ""

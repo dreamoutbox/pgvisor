@@ -163,6 +163,211 @@ pub fn process_basebackup_archive<R: Read, W: Write>(
     Ok(())
 }
 
+/// Inspects an uploaded PostgreSQL basebackup archive, validates its structure,
+/// extracts or generates snapshot metadata, sanitizes the archive
+/// (stripping `backup_label.old` and any stale `metadata.json`),
+/// injects an updated `metadata.json`, and writes a clean, compressed `.tar.gz` archive.
+///
+/// Supports both `.tar.gz` (gzip compressed) and uncompressed `.tar` input streams.
+///
+/// # Arguments
+/// * `reader` - Stream containing the uploaded archive bytes (gzip or raw tar)
+/// * `writer` - Stream to write the resulting sanitized, gzip-compressed archive to
+/// * `custom_label` - Optional user-defined label to associate with the imported snapshot
+///
+/// # Errors
+/// Returns [`BackupError::ArchiveFormat`] if:
+/// * The archive stream is empty or truncated
+/// * Decompression or tar entry reading fails (e.g. invalid format)
+/// * The archive does not contain PostgreSQL's mandatory `backup_label`
+///
+/// # Example
+/// ```rust,ignore
+/// use std::fs::File;
+/// use pgvisor_core::backup::inspect_and_prepare_import_archive;
+///
+/// let input = File::open("base.tar.gz")?;
+/// let mut output = Vec::new();
+/// let meta = inspect_and_prepare_import_archive(input, &mut output, Some("migrated-db"))?;
+/// println!("Imported snapshot: {}", meta.snapshot_id);
+/// ```
+pub fn inspect_and_prepare_import_archive<R: Read, W: Write>(
+    mut reader: R,
+    writer: W,
+    custom_label: Option<&str>,
+) -> Result<BasebackupMeta, BackupError> {
+    let mut magic = [0u8; 2];
+    let n = reader.read(&mut magic)?;
+    if n < 2 {
+        return Err(BackupError::ArchiveFormat(
+            "Uploaded archive is empty or too short".to_string(),
+        ));
+    }
+
+    let is_gzip = magic[0] == 0x1f && magic[1] == 0x8b;
+    let chained = std::io::Cursor::new(magic).chain(reader);
+
+    let read_stream: Box<dyn Read> = if is_gzip {
+        Box::new(GzDecoder::new(chained))
+    } else {
+        Box::new(chained)
+    };
+
+    let mut archive = Archive::new(read_stream);
+    let gz_encoder = GzEncoder::new(writer, Compression::default());
+    let mut builder = Builder::new(gz_encoder);
+
+    let mut has_backup_label = false;
+    let mut parsed_label = ParsedBackupLabel::default();
+    let mut parsed_pg_version = None;
+    let mut existing_meta: Option<BasebackupMeta> = None;
+
+    let entries = archive.entries().map_err(|e| {
+        BackupError::ArchiveFormat(format!("Failed to read archive entries: {}", e))
+    })?;
+
+    for entry in entries {
+        let mut entry = entry.map_err(|e| {
+            BackupError::ArchiveFormat(format!("Failed to read tar entry: {}", e))
+        })?;
+        let path = entry.path().map_err(|e| {
+            BackupError::ArchiveFormat(format!("Invalid entry path in tar: {}", e))
+        })?.to_path_buf();
+        let path_str = path.to_string_lossy();
+
+        // 1. Exclude backup_label.old
+        if path_str == "backup_label.old" || path_str.ends_with("/backup_label.old") {
+            continue;
+        }
+
+        // 2. Intercept existing metadata.json
+        if path_str == "metadata.json" || path_str.ends_with("/metadata.json") {
+            let mut content = String::new();
+            if entry.read_to_string(&mut content).is_ok() {
+                if let Ok(meta) = serde_json::from_str::<BasebackupMeta>(&content) {
+                    existing_meta = Some(meta);
+                }
+            }
+            continue;
+        }
+
+        // 3. Parse backup_label and forward
+        if path_str == "backup_label" || path_str.ends_with("/backup_label") {
+            has_backup_label = true;
+            let mut content = String::new();
+            entry.read_to_string(&mut content)?;
+            parsed_label = parse_backup_label(&content);
+
+            let mut header = entry.header().clone();
+            builder.append_data(&mut header, &path, content.as_bytes())?;
+            continue;
+        }
+
+        // 4. Parse PG_VERSION and forward
+        if path_str == "PG_VERSION" || path_str.ends_with("/PG_VERSION") {
+            let mut content = String::new();
+            entry.read_to_string(&mut content)?;
+            parsed_pg_version = Some(content.trim().to_string());
+
+            let mut header = entry.header().clone();
+            builder.append_data(&mut header, &path, content.as_bytes())?;
+            continue;
+        }
+
+        // 5. Forward all other entries
+        let mut header = entry.header().clone();
+        builder.append_data(&mut header, &path, &mut entry)?;
+    }
+
+    if !has_backup_label {
+        return Err(BackupError::ArchiveFormat(
+            "Uploaded archive is not a valid PostgreSQL basebackup: missing backup_label".to_string(),
+        ));
+    }
+
+    let now = Utc::now();
+    let final_label = custom_label
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .or_else(|| existing_meta.as_ref().and_then(|m| m.label.clone()));
+
+    let snapshot_id = generate_snapshot_id(
+        final_label.as_deref().or(Some("imported")),
+        now,
+    );
+
+    let start_wal = parsed_label
+        .start_wal_file
+        .clone()
+        .or_else(|| existing_meta.as_ref().map(|m| m.start_wal.clone()))
+        .unwrap_or_else(|| "000000010000000000000001".to_string());
+
+    let backup_type = existing_meta
+        .as_ref()
+        .map(|m| m.backup_type)
+        .unwrap_or(super::manager::BackupType::Full);
+
+    let mut meta = BasebackupMeta::new(
+        &snapshot_id,
+        now,
+        backup_type,
+        start_wal,
+        0,
+    )
+    .with_label(final_label)
+    .with_source_node(Some("imported".to_string()));
+
+    meta.backup_start_date = existing_meta
+        .as_ref()
+        .and_then(|m| m.backup_start_date)
+        .or(Some(now));
+    meta.backup_finish_date = existing_meta
+        .as_ref()
+        .and_then(|m| m.backup_finish_date)
+        .or(Some(now));
+    meta.timeline = parsed_label
+        .timeline
+        .or_else(|| existing_meta.as_ref().and_then(|m| m.timeline))
+        .or(Some(1));
+    meta.start_lsn = parsed_label
+        .start_lsn
+        .or_else(|| existing_meta.as_ref().and_then(|m| m.start_lsn.clone()));
+    meta.checkpoint_location = parsed_label
+        .checkpoint_location
+        .or_else(|| existing_meta.as_ref().and_then(|m| m.checkpoint_location.clone()));
+    meta.backup_from = parsed_label
+        .backup_from
+        .or_else(|| existing_meta.as_ref().and_then(|m| m.backup_from.clone()));
+    meta.pg_version = parsed_pg_version
+        .or_else(|| existing_meta.as_ref().and_then(|m| m.pg_version.clone()));
+    meta.last_transaction_time = existing_meta
+        .as_ref()
+        .and_then(|m| m.last_transaction_time)
+        .or(Some(now));
+    meta.last_transaction_xid = existing_meta
+        .as_ref()
+        .and_then(|m| m.last_transaction_xid.clone());
+
+    // Inject fresh metadata.json into the sanitized archive
+    let meta_json = serde_json::to_vec_pretty(&meta)?;
+    let mut meta_header = Header::new_gnu();
+    meta_header.set_path("metadata.json")?;
+    meta_header.set_size(meta_json.len() as u64);
+    meta_header.set_mode(0o644);
+    meta_header.set_cksum();
+    builder.append_data(&mut meta_header, "metadata.json", meta_json.as_slice())?;
+
+    let encoder = builder.into_inner().map_err(|e| {
+        BackupError::ArchiveFormat(format!("Failed to finalize tar builder: {}", e))
+    })?;
+    encoder.finish().map_err(|e| {
+        BackupError::ArchiveFormat(format!("Failed to complete gzip stream: {}", e))
+    })?;
+
+    Ok(meta)
+}
+
 /// Creates a minimal valid simulated basebackup tar.gz containing metadata.json and backup_label.
 pub fn create_simulated_basebackup(meta: &mut BasebackupMeta) -> Result<Vec<u8>, BackupError> {
     let mut out = Vec::new();
@@ -366,5 +571,129 @@ START TIMELINE: 1
         assert!(found_metadata, "metadata.json was not injected");
         assert!(found_label, "backup_label was not preserved");
         assert!(!found_old_label, "backup_label.old was NOT excluded");
+    }
+
+    #[test]
+    fn test_inspect_and_prepare_import_archive_with_metadata() {
+        let mut in_bytes = Vec::new();
+        {
+            let gz = GzEncoder::new(&mut in_bytes, Compression::default());
+            let mut builder = Builder::new(gz);
+
+            let label_content = "START WAL LOCATION: 0/3000028 (file 000000010000000000000003)\nCHECKPOINT LOCATION: 0/3000080\nSTART TIMELINE: 2\n";
+            let mut h = Header::new_gnu();
+            h.set_path("backup_label").unwrap();
+            h.set_size(label_content.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            builder.append_data(&mut h, "backup_label", label_content.as_bytes()).unwrap();
+
+            let old_label = "OLD LABEL";
+            let mut h2 = Header::new_gnu();
+            h2.set_path("backup_label.old").unwrap();
+            h2.set_size(old_label.len() as u64);
+            h2.set_mode(0o644);
+            h2.set_cksum();
+            builder.append_data(&mut h2, "backup_label.old", old_label.as_bytes()).unwrap();
+
+            let old_meta = BasebackupMeta::new("old-snap", Utc::now(), BackupType::Full, "000000010000000000000003", 500)
+                .with_label(Some("prev-label".to_string()))
+                .with_last_transaction(Some(Utc::now()), Some("9999".to_string()));
+            let old_meta_json = serde_json::to_vec(&old_meta).unwrap();
+            let mut h3 = Header::new_gnu();
+            h3.set_path("metadata.json").unwrap();
+            h3.set_size(old_meta_json.len() as u64);
+            h3.set_mode(0o644);
+            h3.set_cksum();
+            builder.append_data(&mut h3, "metadata.json", old_meta_json.as_slice()).unwrap();
+
+            builder.into_inner().unwrap().finish().unwrap();
+        }
+
+        let mut out_bytes = Vec::new();
+        let meta = inspect_and_prepare_import_archive(in_bytes.as_slice(), &mut out_bytes, Some("new-import")).unwrap();
+
+        assert_eq!(meta.label.as_deref(), Some("new-import"));
+        assert!(meta.snapshot_id.starts_with("new-import-snap-"));
+        assert_eq!(meta.last_transaction_xid.as_deref(), Some("9999"));
+        assert_eq!(meta.source_node.as_deref(), Some("imported"));
+        assert_eq!(meta.timeline, Some(2));
+
+        // Check output archive
+        let decoder = GzDecoder::new(out_bytes.as_slice());
+        let mut archive = Archive::new(decoder);
+        let mut found_metadata = false;
+        let mut found_old_label = false;
+
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let p = entry.path().unwrap().to_string_lossy().to_string();
+            if p == "metadata.json" {
+                found_metadata = true;
+                let mut json_str = String::new();
+                entry.read_to_string(&mut json_str).unwrap();
+                let parsed: BasebackupMeta = serde_json::from_str(&json_str).unwrap();
+                assert_eq!(parsed.snapshot_id, meta.snapshot_id);
+                assert_eq!(parsed.label.as_deref(), Some("new-import"));
+                assert_eq!(parsed.last_transaction_xid.as_deref(), Some("9999"));
+            } else if p == "backup_label.old" {
+                found_old_label = true;
+            }
+        }
+        assert!(found_metadata);
+        assert!(!found_old_label);
+    }
+
+    #[test]
+    fn test_inspect_and_prepare_import_raw_tar() {
+        let mut in_bytes = Vec::new();
+        {
+            let mut builder = Builder::new(&mut in_bytes);
+            let label_content = "START WAL LOCATION: 0/1000000 (file 000000010000000000000001)\nSTART TIMELINE: 1\n";
+            let mut h = Header::new_gnu();
+            h.set_path("backup_label").unwrap();
+            h.set_size(label_content.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            builder.append_data(&mut h, "backup_label", label_content.as_bytes()).unwrap();
+            builder.finish().unwrap();
+        }
+
+        let mut out_bytes = Vec::new();
+        let meta = inspect_and_prepare_import_archive(in_bytes.as_slice(), &mut out_bytes, None).unwrap();
+        assert!(meta.snapshot_id.starts_with("imported-snap-"));
+        assert_eq!(meta.timeline, Some(1));
+        assert_eq!(meta.start_wal, "000000010000000000000001");
+    }
+
+    #[test]
+    fn test_inspect_and_prepare_import_missing_backup_label() {
+        let mut in_bytes = Vec::new();
+        {
+            let gz = GzEncoder::new(&mut in_bytes, Compression::default());
+            let mut builder = Builder::new(gz);
+            let dummy = b"hello world";
+            let mut h = Header::new_gnu();
+            h.set_path("random.txt").unwrap();
+            h.set_size(dummy.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            builder.append_data(&mut h, "random.txt", &dummy[..]).unwrap();
+            builder.into_inner().unwrap().finish().unwrap();
+        }
+
+        let mut out = Vec::new();
+        let res = inspect_and_prepare_import_archive(in_bytes.as_slice(), &mut out, None);
+        assert!(res.is_err());
+        assert!(matches!(res.unwrap_err(), BackupError::ArchiveFormat(_)));
+    }
+
+    #[test]
+    fn test_inspect_and_prepare_import_corrupted_data() {
+        let in_bytes = b"not a valid tar or gz";
+        let mut out = Vec::new();
+        let res = inspect_and_prepare_import_archive(&in_bytes[..], &mut out, None);
+        assert!(res.is_err());
+        assert!(matches!(res.unwrap_err(), BackupError::ArchiveFormat(_)));
     }
 }

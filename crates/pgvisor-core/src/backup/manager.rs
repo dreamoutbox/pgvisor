@@ -26,6 +26,9 @@ pub enum BackupError {
 
     #[error("Invalid recovery target: {0}")]
     InvalidRecoveryTarget(String),
+
+    #[error("Invalid backup archive: {0}")]
+    ArchiveFormat(String),
 }
 
 /// Type of backup snapshot performed.

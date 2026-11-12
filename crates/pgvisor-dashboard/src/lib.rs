@@ -19,7 +19,7 @@ use crate::handlers::{
     api_metrics_history, api_metrics_snapshot, api_node_action, api_node_config, api_node_logs,
     api_nodes, api_pitr_window, api_quick_restore, api_restart_node, api_restore_backup, api_revoke_membership,
     api_set_privilege, api_start_node, api_status, api_stop_node, api_switchover, api_table_data,
-    api_table_schema, api_delete_table_row, api_update_table_row, get_audit_logs_page, get_backups_page, get_login_page, get_logout,
+    api_table_schema, api_delete_table_row, api_update_table_row, api_upload_backup, get_audit_logs_page, get_backups_page, get_login_page, get_logout,
     get_node_inspect_page, get_nodes, get_overview, get_sql_console, get_tables_page, get_users_page, post_login,
     DashboardState,
 };
@@ -103,6 +103,12 @@ pub fn create_router(state: Arc<DashboardState>) -> Router {
             "/api/backups",
             get(api_list_backups).post(api_create_backup),
         )
+        .route(
+            "/api/backups/upload",
+            post(api_upload_backup).layer(axum::extract::DefaultBodyLimit::max(
+                crate::handlers::max_upload_bytes(),
+            )),
+        )
         .route("/api/backups/quick-restore", post(api_quick_restore))
         .route("/api/backups/best", get(api_find_best_backup))
         .route(
@@ -145,6 +151,8 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use chrono::Utc;
+    use pgvisor_core::backup::{BackupType, BasebackupMeta};
     use tower::ServiceExt; // for `oneshot`
 
     #[tokio::test]
@@ -522,6 +530,60 @@ mod tests {
         assert_eq!(win_json["snapshot_id"], "snap-20260904-210000");
         assert!(win_json["min_timestamp"].as_i64().unwrap() <= win_json["max_timestamp"].as_i64().unwrap());
         assert!(win_json["last_transaction_time"].is_string());
+
+        // 14f. Test POST /api/backups/upload
+        let mut sim_meta = BasebackupMeta::new(
+            "temp-snap",
+            Utc::now(),
+            BackupType::Full,
+            "000000010000000000000001",
+            100,
+        )
+        .with_last_transaction(Some(Utc::now()), Some("8888".to_string()));
+        let valid_tar_gz = pgvisor_core::backup::create_simulated_basebackup(&mut sim_meta).unwrap();
+
+        let boundary = "---------------------------974767299852498929531610575";
+        let mut body_bytes = Vec::new();
+        body_bytes.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+        body_bytes.extend_from_slice(b"Content-Disposition: form-data; name=\"label\"\r\n\r\nupload-test\r\n");
+        body_bytes.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+        body_bytes.extend_from_slice(b"Content-Disposition: form-data; name=\"file\"; filename=\"backup.tar.gz\"\r\n");
+        body_bytes.extend_from_slice(b"Content-Type: application/gzip\r\n\r\n");
+        body_bytes.extend_from_slice(&valid_tar_gz);
+        body_bytes.extend_from_slice(b"\r\n");
+        body_bytes.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/backups/upload")
+            .header("Content-Type", format!("multipart/form-data; boundary={}", boundary))
+            .body(Body::from(body_bytes))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let uploaded_meta: BasebackupMeta = serde_json::from_slice(&body).unwrap();
+        assert!(uploaded_meta.snapshot_id.starts_with("upload-test-snap-"));
+        assert_eq!(uploaded_meta.label.as_deref(), Some("upload-test"));
+        assert_eq!(uploaded_meta.last_transaction_xid.as_deref(), Some("8888"));
+        assert_eq!(uploaded_meta.source_node.as_deref(), Some("imported"));
+
+        // 14g. Test POST /api/backups/upload with invalid archive
+        let mut bad_body = Vec::new();
+        bad_body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+        bad_body.extend_from_slice(b"Content-Disposition: form-data; name=\"file\"; filename=\"corrupt.tar.gz\"\r\n\r\ncorrupted data\r\n");
+        bad_body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/backups/upload")
+            .header("Content-Type", format!("multipart/form-data; boundary={}", boundary))
+            .body(Body::from(bad_body))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         // 15. Test GET /users page
         let response = app
