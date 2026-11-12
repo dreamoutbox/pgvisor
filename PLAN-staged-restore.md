@@ -5,13 +5,13 @@ Implement a non-destructive, atomic shadow-recovery restore process on the clust
 
 ---
 
-### Phase 1: Proxy Client Connection Pausing and Buffering [STATUS: TODO]
+### Phase 1: Proxy Client Connection Pausing and Buffering [STATUS: DONE]
 - Goal: Enable `pgvisor-proxy` to temporarily pause and buffer client connections during cluster restore, unpausing them immediately if restore fails or resuming after timeline switch on success.
 - Tasks:
-  - [ ] Add atomic `paused` state and condition variable / notify mechanism to `ConnectionPool` (`crates/pgvisor-proxy/src/pool.rs`).
-  - [ ] Implement `pause_client_traffic()` and `resume_client_traffic()` on `ConnectionPool`.
-  - [ ] Update client query dispatch in `crates/pgvisor-proxy/src/server.rs` to await resume if paused (with a configurable timeout, e.g. 60s, returning `57P03 - cannot_connect_now` if timeout expires).
-  - [ ] Wrap `ProxyBackupService::restore_cluster` (`crates/pgvisor-proxy/src/backup.rs`) to pause client queries before notifying nodes, resuming immediately on failure or draining and resuming on success.
+  - [x] Add atomic `paused` state and condition variable / notify mechanism to `ConnectionPool` (`crates/pgvisor-proxy/src/pool.rs`).
+  - [x] Implement `pause_client_traffic()` and `resume_client_traffic()` on `ConnectionPool`.
+  - [x] Update client query dispatch in `crates/pgvisor-proxy/src/server.rs` to await resume if paused (with a configurable timeout, e.g. 60s, returning `57P03 - cannot_connect_now` if timeout expires).
+  - [x] Wrap `ProxyBackupService::restore_cluster` (`crates/pgvisor-proxy/src/backup.rs`) to pause client queries before notifying nodes, resuming immediately on failure or draining and resuming on success.
 - Done when: `cargo nextest run -p pgvisor-proxy` passes, and proxy integration test confirms client queries pause during restore and resume cleanly.
 
 ---

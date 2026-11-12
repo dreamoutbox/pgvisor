@@ -85,26 +85,38 @@ impl PooledConnection {
         database: Option<&str>,
         tls_connector: Option<Arc<TlsConnector>>,
     ) -> Result<Self, PoolError> {
-        debug!(addr, ?role, has_tls = tls_connector.is_some(), "Opening new backend connection");
+        debug!(
+            addr,
+            ?role,
+            has_tls = tls_connector.is_some(),
+            "Opening new backend connection"
+        );
         let mut tcp_stream = TcpStream::connect(addr).await?;
 
         let mut stream = if let Some(connector) = tls_connector {
             // Send SSLRequest packet to backend
             let mut ssl_req = [0u8; 8];
             ssl_req[0..4].copy_from_slice(&8i32.to_be_bytes());
-            ssl_req[4..8].copy_from_slice(&(pgvisor_core::protocol::SSL_REQUEST_CODE).to_be_bytes());
+            ssl_req[4..8]
+                .copy_from_slice(&(pgvisor_core::protocol::SSL_REQUEST_CODE).to_be_bytes());
             tcp_stream.write_all(&ssl_req).await?;
 
             let mut resp = [0u8; 1];
             tcp_stream.read_exact(&mut resp).await?;
             if resp[0] == b'S' {
                 let host = addr.split(':').next().unwrap_or(addr);
-                let server_name = ServerName::try_from(host.to_string())
-                    .map_err(|e| PoolError::BackendUnavailable(format!("Invalid DNS name {}: {}", host, e)))?;
+                let server_name = ServerName::try_from(host.to_string()).map_err(|e| {
+                    PoolError::BackendUnavailable(format!("Invalid DNS name {}: {}", host, e))
+                })?;
                 let tls_stream = connector
                     .connect(server_name, tcp_stream)
                     .await
-                    .map_err(|e| PoolError::BackendUnavailable(format!("TLS handshake failed with backend {}: {}", addr, e)))?;
+                    .map_err(|e| {
+                        PoolError::BackendUnavailable(format!(
+                            "TLS handshake failed with backend {}: {}",
+                            addr, e
+                        ))
+                    })?;
                 BackendStream::Tls(tls_stream)
             } else {
                 return Err(PoolError::BackendUnavailable(format!(
@@ -176,6 +188,7 @@ impl PooledConnection {
 pub struct ConnectionPool {
     inner: Arc<Mutex<PoolInner>>,
     topology_notifier: Arc<watch::Sender<u64>>,
+    pause_notifier: Arc<watch::Sender<bool>>,
     tls_connector: Option<Arc<TlsConnector>>,
 }
 
@@ -187,11 +200,13 @@ struct PoolInner {
     idle_standbys: HashMap<String, VecDeque<PooledConnection>>,
     max_idle_per_node: usize,
     version: u64,
+    paused: bool,
 }
 
 impl ConnectionPool {
     pub fn new(max_idle_per_node: usize) -> Self {
         let (tx, _rx) = watch::channel(0);
+        let (pause_tx, _pause_rx) = watch::channel(false);
         Self {
             inner: Arc::new(Mutex::new(PoolInner {
                 leader_addr: None,
@@ -201,8 +216,10 @@ impl ConnectionPool {
                 idle_standbys: HashMap::new(),
                 max_idle_per_node,
                 version: 0,
+                paused: false,
             })),
             topology_notifier: Arc::new(tx),
+            pause_notifier: Arc::new(pause_tx),
             tls_connector: None,
         }
     }
@@ -211,6 +228,34 @@ impl ConnectionPool {
     pub fn with_tls_connector(mut self, connector: Arc<TlsConnector>) -> Self {
         self.tls_connector = Some(connector);
         self
+    }
+
+    /// Pauses client query traffic across the pool (e.g. during cluster restore).
+    ///
+    /// Incoming client queries will be buffered until `resume_client_traffic` is called.
+    pub async fn pause_client_traffic(&self) {
+        let mut inner = self.inner.lock().await;
+        inner.paused = true;
+        let _ = self.pause_notifier.send(true);
+        info!("Client query traffic paused on connection pool");
+    }
+
+    /// Resumes client query traffic across the pool.
+    pub async fn resume_client_traffic(&self) {
+        let mut inner = self.inner.lock().await;
+        inner.paused = false;
+        let _ = self.pause_notifier.send(false);
+        info!("Client query traffic resumed on connection pool");
+    }
+
+    /// Returns whether client query traffic is currently paused.
+    pub async fn is_paused(&self) -> bool {
+        self.inner.lock().await.paused
+    }
+
+    /// Returns a watch receiver for client traffic pause state changes.
+    pub fn subscribe_pause(&self) -> watch::Receiver<bool> {
+        self.pause_notifier.subscribe()
     }
 
     /// Updates current cluster topology known from consensus.
@@ -311,7 +356,7 @@ impl ConnectionPool {
         self.acquire_for(role, None, None).await
     }
 
-    /// Acquires a connection, pausing and retrying if the cluster is undergoing failover.
+    /// Acquires a connection, pausing and retrying if the cluster is undergoing failover or cluster restore.
     pub async fn acquire_with_retry(
         &self,
         role: BackendRole,
@@ -323,8 +368,39 @@ impl ConnectionPool {
         let mut last_warn = Instant::now();
         let mut first = true;
         let mut rx = self.subscribe_topology();
+        let mut pause_rx = self.subscribe_pause();
 
         loop {
+            // If the pool is paused (e.g. cluster restore in progress), buffer until unpaused or timeout
+            while *pause_rx.borrow() {
+                let restore_timeout = Duration::from_secs(60).max(config.failover_timeout);
+                if start.elapsed() >= restore_timeout {
+                    return Err(PoolError::FailoverTimeout(format!(
+                        "Timed out after {:?} waiting for cluster restore to finish",
+                        start.elapsed()
+                    )));
+                }
+
+                if first || last_warn.elapsed() >= Duration::from_secs(2) {
+                    warn!(
+                        elapsed = ?start.elapsed(),
+                        timeout = ?restore_timeout,
+                        "Cluster restore in progress; buffering client request"
+                    );
+                    last_warn = Instant::now();
+                    first = false;
+                }
+
+                tokio::select! {
+                    _ = tokio::time::sleep(config.retry_interval) => {}
+                    res = pause_rx.changed() => {
+                        if res.is_err() {
+                            tokio::time::sleep(config.retry_interval).await;
+                        }
+                    }
+                }
+            }
+
             match self.acquire_for(role, user, database).await {
                 Ok(conn) => return Ok(conn),
                 Err(err) => {
@@ -489,5 +565,31 @@ mod tests {
             Err(e) => panic!("Expected FailoverTimeout, got error: {}", e),
             Ok(_) => panic!("Expected FailoverTimeout, but connection succeeded"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_pool_client_traffic_pause_and_resume() {
+        let pool = ConnectionPool::new(5);
+        assert!(!pool.is_paused().await);
+
+        pool.pause_client_traffic().await;
+        assert!(pool.is_paused().await);
+
+        let pool_clone = pool.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            pool_clone.resume_client_traffic().await;
+        });
+
+        let config = FailoverConfig {
+            failover_timeout: Duration::from_millis(200),
+            retry_interval: Duration::from_millis(10),
+        };
+
+        // When paused, acquire_with_retry buffers until resumed
+        let _ = pool
+            .acquire_with_retry(BackendRole::Leader, &config, None, None)
+            .await;
+        assert!(!pool.is_paused().await);
     }
 }

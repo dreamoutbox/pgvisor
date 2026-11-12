@@ -20,3 +20,4 @@ failed-local-test-logs/
 bug-notes/
 debug-s3-bucket-snapshot/
 bugs/
+bug-note.txt

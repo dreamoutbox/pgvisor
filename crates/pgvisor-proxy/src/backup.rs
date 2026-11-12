@@ -517,6 +517,11 @@ impl ProxyBackupService {
             "Executing cluster restore request"
         );
 
+        // Pause client traffic on connection pool while restore is in progress
+        if let Some(pool) = &self.pool {
+            pool.pause_client_traffic().await;
+        }
+
         // Validate recovery target timestamp before notifying standbys or leader
         if let Some(target) = target_time.as_deref() {
             let trimmed = target.trim();
@@ -530,6 +535,9 @@ impl ProxyBackupService {
                 if let Ok(dt) = parsed_dt {
                     let now = Utc::now();
                     if dt > now + chrono::Duration::seconds(10) {
+                        if let Some(pool) = &self.pool {
+                            pool.resume_client_traffic().await;
+                        }
                         return Err(format!(
                             "Recovery target timestamp ({}) cannot be in the future. Cluster current time is {}.",
                             dt.format("%Y-%m-%d %H:%M:%S UTC"),
@@ -593,6 +601,9 @@ impl ProxyBackupService {
         let resp = match resp_result {
             Ok(r) => r,
             Err(e) => {
+                if let Some(pool) = &self.pool {
+                    pool.resume_client_traffic().await;
+                }
                 // Cancel Restoring state on standbys so they don't hang in degraded state
                 for standby_addr in &standbys {
                     let standby_host = standby_addr.split(':').next().unwrap_or(standby_addr);
@@ -612,6 +623,9 @@ impl ProxyBackupService {
         if !resp.status().is_success() {
             let status = resp.status();
             let err_text = resp.text().await.unwrap_or_default();
+            if let Some(pool) = &self.pool {
+                pool.resume_client_traffic().await;
+            }
             // Cancel Restoring state on standbys so they don't hang in degraded state
             for standby_addr in &standbys {
                 let standby_host = standby_addr.split(':').next().unwrap_or(standby_addr);
@@ -677,10 +691,11 @@ impl ProxyBackupService {
             }
         }
 
-        // 3. Drain proxy idle connection pool to refresh connections
+        // 3. Drain proxy idle connection pool to refresh connections and resume traffic
         if let Some(pool) = &self.pool {
-            info!("Flushing proxy connection pool after restore");
+            info!("Flushing proxy connection pool and resuming client traffic after restore");
             pool.drain_all().await;
+            pool.resume_client_traffic().await;
         }
 
         let detail = target_time
