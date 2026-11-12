@@ -439,6 +439,12 @@
                 placeholder="YYYY-MM-DD HH:MM:SS (leave blank for latest in snapshot)">
         </div>
 
+        <div class="form-group">
+            <label for="recoveryXid">Or PITR Target Transaction ID (XID)</label>
+            <input type="text" id="recoveryXid" class="form-control"
+                placeholder="e.g. 10050 (mutually exclusive with target time)">
+        </div>
+
         <div class="modal-actions">
             <button class="btn btn-secondary" onclick="closeRestoreModal()">Cancel</button>
             <button id="btnSubmitRestore" class="btn btn-danger" onclick="submitRestore()">Execute Restore</button>
@@ -513,6 +519,8 @@
         currentRestoreSnapshot = snapshotId;
         document.getElementById('restoreSnapshotId').textContent = snapshotId;
         document.getElementById('recoveryTime').value = '';
+        const xidEl = document.getElementById('recoveryXid');
+        if (xidEl) xidEl.value = '';
         document.getElementById('restoreModal').style.display = 'flex';
     }
 
@@ -524,13 +532,26 @@
     async function submitRestore() {
         const btn = document.getElementById('btnSubmitRestore');
         const recoveryTime = document.getElementById('recoveryTime').value.trim();
+        const xidEl = document.getElementById('recoveryXid');
+        const recoveryXid = xidEl ? xidEl.value.trim() : '';
 
-        if (recoveryTime) {
+        if (recoveryTime && recoveryXid) {
+            showToast('Please specify either target time or target XID, not both.', true);
+            return;
+        }
+
+        const payload = {};
+        if (recoveryXid) {
+            payload.recovery_target_xid = recoveryXid;
+            payload.recovery_target = { type: 'xid', value: recoveryXid };
+        } else if (recoveryTime) {
             const parsedTime = Date.parse(recoveryTime.endsWith('Z') || recoveryTime.includes('+') ? recoveryTime : recoveryTime + ' UTC');
             if (!isNaN(parsedTime) && parsedTime > Date.now() + 10000) {
                 showToast(`Recovery target timestamp (${recoveryTime}) cannot be in the future.`, true);
                 return;
             }
+            payload.recovery_target_time = recoveryTime;
+            payload.recovery_target = { type: 'time', value: recoveryTime };
         }
 
         btn.disabled = true;
@@ -540,9 +561,7 @@
             const resp = await fetch(`/api/backups/${encodeURIComponent(currentRestoreSnapshot)}/restore`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    recovery_target_time: recoveryTime || null
-                })
+                body: JSON.stringify(payload)
             });
 
             if (!resp.ok) {

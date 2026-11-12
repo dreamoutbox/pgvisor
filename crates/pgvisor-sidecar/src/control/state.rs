@@ -83,6 +83,35 @@ impl SidecarState {
 pub struct RestorePayload {
     pub snapshot_id: String,
     pub recovery_target_time: Option<String>,
+    pub recovery_target_xid: Option<String>,
+    #[serde(default)]
+    pub recovery_target: Option<pgvisor_core::backup::RecoveryTarget>,
+}
+
+impl RestorePayload {
+    /// Resolves the intended recovery target specification, giving precedence to explicit
+    /// enum values followed by XID and time strings.
+    pub fn target(&self) -> Option<pgvisor_core::backup::RecoveryTarget> {
+        if let Some(ref target) = self.recovery_target {
+            Some(target.clone())
+        } else if let Some(ref xid) = self.recovery_target_xid {
+            let trimmed = xid.trim();
+            if !trimmed.is_empty() {
+                Some(pgvisor_core::backup::RecoveryTarget::Xid(trimmed.to_string()))
+            } else {
+                None
+            }
+        } else if let Some(ref time) = self.recovery_target_time {
+            let trimmed = time.trim();
+            if !trimmed.is_empty() {
+                Some(pgvisor_core::backup::RecoveryTarget::Time(trimmed.to_string()))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Deserialize, Default)]

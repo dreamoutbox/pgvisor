@@ -475,7 +475,7 @@ impl ProxyBackupService {
     async fn restore_backup_inner(
         &self,
         snapshot_id: &str,
-        target_time: Option<String>,
+        recovery_target: Option<pgvisor_core::backup::RecoveryTarget>,
     ) -> Result<String, String> {
         let (b_type_str, backup_name) =
             if let Ok(list) = self.backup_manager.list_basebackups().await {
@@ -505,37 +505,47 @@ impl ProxyBackupService {
                 (t, snapshot_id.to_string())
             };
 
+        let target_display = recovery_target.as_ref().and_then(|t| match t {
+            pgvisor_core::backup::RecoveryTarget::Time(s) => Some(s.as_str()),
+            pgvisor_core::backup::RecoveryTarget::Xid(s) => Some(s.as_str()),
+            pgvisor_core::backup::RecoveryTarget::Latest => Some("latest"),
+        });
+
         pgvisor_core::log_highlight(&pgvisor_core::format_restore_highlight(
             b_type_str,
             &backup_name,
-            target_time.as_deref(),
+            target_display,
         ));
 
         info!(
             snapshot_id,
-            ?target_time,
+            ?recovery_target,
             "Executing cluster restore request"
         );
 
-        // Validate recovery target timestamp against snapshot metadata before pausing client traffic or notifying nodes
-        if let Some(target) = target_time.as_deref() {
-            let trimmed = target.trim();
-            if !trimmed.is_empty() {
-                let list = self.backup_manager.list_basebackups().await.unwrap_or_default();
-                let snapshot = list.iter().find(|b| {
-                    b.snapshot_id == snapshot_id || b.label.as_deref() == Some(snapshot_id)
-                });
-                if let Some(snap) = snapshot {
-                    pgvisor_core::backup::validate_recovery_target_time(
-                        trimmed,
-                        snap,
-                        &list,
-                        Utc::now(),
-                    )
+        // Validate recovery target against snapshot metadata before pausing client traffic or notifying nodes
+        if let Some(ref target) = recovery_target {
+            let list = self.backup_manager.list_basebackups().await.unwrap_or_default();
+            let snapshot = list.iter().find(|b| {
+                b.snapshot_id == snapshot_id || b.label.as_deref() == Some(snapshot_id)
+            });
+            if let Some(snap) = snapshot {
+                pgvisor_core::backup::validate_recovery_target(target, snap, &list, Utc::now())
                     .map_err(|e| e.to_string())?;
-                } else {
-                    pgvisor_core::backup::parse_target_timestamp(trimmed)
-                        .map_err(|e| e.to_string())?;
+            } else {
+                match target {
+                    pgvisor_core::backup::RecoveryTarget::Time(s) => {
+                        pgvisor_core::backup::parse_target_timestamp(s)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    pgvisor_core::backup::RecoveryTarget::Xid(x) => {
+                        if x.trim().is_empty() || x.trim().parse::<u64>().is_err() {
+                            return Err(format!(
+                                "Invalid transaction ID '{x}'. XID must be a positive integer"
+                            ));
+                        }
+                    }
+                    pgvisor_core::backup::RecoveryTarget::Latest => {}
                 }
             }
         }
@@ -583,10 +593,24 @@ impl ProxyBackupService {
         );
         info!(%leader_restore_url, "Sending restore command to leader sidecar");
 
-        let restore_body = serde_json::json!({
+        let mut restore_body = serde_json::json!({
             "snapshot_id": snapshot_id,
-            "recovery_target_time": target_time,
         });
+        if let Some(ref target) = recovery_target {
+            match target {
+                pgvisor_core::backup::RecoveryTarget::Time(t) => {
+                    restore_body["recovery_target_time"] = serde_json::json!(t);
+                    restore_body["recovery_target"] = serde_json::to_value(target).unwrap_or_default();
+                }
+                pgvisor_core::backup::RecoveryTarget::Xid(x) => {
+                    restore_body["recovery_target_xid"] = serde_json::json!(x);
+                    restore_body["recovery_target"] = serde_json::to_value(target).unwrap_or_default();
+                }
+                pgvisor_core::backup::RecoveryTarget::Latest => {
+                    restore_body["recovery_target"] = serde_json::to_value(target).unwrap_or_default();
+                }
+            }
+        }
 
         let resp_result = self
             .http_client
@@ -695,9 +719,8 @@ impl ProxyBackupService {
             pool.resume_client_traffic().await;
         }
 
-        let detail = target_time
-            .as_deref()
-            .map(|t| format!(" with PITR target timestamp '{}'", t))
+        let detail = target_display
+            .map(|t| format!(" with PITR target '{}'", t))
             .unwrap_or_default();
 
         if let Some(audit) = self.audit_log.as_ref() {
@@ -711,7 +734,7 @@ impl ProxyBackupService {
                     None,
                     Some(&leader_host),
                     log_detail,
-                    target_time.clone(),
+                    target_display.map(String::from),
                 )
                 .await;
         }
@@ -758,10 +781,10 @@ impl BackupService for ProxyBackupService {
     async fn restore_backup(
         &self,
         snapshot_id: &str,
-        target_time: Option<String>,
+        target: Option<pgvisor_core::backup::RecoveryTarget>,
     ) -> Result<String, String> {
         let (leader_host, lock_token) = self.acquire_backup_lock_on_leader().await?;
-        let res = self.restore_backup_inner(snapshot_id, target_time).await;
+        let res = self.restore_backup_inner(snapshot_id, target).await;
         self.release_backup_lock_on_leader(&leader_host, &lock_token)
             .await;
         res

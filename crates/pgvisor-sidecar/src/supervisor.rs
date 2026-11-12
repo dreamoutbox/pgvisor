@@ -548,19 +548,19 @@ impl PostgresSupervisor {
     ///
     /// # Arguments
     /// * `config` - Base PostgreSQL configuration of the running instance.
-    /// * `recovery_target_time` - Optional PITR recovery target timestamp string.
+    /// * `recovery_target` - Optional PITR recovery target specification (Time, Xid, Latest).
     ///
     /// # Returns
     /// Cloned and adjusted `PostgresConfig` for shadow process recovery.
     pub fn generate_staging_config(
         config: &PostgresConfig,
-        recovery_target_time: Option<&str>,
+        recovery_target: Option<&pgvisor_core::backup::RecoveryTarget>,
     ) -> PostgresConfig {
         let mut staging_config = config.clone();
         staging_config.port = config.port.wrapping_add(1);
         staging_config.primary_conninfo = None;
 
-        if let Some(target_time) = recovery_target_time {
+        if let Some(target) = recovery_target {
             let sidecar_bin = std::env::current_exe()
                 .ok()
                 .and_then(|p| p.to_str().map(String::from))
@@ -569,8 +569,20 @@ impl PostgresSupervisor {
             if staging_config.restore_command.is_none() {
                 staging_config.restore_command = Some(format!("{sidecar_bin} restore %f %p"));
             }
-            staging_config.recovery_target_time = Some(target_time.to_string());
-            staging_config.recovery_target_action = Some("promote".to_string());
+            match target {
+                pgvisor_core::backup::RecoveryTarget::Time(target_time) => {
+                    staging_config.recovery_target_time = Some(target_time.clone());
+                    staging_config.recovery_target_action = Some("promote".to_string());
+                }
+                pgvisor_core::backup::RecoveryTarget::Xid(target_xid) => {
+                    staging_config.recovery_target_xid = Some(target_xid.clone());
+                    staging_config.recovery_target_inclusive = Some(true);
+                    staging_config.recovery_target_action = Some("promote".to_string());
+                }
+                pgvisor_core::backup::RecoveryTarget::Latest => {
+                    staging_config.recovery_target_action = Some("promote".to_string());
+                }
+            }
         }
 
         staging_config
@@ -811,7 +823,7 @@ impl PostgresSupervisor {
         &self,
         tar_bytes: &[u8],
         config: &PostgresConfig,
-        recovery_target_time: Option<&str>,
+        recovery_target: Option<&pgvisor_core::backup::RecoveryTarget>,
     ) -> Result<(), SupervisorError> {
         info!(dir = ?self.data_dir, "Initiating staged cluster restore from snapshot");
 
@@ -836,7 +848,7 @@ impl PostgresSupervisor {
         };
 
         // 3. Generate staging configuration with port + 1 and PITR settings
-        let staging_config = Self::generate_staging_config(config, recovery_target_time);
+        let staging_config = Self::generate_staging_config(config, recovery_target);
 
         // 4. Spawn shadow Postgres process on staging directory
         let mut shadow_child = match self.spawn_shadow_postgres(&staging_dir, &staging_config).await {
@@ -1179,8 +1191,9 @@ mod tests {
         };
 
         let dummy_tar = vec![0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff];
+        let target = pgvisor_core::backup::RecoveryTarget::Time("2026-09-05 05:00:00 UTC".to_string());
         let res = supervisor
-            .restore_from_snapshot(&dummy_tar, &config, Some("2026-09-05 05:00:00 UTC"))
+            .restore_from_snapshot(&dummy_tar, &config, Some(&target))
             .await;
 
         assert!(res.is_err());
@@ -1260,13 +1273,16 @@ mod tests {
             port: 5432,
             primary_conninfo: Some("host=node1 port=5432 user=replicator".into()),
             recovery_target_time: None,
+            recovery_target_xid: None,
             recovery_target_action: None,
             ..Default::default()
         };
 
+        // Time target
+        let time_target = pgvisor_core::backup::RecoveryTarget::Time("2026-11-12 06:45:00 UTC".to_string());
         let staging_config = PostgresSupervisor::generate_staging_config(
             &base_config,
-            Some("2026-11-12 06:45:00 UTC"),
+            Some(&time_target),
         );
 
         assert_eq!(staging_config.port, 5433);
@@ -1285,6 +1301,18 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains("restore %f %p"));
+
+        // XID target
+        let xid_target = pgvisor_core::backup::RecoveryTarget::Xid("10050".to_string());
+        let staging_xid = PostgresSupervisor::generate_staging_config(
+            &base_config,
+            Some(&xid_target),
+        );
+
+        assert_eq!(staging_xid.port, 5433);
+        assert_eq!(staging_xid.recovery_target_xid.as_deref(), Some("10050"));
+        assert_eq!(staging_xid.recovery_target_inclusive, Some(true));
+        assert_eq!(staging_xid.recovery_target_action.as_deref(), Some("promote"));
     }
 
     #[tokio::test]
@@ -1325,8 +1353,9 @@ mod tests {
         };
 
         let dummy_corrupt_tar = vec![0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff];
+        let target = pgvisor_core::backup::RecoveryTarget::Time("2026-11-12 06:45:00 UTC".to_string());
         let result = supervisor
-            .restore_from_snapshot(&dummy_corrupt_tar, &config, Some("2026-11-12 06:45:00 UTC"))
+            .restore_from_snapshot(&dummy_corrupt_tar, &config, Some(&target))
             .await;
 
         assert!(result.is_err());

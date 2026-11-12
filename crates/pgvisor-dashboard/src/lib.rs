@@ -381,6 +381,30 @@ mod tests {
         assert!(err_msg.contains("earlier than basebackup finish time"));
         assert!(err_msg.contains("cannot roll backward"));
 
+        // 14e. Test POST /api/backups/:id/restore with valid and invalid XID targets
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/backups/snap-20260904-210000/restore")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"recovery_target_xid": "9999"}"#))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let err_msg = String::from_utf8(body.to_vec()).unwrap();
+        assert!(err_msg.contains("earlier than basebackup last transaction XID"));
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/backups/snap-20260904-210000/restore")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"recovery_target_xid": "10050"}"#))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
         // 15. Test GET /users page
         let response = app
             .clone()

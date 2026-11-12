@@ -35,14 +35,14 @@ Foundations (metadata surfaced in UI, validation) -> restore features that depen
   - [x] Extend `tests/test-incremental-pitr.sh` (or new script) to assert invalid target is rejected and cluster stays untouched (use polling retries per AGENTS.md).
 - Done when: unit tests pass; integration script asserts rejection with no leadership change.
 
-### Phase 3: Restore with XID [STATUS: TODO]
+### Phase 3: Restore with XID [STATUS: DONE]
 - Goal: Restore to `recovery_target_xid` as alternative to time.
 - Tasks:
-  - [ ] Introduce a `RecoveryTarget` enum (`Time`, `Xid`, `Latest`) in `pgvisor-core`, replacing the bare `Option<String>` target; keep API backward compatible (`target_time` still accepted).
-  - [ ] Plumb through dashboard request model, `ProxyBackupService::restore_backup`, sidecar `RestoreRequest` (`control/state.rs`), `PostgresConfig`/`ConfigGenerator` (`recovery_target_xid`, `recovery_target_inclusive`), and `restore_from_snapshot`.
-  - [ ] Validate xid is numeric and >= snapshot start xid when known (reuse Phase 2 validator module).
-  - [ ] Dashboard restore modal: xid input (mutually exclusive with time).
-  - [ ] Unit tests for config generation and validation; integration test: capture xid via `dev-inspect-xid.sh`-style query, restore to it, assert data.
+  - [x] Introduce a `RecoveryTarget` enum (`Time`, `Xid`, `Latest`) in `pgvisor-core`, replacing the bare `Option<String>` target; keep API backward compatible (`target_time` still accepted).
+  - [x] Plumb through dashboard request model, `ProxyBackupService::restore_backup`, sidecar `RestoreRequest` (`control/state.rs`), `PostgresConfig`/`ConfigGenerator` (`recovery_target_xid`, `recovery_target_inclusive`), and `restore_from_snapshot`.
+  - [x] Validate xid is numeric and >= snapshot start xid when known (reuse Phase 2 validator module).
+  - [x] Dashboard restore modal: xid input (mutually exclusive with time).
+  - [x] Unit tests for config generation and validation; integration test: capture xid via `dev-inspect-xid.sh`-style query, restore to it, assert data.
 - Done when: unit tests pass; new/updated integration test restores to an xid and shows expected rows. Staged shadow restore (rollback on failure) still passes `tests/test-restore-failure-rollback.sh`.
 
 ### Phase 4: Interactive slider for PITR target time [STATUS: TODO]

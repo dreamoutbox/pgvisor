@@ -312,32 +312,45 @@ pub async fn handle_restore(
     State(state): State<SidecarState>,
     Json(payload): Json<RestorePayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    // Validate target time before transitioning supervisor status
-    if let Some(target) = payload.recovery_target_time.as_deref() {
-        let trimmed = target.trim();
-        if !trimmed.is_empty() {
-            let parsed_dt = chrono::DateTime::parse_from_rfc3339(trimmed)
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .or_else(|_| {
-                    chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S").map(|ndt| {
-                        chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(ndt, chrono::Utc)
-                    })
-                });
-            if let Ok(dt) = parsed_dt {
+    // Validate target before transitioning supervisor status
+    let target = payload.target();
+    if let Some(ref t) = target {
+        match t {
+            pgvisor_core::backup::RecoveryTarget::Time(raw) => {
+                let parsed = pgvisor_core::backup::parse_target_timestamp(raw)
+                    .map_err(|e| {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            Json(serde_json::json!({
+                                "error": e.to_string()
+                            })),
+                        )
+                    })?;
                 let now = chrono::Utc::now();
-                if dt > now + chrono::Duration::seconds(10) {
+                if parsed > now + chrono::Duration::seconds(10) {
                     return Err((
                         StatusCode::BAD_REQUEST,
                         Json(serde_json::json!({
                             "error": format!(
                                 "Recovery target timestamp ({}) cannot be in the future. Current cluster time is {}.",
-                                dt.format("%Y-%m-%d %H:%M:%S UTC"),
+                                parsed.format("%Y-%m-%d %H:%M:%S UTC"),
                                 now.format("%Y-%m-%d %H:%M:%S UTC")
                             )
                         })),
                     ));
                 }
             }
+            pgvisor_core::backup::RecoveryTarget::Xid(xid) => {
+                if xid.trim().is_empty() || xid.trim().parse::<u64>().is_err() {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": format!("Invalid transaction ID '{xid}'. XID must be a positive integer")
+                        })),
+                    ));
+                }
+            }
+            pgvisor_core::backup::RecoveryTarget::Latest => {}
         }
     }
 
@@ -360,6 +373,19 @@ pub async fn handle_restore(
         )
     })?;
 
+    // Validate target against snapshot finish metadata
+    if let Some(ref t) = target {
+        pgvisor_core::backup::validate_recovery_target(t, &meta, &[meta.clone()], chrono::Utc::now())
+            .map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": e.to_string(),
+                    })),
+                )
+            })?;
+    }
+
     // Transition supervisor status to Restoring only after validation and archive retrieval succeed
     state.supervisor.set_status(ProcessStatus::Restoring).await;
 
@@ -368,10 +394,15 @@ pub async fn handle_restore(
         BackupType::Incremental => "INCREMENTAL BACKUP",
     };
     let name = meta.label.as_deref().unwrap_or(&payload.snapshot_id);
+    let target_display = target.as_ref().and_then(|t| match t {
+        pgvisor_core::backup::RecoveryTarget::Time(s) => Some(s.as_str()),
+        pgvisor_core::backup::RecoveryTarget::Xid(s) => Some(s.as_str()),
+        pgvisor_core::backup::RecoveryTarget::Latest => Some("latest"),
+    });
     log_highlight(&format_restore_highlight(
         b_type,
         name,
-        payload.recovery_target_time.as_deref(),
+        target_display,
     ));
 
     info!(snapshot_id = %payload.snapshot_id, bytes = tar_bytes.len(), "Restoring PostgreSQL data directory");
@@ -386,7 +417,7 @@ pub async fn handle_restore(
     cfg.primary_conninfo = None;
     state
         .supervisor
-        .restore_from_snapshot(&tar_bytes, &cfg, payload.recovery_target_time.as_deref())
+        .restore_from_snapshot(&tar_bytes, &cfg, target.as_ref())
         .await
         .map_err(|e| {
             (

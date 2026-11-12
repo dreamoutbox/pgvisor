@@ -178,6 +178,90 @@ pub fn validate_recovery_target_time(
     Ok(parsed)
 }
 
+/// Validates and parses a recovery target transaction ID (XID).
+///
+/// Ensures:
+/// 1. The XID is non-empty and parses into a positive integer.
+/// 2. If the snapshot metadata records a `last_transaction_xid`, the target XID is not earlier
+///    than that baseline transaction (forward recovery cannot roll backward).
+///
+/// # Arguments
+/// * `xid_raw` - Raw string representation of the target XID (e.g. "10050").
+/// * `snapshot` - Basebackup metadata for the selected snapshot.
+///
+/// # Example
+/// ```rust
+/// use chrono::Utc;
+/// use pgvisor_core::backup::{BackupType, BasebackupMeta};
+/// use pgvisor_core::backup::validation::validate_recovery_target_xid;
+///
+/// let snap = BasebackupMeta::new("snap-1", Utc::now(), BackupType::Full, "0/1", 1024)
+///     .with_last_transaction(Some(Utc::now()), Some("10000".to_string()));
+///
+/// // Target equal to or after baseline is valid
+/// assert_eq!(validate_recovery_target_xid("10050", &snap).unwrap(), 10050);
+///
+/// // Target before baseline is rejected
+/// assert!(validate_recovery_target_xid("9999", &snap).is_err());
+/// ```
+pub fn validate_recovery_target_xid(
+    xid_raw: &str,
+    snapshot: &BasebackupMeta,
+) -> Result<u64, BackupError> {
+    let trimmed = xid_raw.trim();
+    if trimmed.is_empty() {
+        return Err(BackupError::InvalidRecoveryTarget(
+            "Recovery target XID cannot be empty".to_string(),
+        ));
+    }
+
+    let parsed_xid = trimmed.parse::<u64>().map_err(|_| {
+        BackupError::InvalidRecoveryTarget(format!(
+            "Invalid transaction ID '{}'. XID must be a positive integer (e.g. 10050)",
+            xid_raw
+        ))
+    })?;
+
+    if let Some(ref base_xid_str) = snapshot.last_transaction_xid {
+        if let Ok(base_xid) = base_xid_str.trim().parse::<u64>() {
+            if parsed_xid < base_xid {
+                return Err(BackupError::InvalidRecoveryTarget(format!(
+                    "Recovery target XID ({}) is earlier than basebackup last transaction XID ({}). PostgreSQL forward recovery cannot roll backward.",
+                    parsed_xid, base_xid
+                )));
+            }
+        }
+    }
+
+    Ok(parsed_xid)
+}
+
+/// Unified validator for any [`super::recovery_target::RecoveryTarget`].
+///
+/// # Arguments
+/// * `target` - The recovery target specification (Time, Xid, or Latest).
+/// * `snapshot` - Basebackup metadata for the selected snapshot.
+/// * `all_backups` - Slice of all available basebackup metadata records.
+/// * `now` - Current reference time for future-timestamp detection.
+pub fn validate_recovery_target(
+    target: &super::recovery_target::RecoveryTarget,
+    snapshot: &BasebackupMeta,
+    all_backups: &[BasebackupMeta],
+    now: DateTime<Utc>,
+) -> Result<(), BackupError> {
+    match target {
+        super::recovery_target::RecoveryTarget::Time(t) => {
+            validate_recovery_target_time(t, snapshot, all_backups, now)?;
+            Ok(())
+        }
+        super::recovery_target::RecoveryTarget::Xid(x) => {
+            validate_recovery_target_xid(x, snapshot)?;
+            Ok(())
+        }
+        super::recovery_target::RecoveryTarget::Latest => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,5 +392,58 @@ mod tests {
             .format("%Y-%m-%d %H:%M:%S")
             .to_string();
         assert!(validate_recovery_target_time(&too_old, &snap, &[snap.clone()], now).is_err());
+    }
+
+    #[test]
+    fn test_validate_recovery_target_xid() {
+        let now = Utc::now();
+        let snap = BasebackupMeta::new(
+            "snap-1",
+            now,
+            BackupType::Full,
+            "000000010000000000000001",
+            1024,
+        )
+        .with_last_transaction(Some(now), Some("10000".to_string()));
+
+        // Valid: equal or newer XID
+        assert_eq!(validate_recovery_target_xid("10000", &snap).unwrap(), 10000);
+        assert_eq!(validate_recovery_target_xid("10050", &snap).unwrap(), 10050);
+
+        // Invalid: earlier XID than basebackup
+        let err = validate_recovery_target_xid("9999", &snap).unwrap_err();
+        match err {
+            BackupError::InvalidRecoveryTarget(msg) => {
+                assert!(msg.contains("earlier than basebackup last transaction XID"));
+                assert!(msg.contains("cannot roll backward"));
+            }
+            _ => panic!("Expected InvalidRecoveryTarget, got {:?}", err),
+        }
+
+        // Invalid: non-numeric or empty
+        assert!(validate_recovery_target_xid("", &snap).is_err());
+        assert!(validate_recovery_target_xid("not-a-number", &snap).is_err());
+    }
+
+    #[test]
+    fn test_validate_recovery_target_unified() {
+        let now = Utc::now();
+        let snap = BasebackupMeta::new(
+            "snap-1",
+            now - Duration::hours(1),
+            BackupType::Full,
+            "000000010000000000000001",
+            1024,
+        )
+        .with_last_transaction(Some(now - Duration::hours(1)), Some("5000".to_string()));
+
+        let target_latest = crate::backup::RecoveryTarget::Latest;
+        assert!(validate_recovery_target(&target_latest, &snap, &[snap.clone()], now).is_ok());
+
+        let target_xid = crate::backup::RecoveryTarget::Xid("5010".to_string());
+        assert!(validate_recovery_target(&target_xid, &snap, &[snap.clone()], now).is_ok());
+
+        let target_xid_invalid = crate::backup::RecoveryTarget::Xid("4999".to_string());
+        assert!(validate_recovery_target(&target_xid_invalid, &snap, &[snap.clone()], now).is_err());
     }
 }

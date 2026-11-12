@@ -244,7 +244,7 @@
 
 - [ ] remove `crates/pgvisor-proxy` and use `https://github.com/pgdogdev/pgdog`
 
-- [ ] move web dashboard to separate module. remove attach with `pgvisor-proxy`
+- [ ] move web dashboard to separate standalone module. separate from `pgvisor-proxy`
 
 - [ ] multiple s3 buckets/storages support.
 
@@ -266,7 +266,7 @@
 
 - [ ] add Kubernetes Operator & CRDs. - **Kubernetes Operator**: Custom CRDs and k8s-native controllers.
 
-- [ ] make sidecar worker not access the backup storage directly. (remove `S3_ENDPOINT` `S3_BUCKET` `S3_ACCESS_KEY` `S3_SECRET_KEY`). make proxy generate presigned url for backup/restore.
+- [ ] make sidecar worker not access the backup storage directly. (remove `S3_ENDPOINT` `S3_BUCKET` `S3_ACCESS_KEY` `S3_SECRET_KEY`). generate presigned url for backup/restore.
 
 ---
 

@@ -40,7 +40,8 @@
 
 ### If you want to modify Point-In-Time Recovery (PITR), Quick Restore, or snapshot selection, then check:
 
-- `crates/pgvisor-core/src/backup/validation.rs` = Pure recovery target validation (`parse_target_timestamp`, `validate_recovery_target_time`) verifying format, future timestamps, and lower bounds against snapshot finish dates
+- `crates/pgvisor-core/src/backup/recovery_target.rs` = `RecoveryTarget` enum (`Time`, `Xid`, `Latest`) for flexible PITR target specification
+- `crates/pgvisor-core/src/backup/validation.rs` = Pure recovery target validation (`parse_target_timestamp`, `validate_recovery_target_time`, `validate_recovery_target_xid`, `validate_recovery_target`) verifying format, future timestamps, and lower bounds against snapshot finish dates and baseline XIDs
 - `crates/pgvisor-dashboard/src/handlers/backup.rs` = `find_best_backup_snapshot` (resolving closest prior basebackup snapshot to target), `parse_target_timestamp`, `BackupService::quick_restore` (formatting parsed target to `YYYY-MM-DD HH:MM:SS UTC` for Postgres), `api_quick_restore`, and `api_restore_backup` validation
 - `crates/pgvisor-sidecar/src/config.rs::to_postgres_timestamp` = normalizing RFC 3339 timestamps (converting `T`/`Z` to `YYYY-MM-DD HH:MM:SS[.f]+00`) before writing `recovery_target_time` into `postgresql.conf`
 - `crates/pgvisor-dashboard/src/models.rs` = `QuickRestoreRequest`, `QuickRestoreResponse`, `BestBackupQuery`, and `BestBackupResponse` models

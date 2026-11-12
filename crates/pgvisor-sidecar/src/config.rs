@@ -93,6 +93,8 @@ pub struct PostgresConfig {
     pub restore_command: Option<String>,
     pub primary_conninfo: Option<String>,
     pub recovery_target_time: Option<String>,
+    pub recovery_target_xid: Option<String>,
+    pub recovery_target_inclusive: Option<bool>,
     pub recovery_target_action: Option<String>,
     pub ssl: bool,
     pub ssl_cert_file: Option<String>,
@@ -111,6 +113,8 @@ impl Default for PostgresConfig {
             restore_command: None,
             primary_conninfo: None,
             recovery_target_time: None,
+            recovery_target_xid: None,
+            recovery_target_inclusive: None,
             recovery_target_action: None,
             ssl: false,
             ssl_cert_file: None,
@@ -140,7 +144,7 @@ impl ConfigGenerator {
         // Targeted recovery indicator file — must be present before Postgres starts recovery.
         // Postgres removes it itself upon successful promote; the sidecar must not race it.
         let recovery_signal = dir.join("recovery.signal");
-        if config.recovery_target_time.is_some() {
+        if config.recovery_target_time.is_some() || config.recovery_target_xid.is_some() {
             File::create(&recovery_signal)?;
             info!("Created recovery.signal for targeted PITR recovery");
         } else if recovery_signal.exists() {
@@ -224,6 +228,13 @@ impl ConfigGenerator {
             let pg_time = to_postgres_timestamp(target_time);
             conf_content.push_str(&format!("recovery_target_time = '{pg_time}'\n"));
             conf_content.push_str("recovery_target_timeline = 'current'\n");
+        } else if let Some(target_xid) = &config.recovery_target_xid {
+            conf_content.push_str(&format!("recovery_target_xid = '{target_xid}'\n"));
+            conf_content.push_str("recovery_target_timeline = 'current'\n");
+            if let Some(inclusive) = config.recovery_target_inclusive {
+                let inc_str = if inclusive { "on" } else { "off" };
+                conf_content.push_str(&format!("recovery_target_inclusive = {inc_str}\n"));
+            }
         }
 
         if let Some(target_action) = &config.recovery_target_action {
@@ -343,6 +354,29 @@ mod tests {
         assert!(conf.contains("restore_command = 'pgvisor-sidecar restore %f %p'"));
         assert!(conf.contains("recovery_target_time = '2026-09-13 18:32:49'"));
         assert!(conf.contains("recovery_target_timeline = 'current'"));
+        assert!(conf.contains("recovery_target_action = 'promote'"));
+        assert!(dir.path().join("recovery.signal").exists());
+        assert!(!dir.path().join("standby.signal").exists());
+    }
+
+    #[test]
+    fn test_write_pitr_xid_recovery_config() {
+        let dir = tempdir().unwrap();
+        let config = PostgresConfig {
+            port: 5432,
+            restore_command: Some("pgvisor-sidecar restore %f %p".into()),
+            recovery_target_xid: Some("10050".into()),
+            recovery_target_inclusive: Some(true),
+            recovery_target_action: Some("promote".into()),
+            ..Default::default()
+        };
+
+        ConfigGenerator::write_configs(dir.path(), &config).unwrap();
+        let conf = fs::read_to_string(dir.path().join("postgresql.conf")).unwrap();
+        assert!(conf.contains("restore_command = 'pgvisor-sidecar restore %f %p'"));
+        assert!(conf.contains("recovery_target_xid = '10050'"));
+        assert!(conf.contains("recovery_target_timeline = 'current'"));
+        assert!(conf.contains("recovery_target_inclusive = on"));
         assert!(conf.contains("recovery_target_action = 'promote'"));
         assert!(dir.path().join("recovery.signal").exists());
         assert!(!dir.path().join("standby.signal").exists());

@@ -67,7 +67,7 @@ pub trait BackupService: Send + Sync {
     async fn restore_backup(
         &self,
         snapshot_id: &str,
-        target_time: Option<String>,
+        target: Option<pgvisor_core::backup::RecoveryTarget>,
     ) -> Result<String, String>;
     async fn quick_restore(&self, target_time: &str) -> Result<(BasebackupMeta, String), String> {
         let parsed_target = parse_target_timestamp(target_time)?;
@@ -75,7 +75,10 @@ pub trait BackupService: Send + Sync {
         let best = find_best_backup_snapshot(&backups, parsed_target)?.clone();
         let formatted_target = parsed_target.format("%Y-%m-%d %H:%M:%S UTC").to_string();
         let msg = self
-            .restore_backup(&best.snapshot_id, Some(formatted_target))
+            .restore_backup(
+                &best.snapshot_id,
+                Some(pgvisor_core::backup::RecoveryTarget::Time(formatted_target)),
+            )
             .await?;
         Ok((best, msg))
     }
@@ -193,7 +196,7 @@ impl BackupService for StandaloneBackupService {
     async fn restore_backup(
         &self,
         snapshot_id: &str,
-        target_time: Option<String>,
+        target: Option<pgvisor_core::backup::RecoveryTarget>,
     ) -> Result<String, String> {
         let lock = self.backups.read().await;
         if let Some(b) = lock.iter().find(|b| b.snapshot_id == snapshot_id) {
@@ -202,13 +205,18 @@ impl BackupService for StandaloneBackupService {
                 BackupType::Incremental => "INCREMENTAL BACKUP",
             };
             let backup_name = b.label.as_deref().unwrap_or(&b.snapshot_id);
+            let target_str = target.as_ref().and_then(|t| match t {
+                pgvisor_core::backup::RecoveryTarget::Time(s) => Some(s.as_str()),
+                pgvisor_core::backup::RecoveryTarget::Xid(s) => Some(s.as_str()),
+                pgvisor_core::backup::RecoveryTarget::Latest => Some("latest"),
+            });
             pgvisor_core::log_highlight(&pgvisor_core::format_restore_highlight(
                 b_type_str,
                 backup_name,
-                target_time.as_deref(),
+                target_str,
             ));
 
-            let detail = target_time
+            let detail = target_str
                 .map(|t| format!(" (PITR target: {})", t))
                 .unwrap_or_default();
             Ok(format!(
@@ -362,48 +370,57 @@ pub async fn api_restore_backup(
     Path(snapshot_id): Path<String>,
     Json(payload): Json<RestoreBackupRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let target_time = if let Some(raw) = payload.recovery_target_time.as_deref() {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            // Validate against snapshot metadata using shared core validator
-            let backups = state
-                .backup_service
-                .list_backups()
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let target = payload.target();
 
-            let parsed = if let Some(snap) = backups
-                .iter()
-                .find(|b| b.snapshot_id == snapshot_id || b.label.as_deref() == Some(&snapshot_id))
-            {
-                pgvisor_core::backup::validate_recovery_target_time(
-                    trimmed,
-                    snap,
-                    &backups,
-                    Utc::now(),
-                )
-                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
-            } else {
-                parse_target_timestamp(trimmed).map_err(|e| (StatusCode::BAD_REQUEST, e))?
-            };
-            Some(parsed.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+    if let Some(ref t) = target {
+        // Validate target against snapshot metadata using shared core validator
+        let backups = state
+            .backup_service
+            .list_backups()
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+        if let Some(snap) = backups
+            .iter()
+            .find(|b| b.snapshot_id == snapshot_id || b.label.as_deref() == Some(&snapshot_id))
+        {
+            pgvisor_core::backup::validate_recovery_target(t, snap, &backups, Utc::now())
+                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        } else {
+            match t {
+                pgvisor_core::backup::RecoveryTarget::Time(raw) => {
+                    parse_target_timestamp(raw)
+                        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+                }
+                pgvisor_core::backup::RecoveryTarget::Xid(raw) => {
+                    pgvisor_core::backup::validate_recovery_target_xid(
+                        raw,
+                        &BasebackupMeta::new(
+                            &snapshot_id,
+                            Utc::now(),
+                            BackupType::Full,
+                            "0/0",
+                            0,
+                        ),
+                    )
+                    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+                }
+                pgvisor_core::backup::RecoveryTarget::Latest => {}
+            }
         }
-    } else {
-        None
-    };
+    }
 
     let msg = state
         .backup_service
-        .restore_backup(&snapshot_id, target_time)
+        .restore_backup(&snapshot_id, target)
         .await
         .map_err(|e| {
             if e.contains("already in progress") {
                 (StatusCode::CONFLICT, e)
             } else if e.contains("cannot be in the future")
                 || e.contains("cannot roll backward")
-                || e.contains("earlier than snapshot")
+                || e.contains("earlier than")
+                || e.contains("Invalid transaction ID")
                 || e.contains("Invalid timestamp")
             {
                 (StatusCode::BAD_REQUEST, e)
