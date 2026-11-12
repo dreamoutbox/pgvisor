@@ -28,6 +28,59 @@ pub fn to_postgres_timestamp(input: &str) -> String {
     }
 }
 
+/// PostgreSQL `log_statement` options.
+///
+/// Controls which SQL statements are logged by the PostgreSQL server:
+/// - `None`: logging disabled (`none`)
+/// - `Ddl`: logs data definition language statements such as CREATE, ALTER, DROP (`ddl`)
+/// - `Mod`: logs all DDL statements plus data-modifying write statements (INSERT, UPDATE, DELETE, TRUNCATE, COPY FROM) (`mod`)
+/// - `All`: logs all SQL statements including read-only queries like SELECT (`all`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LogStatement {
+    None,
+    Ddl,
+    #[default]
+    Mod,
+    All,
+}
+
+impl LogStatement {
+    /// Parses a string representation into a `LogStatement` variant.
+    ///
+    /// Accepts common aliases like "write" for `Mod`, and "off"/"false"/"0" for `None`.
+    ///
+    /// # Arguments
+    /// * `value` - Input string specifying the desired logging level.
+    ///
+    /// # Example
+    /// ```rust
+    /// use pgvisor_sidecar::config::LogStatement;
+    ///
+    /// assert_eq!(LogStatement::parse("mod"), Some(LogStatement::Mod));
+    /// assert_eq!(LogStatement::parse("write"), Some(LogStatement::Mod));
+    /// assert_eq!(LogStatement::parse("off"), Some(LogStatement::None));
+    /// ```
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_lowercase().as_str() {
+            "none" | "off" | "false" | "0" => Some(Self::None),
+            "ddl" => Some(Self::Ddl),
+            "mod" | "write" => Some(Self::Mod),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+
+    /// Returns the corresponding PostgreSQL configuration string literal.
+    pub fn as_pg_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Ddl => "ddl",
+            Self::Mod => "mod",
+            Self::All => "all",
+        }
+    }
+}
+
 /// Postgres instance configuration parameters.
 #[derive(Debug, Clone)]
 pub struct PostgresConfig {
@@ -35,6 +88,7 @@ pub struct PostgresConfig {
     pub max_connections: u32,
     pub shared_buffers: String,
     pub wal_keep_size: String,
+    pub log_statement: LogStatement,
     pub archive_command: Option<String>,
     pub restore_command: Option<String>,
     pub primary_conninfo: Option<String>,
@@ -52,6 +106,7 @@ impl Default for PostgresConfig {
             max_connections: 100,
             shared_buffers: "128MB".to_string(),
             wal_keep_size: "1GB".to_string(),
+            log_statement: LogStatement::Mod,
             archive_command: None,
             restore_command: None,
             primary_conninfo: None,
@@ -140,11 +195,16 @@ impl ConfigGenerator {
             wal_keep_size = '{wal_size}'\n\
             hot_standby = on\n\
             track_commit_timestamp = on\n\
+            log_statement = '{log_statement}'\n\
+            log_line_prefix = '%m [%p] tx=%x: '\n\
+            log_statement = '{log_statement}'\n\
+            log_line_prefix = '%m [%p] tx=%x: '\n\
             unix_socket_directories = '/tmp'\n",
             port = config.port,
             max_conn = config.max_connections,
             buffers = config.shared_buffers,
-            wal_size = config.wal_keep_size
+            wal_size = config.wal_keep_size,
+            log_statement = config.log_statement.as_pg_str()
         );
 
         if let Some(archive_cmd) = &config.archive_command {
@@ -324,5 +384,26 @@ mod tests {
         assert!(conf.contains("ssl = on"));
         assert!(conf.contains("ssl_cert_file = '/data/server.crt'"));
         assert!(conf.contains("ssl_key_file = '/data/server.key'"));
+    }
+
+    #[test]
+    fn test_log_statement_parsing_and_generation() {
+        assert_eq!(LogStatement::parse("none"), Some(LogStatement::None));
+        assert_eq!(LogStatement::parse("off"), Some(LogStatement::None));
+        assert_eq!(LogStatement::parse("ddl"), Some(LogStatement::Ddl));
+        assert_eq!(LogStatement::parse("mod"), Some(LogStatement::Mod));
+        assert_eq!(LogStatement::parse("write"), Some(LogStatement::Mod));
+        assert_eq!(LogStatement::parse("all"), Some(LogStatement::All));
+        assert_eq!(LogStatement::parse("invalid"), None);
+
+        let dir = tempdir().unwrap();
+        let config = PostgresConfig {
+            log_statement: LogStatement::Mod,
+            ..Default::default()
+        };
+        ConfigGenerator::write_configs(dir.path(), &config).unwrap();
+        let conf = fs::read_to_string(dir.path().join("postgresql.conf")).unwrap();
+        assert!(conf.contains("log_statement = 'mod'"));
+        assert!(conf.contains("log_line_prefix = '%m [%p] tx=%x: '"));
     }
 }

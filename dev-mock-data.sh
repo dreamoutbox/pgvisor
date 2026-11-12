@@ -151,9 +151,9 @@ echo "============================================================="
 echo ""
 echo "[Step 1/4] Setting up demo table 'pgvisor_demo' and seeding initial rows..."
 
-SCHEMA_AND_SEED_SQL="
-DROP TABLE IF EXISTS pgvisor_demo;
+run_sql "DROP TABLE IF EXISTS pgvisor_demo;"
 
+run_sql "
 CREATE TABLE pgvisor_demo (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
@@ -162,7 +162,8 @@ CREATE TABLE pgvisor_demo (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
+"
+run_sql "
 INSERT INTO pgvisor_demo (name, status, counter) VALUES
     ('alpha', 'active', 10),
     ('beta', 'active', 20),
@@ -170,7 +171,6 @@ INSERT INTO pgvisor_demo (name, status, counter) VALUES
     ('delta', 'archived', 40);
 "
 
-run_sql "${SCHEMA_AND_SEED_SQL}"
 echo "Initial data seeded successfully (4 rows: alpha, beta, gamma, delta)."
 switch_wal
 

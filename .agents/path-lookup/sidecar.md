@@ -1,3 +1,10 @@
+### If you want to configure PostgreSQL query logging levels (write statements vs read-only) or statement log prefix, then check:
+
+- `crates/pgvisor-sidecar/src/config.rs` = `LogStatement` enum (`None`, `Ddl`, `Mod`, `All`) and `ConfigGenerator::write_postgresql_conf` configuring `log_statement` and `log_line_prefix`
+- `crates/pgvisor-sidecar/src/main.rs` = reads `PGVISOR_DEBUG_LOG_STATEMENT` env var (default: `mod`)
+- `docker-compose.yml` = `PGVISOR_DEBUG_LOG_STATEMENT` env setting on node services
+- `docker-compose.with-tls.yml` = `PGVISOR_DEBUG_LOG_STATEMENT` env setting on node services
+
 ### If you want to modify recovery.signal / standby.signal creation and lifecycle, or fix PITR promote races, then check:
 
 - `crates/pgvisor-sidecar/src/config.rs` = `write_configs` (creates/removes signal files before Postgres starts) vs `write_conf_only` (rewrites only `.conf` files while Postgres is running — never touches signal files Postgres still owns)

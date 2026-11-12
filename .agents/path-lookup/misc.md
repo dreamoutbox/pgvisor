@@ -88,3 +88,9 @@
 - `examples/run-demo-app.sh` = Bootstrap and management shell script for launching cluster with demo app compose
 - `examples/demo_app/requirements.txt` = Python runtime dependencies (Flask, psycopg2-binary, gunicorn, python-dotenv)
 - `examples/demo_app/README.md` = Documentation, architecture overview, environment configuration, and execution instructions
+
+### If you want to inspect transactions, commit timestamps, and executed SQL statements from WAL and logs, then check:
+
+- `dev-inspect-transactions.sh` = Developer CLI inspecting WAL transactions from live containers or offline directories
+- `dev-inspect-xid.sh` = Symlink alias to `dev-inspect-transactions.sh`
+- `scripts/lib/parse-transactions.py` = Core parser extracting XID, commit timestamp, LSN, and correlating with server logs and audit events

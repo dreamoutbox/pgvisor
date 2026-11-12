@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use config::PostgresConfig;
+use config::{LogStatement, PostgresConfig};
 use control::{build_control_router, spawn_control_server, SidecarState};
 pub use control::{SidecarEventRecord, StatusResponse};
 use election::spawn_election_monitor;
@@ -176,6 +176,11 @@ async fn main() -> Result<()> {
         (false, None, None)
     };
 
+    let log_statement = env::var("PGVISOR_DEBUG_LOG_STATEMENT")
+        .ok()
+        .and_then(|v| LogStatement::parse(&v))
+        .unwrap_or(LogStatement::Mod);
+
     let config = PostgresConfig {
         port,
         primary_conninfo,
@@ -184,6 +189,7 @@ async fn main() -> Result<()> {
         ssl,
         ssl_cert_file,
         ssl_key_file,
+        log_statement,
         ..Default::default()
     };
 

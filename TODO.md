@@ -234,7 +234,9 @@
 
 - [ ] currently. if leader failed to restore. leader node pgvisor-sidecar stopped. but container still running. 
 
-expected behavior: if leader failed to restore. it should not stop pgvisor-sidecar. it should restart back to previous state before backup. 
+expected behavior: if leader failed to restore. it should not stop leader pgvisor-sidecar. it should restart back to previous state before backup. 
+
+and it should keep leader role and follower nodes should not take the leader role when leader failed to restore database.
 
 - leader should restore first. then follower start replicate data. incase leader failed. so follower nodes won't get invalid data.
 

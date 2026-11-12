@@ -65,6 +65,7 @@ services:
       PGVISOR_TLS_ENABLED: "true"
       PGVISOR_TLS_CERT_FILE: /var/lib/postgresql/tls/server.crt
       PGVISOR_TLS_KEY_FILE: /var/lib/postgresql/tls/server.key
+      PGVISOR_DEBUG_LOG_STATEMENT: ${PGVISOR_DEBUG_LOG_STATEMENT:-mod}
     volumes:
       - node1_data:/var/lib/postgresql/data
       - ./certs/server.crt:/var/lib/postgresql/tls/server.crt:ro
@@ -103,6 +104,7 @@ services:
       PGVISOR_TLS_ENABLED: "true"
       PGVISOR_TLS_CERT_FILE: /var/lib/postgresql/tls/server.crt
       PGVISOR_TLS_KEY_FILE: /var/lib/postgresql/tls/server.key
+      PGVISOR_DEBUG_LOG_STATEMENT: ${PGVISOR_DEBUG_LOG_STATEMENT:-mod}
     volumes:
       - node2_data:/var/lib/postgresql/data
       - ./certs/server.crt:/var/lib/postgresql/tls/server.crt:ro
@@ -141,6 +143,7 @@ services:
       PGVISOR_TLS_ENABLED: "true"
       PGVISOR_TLS_CERT_FILE: /var/lib/postgresql/tls/server.crt
       PGVISOR_TLS_KEY_FILE: /var/lib/postgresql/tls/server.key
+      PGVISOR_DEBUG_LOG_STATEMENT: ${PGVISOR_DEBUG_LOG_STATEMENT:-mod}
     volumes:
       - node3_data:/var/lib/postgresql/data
       - ./certs/server.crt:/var/lib/postgresql/tls/server.crt:ro
