@@ -258,6 +258,10 @@ and it should keep leader role and follower nodes should not take the leader rol
 
 # Backlog
 
+- [ ] remove `crates/pgvisor-proxy` and use `https://github.com/pgdogdev/pgdog`
+
+- [ ] move web dashboard to separate module. remove attach with `pgvisor-proxy`
+
 - [ ] multiple s3 buckets/storages support.
 
 - [ ] install PG extensions with web dashboard
