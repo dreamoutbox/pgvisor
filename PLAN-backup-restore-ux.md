@@ -45,12 +45,12 @@ Foundations (metadata surfaced in UI, validation) -> restore features that depen
   - [x] Unit tests for config generation and validation; integration test: capture xid via `dev-inspect-xid.sh`-style query, restore to it, assert data.
 - Done when: unit tests pass; new/updated integration test restores to an xid and shows expected rows. Staged shadow restore (rollback on failure) still passes `tests/test-restore-failure-rollback.sh`.
 
-### Phase 4: Interactive slider for PITR target time [STATUS: TODO]
+### Phase 4: Interactive slider for PITR target time [STATUS: DONE]
 - Goal: Drag a slider to choose PITR time within valid range.
 - Tasks:
-  - [ ] Add endpoint returning valid PITR window per snapshot (min = backup finish, max = coverage end) reusing Phase 2 logic.
-  - [ ] Add slider + synced datetime input to the restore modal in `backups.html`, with last_transaction_time marker.
-  - [ ] Handler test for window endpoint.
+  - [x] Add endpoint returning valid PITR window per snapshot (min = backup finish, max = coverage end) reusing Phase 2 logic.
+  - [x] Add slider + synced datetime input to the restore modal in `backups.html`, with last_transaction_time marker.
+  - [x] Handler test for window endpoint.
 - Done when: dashboard tests pass; manual check: slider bounds match validator, out-of-range impossible from UI.
 
 ### Phase 5: Database Explorer database dropdown [STATUS: TODO]

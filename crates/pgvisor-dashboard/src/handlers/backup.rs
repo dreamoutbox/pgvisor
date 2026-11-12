@@ -13,7 +13,8 @@ use tracing::error;
 use super::state::DashboardState;
 use crate::models::{
     format_bytes, BackupItemView, BackupOverviewSummary, BestBackupQuery, BestBackupResponse,
-    CreateBackupRequest, QuickRestoreRequest, QuickRestoreResponse, RestoreBackupRequest,
+    CreateBackupRequest, PitrWindowResponse, QuickRestoreRequest, QuickRestoreResponse,
+    RestoreBackupRequest,
 };
 use crate::templates::BackupsTemplate;
 
@@ -514,6 +515,47 @@ pub async fn api_delete_backup(
     })))
 }
 
+/// GET /api/backups/:snapshot_id/pitr-window -> Returns valid time boundaries and Unix timestamps for PITR slider
+pub async fn api_pitr_window(
+    State(state): State<Arc<DashboardState>>,
+    Path(snapshot_id): Path<String>,
+) -> Result<Json<PitrWindowResponse>, (StatusCode, String)> {
+    let backups = state
+        .backup_service
+        .list_backups()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let snap = backups
+        .iter()
+        .find(|b| b.snapshot_id == snapshot_id || b.label.as_deref() == Some(&snapshot_id))
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                format!("Snapshot {} not found", snapshot_id),
+            )
+        })?;
+
+    let min_dt = snap
+        .backup_finish_date
+        .or(snap.backup_start_date)
+        .unwrap_or(snap.created_at);
+    let now = Utc::now();
+    let max_dt = if now < min_dt { min_dt } else { now };
+
+    let last_tx_dt = snap.last_transaction_time;
+
+    Ok(Json(PitrWindowResponse {
+        snapshot_id: snap.snapshot_id.clone(),
+        min_time: min_dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+        min_timestamp: min_dt.timestamp(),
+        max_time: max_dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+        max_timestamp: max_dt.timestamp(),
+        last_transaction_time: last_tx_dt.map(|t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string()),
+        last_transaction_timestamp: last_tx_dt.map(|t| t.timestamp()),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -670,5 +712,21 @@ mod tests {
         assert_eq!(view_without_tx.backup_type, "incremental");
         assert_eq!(view_without_tx.last_transaction_time, None);
         assert_eq!(view_without_tx.last_transaction_xid, None);
+    }
+
+    #[tokio::test]
+    async fn test_api_pitr_window() {
+        let state = Arc::new(DashboardState::new("test-cluster", None));
+        let Json(res) = api_pitr_window(
+            State(state),
+            Path("snap-20260904-210000".to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(res.snapshot_id, "snap-20260904-210000");
+        assert!(res.min_timestamp <= res.max_timestamp);
+        assert!(res.last_transaction_time.is_some());
+        assert!(res.last_transaction_timestamp.is_some());
     }
 }

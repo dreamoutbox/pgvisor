@@ -434,15 +434,37 @@
             creation.</p>
 
         <div class="form-group">
-            <label for="recoveryTime">Optional PITR Target Time (UTC)</label>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <label for="recoveryTime" style="margin: 0;">Optional PITR Target Time (UTC)</label>
+                <span id="sliderDisplay" style="font-size: 0.8rem; font-family: monospace; color: var(--primary);"></span>
+            </div>
             <input type="text" id="recoveryTime" class="form-control"
-                placeholder="YYYY-MM-DD HH:MM:SS (leave blank for latest in snapshot)">
+                placeholder="YYYY-MM-DD HH:MM:SS (leave blank for latest in snapshot)"
+                oninput="onRecoveryTimeInput()">
+        </div>
+
+        <div id="sliderSection" style="display: none; margin-top: -8px; margin-bottom: 16px; padding: 12px; background: rgba(0,0,0,0.2); border-radius: 6px; border: 1px solid var(--border);">
+            <div style="display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 6px;">
+                <span>Interactive Timeline Slider</span>
+                <span id="sliderRangeLabel" style="font-family: monospace;"></span>
+            </div>
+            <input type="range" id="recoverySlider" style="width: 100%; cursor: pointer; accent-color: var(--primary);" oninput="onSliderChange()" />
+            <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
+                <span id="sliderMinLabel">-</span>
+                <span id="sliderMaxLabel">-</span>
+            </div>
+            <div id="sliderTxHint" style="display: none; font-size: 0.8rem; margin-top: 8px;">
+                <button type="button" class="btn btn-secondary btn-sm" style="font-size: 0.75rem; padding: 2px 8px;" onclick="selectLastTxTime()">
+                    &rarr; Jump to Last Tx: <span id="sliderTxTime" style="font-family: monospace; margin-left: 4px;"></span>
+                </button>
+            </div>
         </div>
 
         <div class="form-group">
             <label for="recoveryXid">Or PITR Target Transaction ID (XID)</label>
             <input type="text" id="recoveryXid" class="form-control"
-                placeholder="e.g. 10050 (mutually exclusive with target time)">
+                placeholder="e.g. 10050 (mutually exclusive with target time)"
+                oninput="onRecoveryXidInput()">
         </div>
 
         <div class="modal-actions">
@@ -459,6 +481,64 @@
 
 <script>
     let currentRestoreSnapshot = null;
+    let currentPitrData = null;
+
+    function formatTimestampUtc(tsSeconds) {
+        const d = new Date(tsSeconds * 1000);
+        const pad = (n) => String(n).padStart(2, '0');
+        return d.getUTCFullYear() + '-' +
+            pad(d.getUTCMonth() + 1) + '-' +
+            pad(d.getUTCDate()) + ' ' +
+            pad(d.getUTCHours()) + ':' +
+            pad(d.getUTCMinutes()) + ':' +
+            pad(d.getUTCSeconds());
+    }
+
+    function onSliderChange() {
+        const slider = document.getElementById('recoverySlider');
+        const val = parseInt(slider.value, 10);
+        const formatted = formatTimestampUtc(val);
+        document.getElementById('recoveryTime').value = formatted;
+        document.getElementById('sliderDisplay').textContent = formatted;
+        const xidEl = document.getElementById('recoveryXid');
+        if (xidEl) xidEl.value = '';
+    }
+
+    function selectLastTxTime() {
+        if (!currentPitrData || !currentPitrData.last_transaction_time) return;
+        const formatted = currentPitrData.last_transaction_time.replace(' UTC', '');
+        document.getElementById('recoveryTime').value = formatted;
+        document.getElementById('sliderDisplay').textContent = formatted;
+        if (currentPitrData.last_transaction_timestamp) {
+            document.getElementById('recoverySlider').value = currentPitrData.last_transaction_timestamp;
+        }
+        const xidEl = document.getElementById('recoveryXid');
+        if (xidEl) xidEl.value = '';
+    }
+
+    function onRecoveryTimeInput() {
+        const val = document.getElementById('recoveryTime').value.trim();
+        const xidEl = document.getElementById('recoveryXid');
+        if (val && xidEl) xidEl.value = '';
+        document.getElementById('sliderDisplay').textContent = val;
+        if (!currentPitrData) return;
+        const parsed = Date.parse(val.endsWith('Z') || val.includes('+') ? val : val + ' UTC');
+        if (!isNaN(parsed)) {
+            const sec = Math.floor(parsed / 1000);
+            const slider = document.getElementById('recoverySlider');
+            if (sec >= parseInt(slider.min, 10) && sec <= parseInt(slider.max, 10)) {
+                slider.value = sec;
+            }
+        }
+    }
+
+    function onRecoveryXidInput() {
+        const val = document.getElementById('recoveryXid').value.trim();
+        if (val) {
+            document.getElementById('recoveryTime').value = '';
+            document.getElementById('sliderDisplay').textContent = '';
+        }
+    }
 
     function showToast(msg, isError = false) {
         const toast = document.getElementById('toast');
@@ -517,16 +597,52 @@
 
     function openRestoreModal(snapshotId) {
         currentRestoreSnapshot = snapshotId;
+        currentPitrData = null;
         document.getElementById('restoreSnapshotId').textContent = snapshotId;
         document.getElementById('recoveryTime').value = '';
         const xidEl = document.getElementById('recoveryXid');
         if (xidEl) xidEl.value = '';
+        const sliderSec = document.getElementById('sliderSection');
+        if (sliderSec) sliderSec.style.display = 'none';
+        const sliderDisp = document.getElementById('sliderDisplay');
+        if (sliderDisp) sliderDisp.textContent = '';
+        const txHint = document.getElementById('sliderTxHint');
+        if (txHint) txHint.style.display = 'none';
         document.getElementById('restoreModal').style.display = 'flex';
+
+        fetch(`/api/backups/${encodeURIComponent(snapshotId)}/pitr-window`)
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+                if (!data || currentRestoreSnapshot !== snapshotId) return;
+                currentPitrData = data;
+                const slider = document.getElementById('recoverySlider');
+                slider.min = data.min_timestamp;
+                slider.max = data.max_timestamp;
+                slider.value = data.last_transaction_timestamp || data.max_timestamp;
+                const minLabel = document.getElementById('sliderMinLabel');
+                if (minLabel) minLabel.textContent = data.min_time;
+                const maxLabel = document.getElementById('sliderMaxLabel');
+                if (maxLabel) maxLabel.textContent = data.max_time;
+                const rangeLabel = document.getElementById('sliderRangeLabel');
+                if (rangeLabel) rangeLabel.textContent = `Window: ${data.min_time.split(' ')[0]} to ${data.max_time.split(' ')[0]}`;
+                if (data.last_transaction_time) {
+                    if (txHint) txHint.style.display = 'block';
+                    const txTime = document.getElementById('sliderTxTime');
+                    if (txTime) txTime.textContent = data.last_transaction_time;
+                }
+                if (sliderSec) sliderSec.style.display = 'block';
+            })
+            .catch(() => {});
     }
 
     function closeRestoreModal() {
         document.getElementById('restoreModal').style.display = 'none';
         currentRestoreSnapshot = null;
+        currentPitrData = null;
+        const sliderSec = document.getElementById('sliderSection');
+        if (sliderSec) sliderSec.style.display = 'none';
+        const sliderDisp = document.getElementById('sliderDisplay');
+        if (sliderDisp) sliderDisp.textContent = '';
     }
 
     async function submitRestore() {

@@ -17,7 +17,7 @@ use crate::handlers::{
     api_drop_user, api_execute_sql, api_find_best_backup, api_get_privileges, api_get_user,
     api_grant_membership, api_list_audit_logs, api_list_backups, api_list_tables, api_list_users,
     api_metrics_history, api_metrics_snapshot, api_node_action, api_node_config, api_node_logs,
-    api_nodes, api_quick_restore, api_restart_node, api_restore_backup, api_revoke_membership,
+    api_nodes, api_pitr_window, api_quick_restore, api_restart_node, api_restore_backup, api_revoke_membership,
     api_set_privilege, api_start_node, api_status, api_stop_node, api_switchover, api_table_data,
     api_table_schema, api_delete_table_row, api_update_table_row, get_audit_logs_page, get_backups_page, get_login_page, get_logout,
     get_node_inspect_page, get_nodes, get_overview, get_sql_console, get_tables_page, get_users_page, post_login,
@@ -107,6 +107,10 @@ pub fn create_router(state: Arc<DashboardState>) -> Router {
         .route(
             "/api/backups/:snapshot_id/download",
             get(api_download_backup),
+        )
+        .route(
+            "/api/backups/:snapshot_id/pitr-window",
+            get(api_pitr_window),
         )
         .route(
             "/api/backups/:snapshot_id/restore",
@@ -404,6 +408,21 @@ mod tests {
             .unwrap();
         let response = app.clone().oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+
+        // 14f. Test GET /api/backups/:id/pitr-window
+        let req = Request::builder()
+            .uri("/api/backups/snap-20260904-210000/pitr-window")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let win_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(win_json["snapshot_id"], "snap-20260904-210000");
+        assert!(win_json["min_timestamp"].as_i64().unwrap() <= win_json["max_timestamp"].as_i64().unwrap());
+        assert!(win_json["last_transaction_time"].is_string());
 
         // 15. Test GET /users page
         let response = app
