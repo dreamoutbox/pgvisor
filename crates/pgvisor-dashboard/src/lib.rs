@@ -172,6 +172,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("<th>CPU</th>"));
+        assert!(html.contains("<th>RAM</th>"));
+        assert!(html.contains("<th>Disk</th>"));
 
         // 3. Test GET /sql
         let response = app
@@ -965,6 +970,7 @@ mod tests {
             .unwrap();
         let snap: crate::models::ClusterMetricsSnapshot = serde_json::from_slice(&body).unwrap();
         assert_eq!(snap.nodes.len(), 3);
+        assert!(snap.nodes[0].disk_used_bytes > 0);
 
         // 3. GET /api/metrics/history returns JSON history
         let req = Request::builder()

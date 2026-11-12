@@ -219,6 +219,10 @@ mod tests {
                 replication_lag_bytes: 0,
                 uptime_secs: 3600,
                 is_local: true,
+                cpu_percent: 10.0,
+                memory_used_bytes: 512,
+                memory_total_bytes: 1024,
+                disk_used_bytes: 2048,
             }],
         };
         let template = OverviewTemplate {

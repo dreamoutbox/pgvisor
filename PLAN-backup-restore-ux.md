@@ -62,13 +62,13 @@ Foundations (metadata surfaced in UI, validation) -> restore features that depen
   - [x] Check `SqlSecurityGuard` still applies; unit + route tests.
 - Done when: unit tests pass; extend `tests/test-dashboard-tables-nodes.sh` to create a second DB and browse its tables.
 
-### Phase 6: Per-node CPU/RAM/DISK in dashboard [STATUS: TODO]
+### Phase 6: Per-node CPU/RAM/DISK in dashboard [STATUS: DONE]
 - Goal: Nodes page shows CPU, RAM, disk usage per node.
 - Tasks:
-  - [ ] Add disk usage (PGDATA volume total size computed by recursively summing directory file sizes) to `SystemMetricsCollector` or a helper and the sidecar status struct (`control/state.rs`); parse/calculation logic with unit test. No external dependencies needed.
-  - [ ] Carry fields through node DTO in `pgvisor-core/src/node.rs`, proxy cluster service, and dashboard models.
-  - [ ] Render CPU/RAM/disk bars in `nodes.html` (reuse existing overview styling).
-  - [ ] Update metrics test.
+  - [x] Add disk usage (PGDATA volume total size computed by recursively summing directory file sizes) to `SystemMetricsCollector` or a helper and the sidecar status struct (`control/state.rs`); parse/calculation logic with unit test. No external dependencies needed.
+  - [x] Carry fields through node DTO in `pgvisor-core/src/node.rs`, proxy cluster service, and dashboard models.
+  - [x] Render CPU/RAM/disk bars in `nodes.html` (reuse existing overview styling).
+  - [x] Update metrics test.
 - Done when: unit tests pass; `tests/test-metrics.sh` (or tables-nodes test) asserts the new fields are non-zero.
 
 ### Phase 7: Upload backup file and restore [STATUS: TODO]

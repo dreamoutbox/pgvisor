@@ -112,6 +112,31 @@ impl SystemMetricsCollector {
         };
         Self::parse_proc_meminfo(&contents)
     }
+
+    /// Recursively calculates the total disk size in bytes of a directory by summing all file sizes.
+    pub fn dir_size_bytes(path: &std::path::Path) -> u64 {
+        if !path.exists() {
+            return 0;
+        }
+        let mut total: u64 = 0;
+        let mut stack = vec![path.to_path_buf()];
+
+        while let Some(current) = stack.pop() {
+            if let Ok(entries) = std::fs::read_dir(&current) {
+                for entry in entries.flatten() {
+                    let entry_path = entry.path();
+                    if let Ok(meta) = entry.metadata() {
+                        if meta.is_dir() {
+                            stack.push(entry_path);
+                        } else if meta.is_file() {
+                            total = total.saturating_add(meta.len());
+                        }
+                    }
+                }
+            }
+        }
+        total
+    }
 }
 
 #[cfg(test)]
@@ -132,5 +157,20 @@ mod tests {
         let (used, total) = SystemMetricsCollector::parse_proc_meminfo(mock);
         assert_eq!(total, 1000000 * 1024);
         assert_eq!(used, 600000 * 1024);
+    }
+
+    #[test]
+    fn test_dir_size_bytes() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sub = tmp.path().join("subdir");
+        std::fs::create_dir_all(&sub).expect("create_dir");
+        std::fs::write(tmp.path().join("f1.txt"), b"12345").expect("write f1"); // 5 bytes
+        std::fs::write(sub.join("f2.txt"), b"1234567890").expect("write f2"); // 10 bytes
+
+        let size = SystemMetricsCollector::dir_size_bytes(tmp.path());
+        assert_eq!(size, 15);
+
+        let non_existent = tmp.path().join("does_not_exist");
+        assert_eq!(SystemMetricsCollector::dir_size_bytes(&non_existent), 0);
     }
 }

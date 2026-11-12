@@ -135,6 +135,8 @@ pub struct StatusResponse {
     pub cpu_percent: f32,
     pub memory_used_bytes: u64,
     pub memory_total_bytes: u64,
+    #[serde(default)]
+    pub disk_used_bytes: u64,
 }
 
 #[derive(Deserialize)]

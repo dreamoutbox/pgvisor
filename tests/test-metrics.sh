@@ -222,7 +222,19 @@ echo "${LATEST_SNAPSHOT}" | grep -q '"memory_used_bytes":' || {
     echo "FAILED: memory_used_bytes not present in node metrics"
     exit 1
 }
-echo "PASSED: Node-level telemetry (uptime, CPU, memory) verified."
+
+# Verify node disk usage is tracked
+echo "${LATEST_SNAPSHOT}" | grep -q '"disk_used_bytes":' || {
+    echo "FAILED: disk_used_bytes not present in node metrics"
+    exit 1
+}
+
+NODES_PAGE=$(curl -s -f -L "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/nodes")
+echo "${NODES_PAGE}" | grep -q "<th>Disk</th>" || {
+    echo "FAILED: /nodes missing Disk column header"
+    exit 1
+}
+echo "PASSED: Node-level telemetry (uptime, CPU, memory, disk) verified."
 
 echo ""
 echo "[6/6] Verifying backup metrics..."

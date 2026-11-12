@@ -30,6 +30,7 @@ pub async fn handle_status(State(state): State<SidecarState>) -> impl IntoRespon
     let uptime_secs = state.supervisor.uptime_secs().await;
     let cpu_percent = state.system_metrics.cpu_percent();
     let (memory_used_bytes, memory_total_bytes) = state.system_metrics.memory_usage();
+    let disk_used_bytes = crate::system::SystemMetricsCollector::dir_size_bytes(state.supervisor.data_dir());
 
     Json(StatusResponse {
         node_id: state.node_id,
@@ -41,6 +42,7 @@ pub async fn handle_status(State(state): State<SidecarState>) -> impl IntoRespon
         cpu_percent,
         memory_used_bytes,
         memory_total_bytes,
+        disk_used_bytes,
     })
 }
 

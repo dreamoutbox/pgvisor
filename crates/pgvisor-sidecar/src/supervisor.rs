@@ -73,6 +73,11 @@ impl PostgresSupervisor {
         }
     }
 
+    /// Returns the PGDATA directory path managed by this supervisor.
+    pub fn data_dir(&self) -> &Path {
+        &self.data_dir
+    }
+
     /// Ensures data directory is initialized.
     /// If primary_conninfo is set and data_dir is uninitialized, clones from primary via pg_basebackup.
     /// Otherwise initializes a primary cluster via initdb.

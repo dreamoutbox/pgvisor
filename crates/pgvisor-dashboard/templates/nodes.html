@@ -158,6 +158,9 @@
             <th>Postgres Version</th>
             <th>Role</th>
             <th>Supervision Status</th>
+            <th>CPU</th>
+            <th>RAM</th>
+            <th>Disk</th>
             <th>Replication Lag</th>
             <th>Uptime</th>
             <th>Actions</th>
@@ -192,6 +195,25 @@
                     {% when NodeHealthState::Offline %}
                         <span class="badge badge-offline">Offline</span>
                 {% endmatch %}
+            </td>
+            <td>
+                <div style="display: flex; flex-direction: column; gap: 4px; min-width: 70px;">
+                    <span style="font-size: 0.85rem; font-family: monospace;">{{ node.cpu_pretty() }}</span>
+                    <div style="background: rgba(255,255,255,0.1); border-radius: 4px; height: 5px; width: 100%; overflow: hidden;">
+                        <div style="background: {% if node.cpu_percent > 85.0 %}var(--danger){% else if node.cpu_percent > 65.0 %}var(--warning){% else %}var(--primary){% endif %}; height: 100%; width: {{ node.cpu_percent.clamp(0.0, 100.0) }}%;"></div>
+                    </div>
+                </div>
+            </td>
+            <td>
+                <div style="display: flex; flex-direction: column; gap: 4px; min-width: 105px;">
+                    <span style="font-size: 0.8rem; font-family: monospace;">{{ node.memory_pretty() }}</span>
+                    <div style="background: rgba(255,255,255,0.1); border-radius: 4px; height: 5px; width: 100%; overflow: hidden;">
+                        <div style="background: {% if node.memory_percent() > 85.0 %}var(--danger){% else if node.memory_percent() > 65.0 %}var(--warning){% else %}var(--primary){% endif %}; height: 100%; width: {{ node.memory_percent().clamp(0.0, 100.0) }}%;"></div>
+                    </div>
+                </div>
+            </td>
+            <td>
+                <span style="font-size: 0.85rem; font-family: monospace;">{{ node.disk_pretty() }}</span>
             </td>
             <td>{{ node.replication_lag_bytes }} B</td>
             <td>{{ node.uptime_secs }}s</td>

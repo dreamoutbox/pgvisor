@@ -145,6 +145,7 @@ async fn main() -> Result<()> {
         cpu_percent: Option<f32>,
         memory_used_bytes: Option<u64>,
         memory_total_bytes: Option<u64>,
+        disk_used_bytes: Option<u64>,
     }
 
     let metrics_store = Arc::new(ProxyMetricsStore::new());
@@ -282,6 +283,10 @@ async fn main() -> Result<()> {
                     replication_lag_bytes: 0,
                     uptime_secs: 100,
                     is_local: false,
+                    cpu_percent: 0.0,
+                    memory_used_bytes: 0,
+                    memory_total_bytes: 0,
+                    disk_used_bytes: 0,
                 });
                 node_id += 1;
             }
@@ -296,6 +301,10 @@ async fn main() -> Result<()> {
                     replication_lag_bytes: 64,
                     uptime_secs: 100,
                     is_local: false,
+                    cpu_percent: 0.0,
+                    memory_used_bytes: 0,
+                    memory_total_bytes: 0,
+                    disk_used_bytes: 0,
                 });
                 node_id += 1;
             }
@@ -472,6 +481,7 @@ async fn main() -> Result<()> {
                             let cpu = st.cpu_percent.unwrap_or(0.0);
                             let mem_used = st.memory_used_bytes.unwrap_or(0);
                             let mem_total = st.memory_total_bytes.unwrap_or(0);
+                            let disk = st.disk_used_bytes.unwrap_or(0);
 
                             node_telemetry_monitor.write().await.insert(
                                 st.node_id,
@@ -479,6 +489,7 @@ async fn main() -> Result<()> {
                                     cpu_percent: cpu,
                                     memory_used_bytes: mem_used,
                                     memory_total_bytes: mem_total,
+                                    disk_used_bytes: disk,
                                     replication_lag_bytes: lag_bytes,
                                     uptime_secs: uptime,
                                 },
@@ -493,6 +504,10 @@ async fn main() -> Result<()> {
                                 replication_lag_bytes: lag_bytes,
                                 uptime_secs: uptime,
                                 is_local: false,
+                                cpu_percent: cpu,
+                                memory_used_bytes: mem_used,
+                                memory_total_bytes: mem_total,
+                                disk_used_bytes: disk,
                             });
 
                             if target.is_dynamic {
@@ -624,6 +639,10 @@ async fn main() -> Result<()> {
                                 replication_lag_bytes: 0,
                                 uptime_secs: 0,
                                 is_local: false,
+                                cpu_percent: 0.0,
+                                memory_used_bytes: 0,
+                                memory_total_bytes: 0,
+                                disk_used_bytes: 0,
                             });
                             if target.is_dynamic {
                                 let mut t_lock = targets_monitor.write().await;
@@ -663,6 +682,10 @@ async fn main() -> Result<()> {
                             replication_lag_bytes: 0,
                             uptime_secs: 0,
                             is_local: false,
+                            cpu_percent: 0.0,
+                            memory_used_bytes: 0,
+                            memory_total_bytes: 0,
+                            disk_used_bytes: 0,
                         });
                         if target.is_dynamic {
                             let mut t_lock = targets_monitor.write().await;

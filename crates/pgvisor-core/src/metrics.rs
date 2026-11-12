@@ -32,6 +32,8 @@ pub struct NodeMetrics {
     pub cpu_percent: f32,
     pub memory_used_bytes: u64,
     pub memory_total_bytes: u64,
+    #[serde(default)]
+    pub disk_used_bytes: u64,
     pub pg_reads: u64,
     pub pg_writes: u64,
 }
@@ -79,6 +81,7 @@ mod tests {
                 cpu_percent: 12.5,
                 memory_used_bytes: 104857600,
                 memory_total_bytes: 1073741824,
+                disk_used_bytes: 52428800,
                 pg_reads: 1200,
                 pg_writes: 450,
             }],

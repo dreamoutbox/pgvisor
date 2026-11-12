@@ -222,7 +222,7 @@
 
 - [x] pgvisor add interactive slider drag for PITR target time 
 
-- [ ] add CPU/RAM/DISK usage of each node in web dashboard
+- [x] add CPU/RAM/DISK usage of each node in web dashboard
 
 - [ ] restore function. add validation for PITR time. check from backup json.
 

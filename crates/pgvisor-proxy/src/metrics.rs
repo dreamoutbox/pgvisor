@@ -88,6 +88,7 @@ pub struct NodeTelemetry {
     pub cpu_percent: f32,
     pub memory_used_bytes: u64,
     pub memory_total_bytes: u64,
+    pub disk_used_bytes: u64,
     pub replication_lag_bytes: u64,
     pub uptime_secs: u64,
 }
@@ -186,6 +187,7 @@ impl MetricsService for ProxyMetricsService {
                 cpu_percent: telem.cpu_percent,
                 memory_used_bytes: telem.memory_used_bytes,
                 memory_total_bytes: telem.memory_total_bytes,
+                disk_used_bytes: telem.disk_used_bytes,
                 pg_reads: reads,
                 pg_writes: writes,
             });

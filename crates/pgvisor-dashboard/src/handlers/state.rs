@@ -47,6 +47,10 @@ impl DashboardState {
                     replication_lag_bytes: 0,
                     uptime_secs: 3600,
                     is_local: true,
+                    cpu_percent: 15.2,
+                    memory_used_bytes: 420 * 1024 * 1024,
+                    memory_total_bytes: 2048 * 1024 * 1024,
+                    disk_used_bytes: 150 * 1024 * 1024,
                 },
                 NodeSummary {
                     node_id: 2,
@@ -57,6 +61,10 @@ impl DashboardState {
                     replication_lag_bytes: 64,
                     uptime_secs: 3580,
                     is_local: false,
+                    cpu_percent: 8.5,
+                    memory_used_bytes: 310 * 1024 * 1024,
+                    memory_total_bytes: 2048 * 1024 * 1024,
+                    disk_used_bytes: 148 * 1024 * 1024,
                 },
                 NodeSummary {
                     node_id: 3,
@@ -67,6 +75,10 @@ impl DashboardState {
                     replication_lag_bytes: 128,
                     uptime_secs: 3550,
                     is_local: false,
+                    cpu_percent: 6.1,
+                    memory_used_bytes: 295 * 1024 * 1024,
+                    memory_total_bytes: 2048 * 1024 * 1024,
+                    disk_used_bytes: 148 * 1024 * 1024,
                 },
             ],
         };
