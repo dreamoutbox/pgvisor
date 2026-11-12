@@ -34,6 +34,7 @@
 - `scripts/lib/parse-s3-xml.py` = S3 XML response parser extracting keys, truncation status, and continuation tokens
 - `dev-take-backups-snapshot-s3.sh` = Exports entire S3 backups bucket to local snapshot directory for offline bug reproduction
 - `dev-import-backups-snapshot-s3.sh` = Imports and restores S3 backups bucket from local snapshot directory
+- `dev-inspect-backup.sh` = Inspects backup metadata (snapshot ID, label, created at, last transaction time, last transaction xid) from S3 or local directory
 - `tests/test-dev-s3-snapshot.sh` = Automated test verifying S3 snapshot export and import round-trip reproducibility
 
 ### If you want to modify Point-In-Time Recovery (PITR), Quick Restore, or snapshot selection, then check:

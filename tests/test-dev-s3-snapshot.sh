@@ -103,4 +103,47 @@ if ! echo "${RESTORED_KEYS}" | grep -q "clusters/test-cluster/wal/00000001000000
     exit 1
 fi
 
-echo "✓ S3 Snapshot Export/Import verification passed successfully."
+# [5/5] Test dev-inspect-backup.sh on exported snapshot directory and online S3
+echo ""
+echo "[5/5] Testing dev-inspect-backup.sh..."
+# Create a legacy backup in TEST_DIR lacking transaction metadata
+echo '{"snapshot_id":"snap-legacy-02","created_at":"2026-11-10T00:00:00Z","label":"legacy"}' > "${TEST_DIR}/clusters/test-cluster/basebackups/snap-legacy-02.json"
+
+INSPECT_TABLE=$("${REPO_ROOT}/dev-inspect-backup.sh" --cluster="test-cluster" --dir="${TEST_DIR}")
+echo "${INSPECT_TABLE}"
+
+if ! echo "${INSPECT_TABLE}" | grep -q "snap-test-01"; then
+    echo "FAILED: dev-inspect-backup.sh output missing snap-test-01!"
+    exit 1
+fi
+if ! echo "${INSPECT_TABLE}" | grep -q "2026-11-12T00:00:00Z"; then
+    echo "FAILED: dev-inspect-backup.sh output missing last_transaction_time!"
+    exit 1
+fi
+if ! echo "${INSPECT_TABLE}" | grep -q "500"; then
+    echo "FAILED: dev-inspect-backup.sh output missing last_transaction_xid 500!"
+    exit 1
+fi
+# Assert legacy backup outputs "-" for missing fields
+LEGACY_LINE=$(echo "${INSPECT_TABLE}" | grep "snap-legacy-02" || true)
+if [ -z "${LEGACY_LINE}" ]; then
+    echo "FAILED: snap-legacy-02 missing from table output!"
+    exit 1
+fi
+if ! echo "${LEGACY_LINE}" | grep -q -- "-"; then
+    echo "FAILED: snap-legacy-02 does not show '-' for missing fields!"
+    exit 1
+fi
+
+# Test --json mode on specific snapshot
+INSPECT_JSON=$("${REPO_ROOT}/dev-inspect-backup.sh" --cluster="test-cluster" --dir="${TEST_DIR}" snap-test-01 --json)
+if ! echo "${INSPECT_JSON}" | jq -e '.snapshot_id == "snap-test-01"' > /dev/null; then
+    echo "FAILED: dev-inspect-backup.sh --json returned invalid snapshot_id!"
+    exit 1
+fi
+if ! echo "${INSPECT_JSON}" | jq -e '.last_transaction_xid == "500"' > /dev/null; then
+    echo "FAILED: dev-inspect-backup.sh --json returned invalid last_transaction_xid!"
+    exit 1
+fi
+
+echo "✓ S3 Snapshot Export/Import and dev-inspect-backup verification passed successfully."

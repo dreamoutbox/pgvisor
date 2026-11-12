@@ -39,13 +39,13 @@ Existing code (from exploration):
   - [x] Test script (`tests/test-dev-s3-snapshot.sh`): put sample objects, take, wipe, import, and assert identical keys and contents via a polling-safe check.
 - Done when: a take, wipe, import round trip reproduces the bucket exactly, and the scripts pass shellcheck if available.
 
-### Phase 4: dev-inspect-backup.sh [STATUS: TODO]
+### Phase 4: dev-inspect-backup.sh [STATUS: DONE]
 - Goal: Print name, label, create_time, last_transaction_time and last_transaction_xid for backups.
 - Tasks:
-  - [ ] `dev-inspect-backup.sh [snapshot-id]`: read `clusters/<cluster>/basebackups/*.json` from S3 (via `s3-common.sh`) or from `--dir debug-s3-bucket-snapshot` offline. No argument lists all, newest first. Use `jq` and fail with a clear message if it is missing.
-  - [ ] Output a plain-text aligned table. Show `-` for fields missing in old backups.
-  - [ ] Options: `--cluster` (default `pgvisor-cluster`), `--dir`, `--json`.
-  - [ ] Add a case to the Phase 3 test script that inspects a sample JSON, including one without the new fields.
+  - [x] `dev-inspect-backup.sh [snapshot-id]`: read `clusters/<cluster>/basebackups/*.json` from S3 (via `s3-common.sh`) or from `--dir debug-s3-bucket-snapshot` offline. No argument lists all, newest first. Use `jq` and fail with a clear message if it is missing.
+  - [x] Output a plain-text aligned table. Show `-` for fields missing in old backups.
+  - [x] Options: `--cluster` (default `pgvisor-cluster`), `--dir`, `--json`.
+  - [x] Add a case to the Phase 3 test script that inspects a sample JSON, including one without the new fields.
 - Done when: running against a fresh backup shows all five fields, and old backups render with `-`.
 
 ### Phase 5: Docs and path-lookup [STATUS: TODO]
