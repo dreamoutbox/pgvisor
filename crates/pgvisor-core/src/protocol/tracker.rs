@@ -78,6 +78,8 @@ impl TransactionTracker {
                     || upper.contains("PG_CREATE_RESTORE_POINT")
                     || upper.contains("PG_BACKUP_START")
                     || upper.contains("PG_BACKUP_STOP")
+                    || upper.contains("PG_TERMINATE_BACKEND")
+                    || upper.contains("PG_CANCEL_BACKEND")
                 {
                     QueryKind::Write
                 } else {
@@ -137,6 +139,14 @@ mod tests {
         assert_eq!(
             TransactionTracker::classify_query("rollback;"),
             QueryKind::Rollback
+        );
+        assert_eq!(
+            TransactionTracker::classify_query("SELECT pg_terminate_backend(123)"),
+            QueryKind::Write
+        );
+        assert_eq!(
+            TransactionTracker::classify_query("SELECT pg_cancel_backend(123)"),
+            QueryKind::Write
         );
     }
 

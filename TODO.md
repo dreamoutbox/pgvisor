@@ -252,7 +252,7 @@
 
 - [ ] make proxy and sidecar export OTEL. to use with prometheus/grafana.
 
-- [ ] web dashboard support multiple users.
+- [ ] web dashboard support multiple users. use postgres users as login
 
 - [ ] manage database and execute backup/restore with cli
 

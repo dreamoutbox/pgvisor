@@ -346,7 +346,7 @@ if ! echo "${TABLES_PAGE_HTML}" | grep -q "DB: test_extra_db"; then
 fi
 echo "Verified /tables page rendered with active database test_extra_db"
 
-exec_sql "DROP DATABASE test_extra_db;"
+exec_sql "DROP DATABASE test_extra_db WITH (FORCE);"
 echo "Cleaned up test_extra_db"
 
 echo ""
