@@ -11,12 +11,12 @@ Existing code (from exploration):
 
 ## Phases
 
-### Phase 1: Add last transaction fields to backup metadata [STATUS: TODO]
+### Phase 1: Add last transaction fields to backup metadata [STATUS: DONE]
 - Goal: `BasebackupMeta` carries `last_transaction_time` and `last_transaction_xid`, serialized optionally and backward compatible.
 - Tasks:
-  - [ ] Add `last_transaction_time: Option<DateTime<Utc>>` and `last_transaction_xid: Option<String>` with `#[serde(default, skip_serializing_if = "Option::is_none")]`. Init to `None` in `BasebackupMeta::new`. Add a `with_last_transaction` builder.
-  - [ ] Unit tests: old JSON without the fields still deserializes. A round trip with the fields works.
-  - [ ] Update `dashboard` `BackupItemView` mapping only if it constructs `BasebackupMeta` literally (fix compile errors, no UI change).
+  - [x] Add `last_transaction_time: Option<DateTime<Utc>>` and `last_transaction_xid: Option<String>` with `#[serde(default, skip_serializing_if = "Option::is_none")]`. Init to `None` in `BasebackupMeta::new`. Add a `with_last_transaction` builder.
+  - [x] Unit tests: old JSON without the fields still deserializes. A round trip with the fields works.
+  - [x] Update `dashboard` `BackupItemView` mapping only if it constructs `BasebackupMeta` literally (fix compile errors, no UI change).
 - Done when: `cargo check` and `cargo test -p pgvisor-core` pass.
 
 ### Phase 2: Capture last transaction at backup time [STATUS: TODO]

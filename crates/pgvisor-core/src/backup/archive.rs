@@ -319,6 +319,8 @@ START TIMELINE: 1
             checkpoint_location: None,
             backup_from: None,
             pg_version: None,
+            last_transaction_time: None,
+            last_transaction_xid: None,
         };
 
         let mut out_bytes = Vec::new();

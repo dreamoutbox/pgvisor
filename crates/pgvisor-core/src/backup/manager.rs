@@ -198,6 +198,10 @@ pub struct BasebackupMeta {
     pub backup_from: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pg_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_transaction_time: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_transaction_xid: Option<String>,
 }
 
 impl BasebackupMeta {
@@ -226,6 +230,8 @@ impl BasebackupMeta {
             checkpoint_location: None,
             backup_from: None,
             pg_version: None,
+            last_transaction_time: None,
+            last_transaction_xid: None,
         }
     }
 
@@ -241,6 +247,32 @@ impl BasebackupMeta {
 
     pub fn with_stop_wal(mut self, stop_wal: Option<String>) -> Self {
         self.stop_wal = stop_wal;
+        self
+    }
+
+    /// Attaches the last committed transaction timestamp and transaction ID to the metadata.
+    ///
+    /// # Arguments
+    /// * `time` - UTC timestamp of the last committed transaction
+    /// * `xid` - Transaction ID string of the last committed transaction
+    ///
+    /// # Example
+    /// ```
+    /// use chrono::Utc;
+    /// use pgvisor_core::backup::{BasebackupMeta, BackupType};
+    ///
+    /// let meta = BasebackupMeta::new("snap-1", Utc::now(), BackupType::Full, "0/1", 100)
+    ///     .with_last_transaction(Some(Utc::now()), Some("12345".to_string()));
+    /// assert!(meta.last_transaction_time.is_some());
+    /// assert_eq!(meta.last_transaction_xid.as_deref(), Some("12345"));
+    /// ```
+    pub fn with_last_transaction(
+        mut self,
+        time: Option<DateTime<Utc>>,
+        xid: Option<String>,
+    ) -> Self {
+        self.last_transaction_time = time;
+        self.last_transaction_xid = xid;
         self
     }
 }
@@ -750,5 +782,56 @@ mod tests {
         std::env::remove_var("PGVISOR_BACKUP_FULL_CRON");
         std::env::remove_var("PGVISOR_BACKUP_INCREMENTAL_CRON");
         std::env::remove_var("PGVISOR_BACKUP_CRON_ENABLED");
+    }
+
+    #[test]
+    fn test_basebackup_meta_serialization_backward_compatibility() {
+        // Legacy JSON without last_transaction_time and last_transaction_xid
+        let legacy_json = r#"{
+            "snapshot_id": "snap-legacy",
+            "backup_id": "snap-legacy",
+            "created_at": "2026-01-01T00:00:00Z",
+            "backup_type": "full",
+            "start_wal": "000000010000000000000001",
+            "total_bytes": 1024
+        }"#;
+
+        let meta: BasebackupMeta = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(meta.snapshot_id, "snap-legacy");
+        assert_eq!(meta.last_transaction_time, None);
+        assert_eq!(meta.last_transaction_xid, None);
+    }
+
+    #[test]
+    fn test_basebackup_meta_serialization_round_trip() {
+        let sample_time = "2026-03-15T12:30:45Z".parse::<DateTime<Utc>>().unwrap();
+        let meta = BasebackupMeta::new(
+            "snap-with-tx",
+            sample_time,
+            BackupType::Full,
+            "000000010000000000000005",
+            2048,
+        )
+        .with_last_transaction(Some(sample_time), Some("78910".to_string()));
+
+        let json_str = serde_json::to_string(&meta).unwrap();
+        assert!(json_str.contains("\"last_transaction_time\""));
+        assert!(json_str.contains("\"last_transaction_xid\":\"78910\""));
+
+        let deserialized: BasebackupMeta = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(deserialized.last_transaction_time, Some(sample_time));
+        assert_eq!(deserialized.last_transaction_xid.as_deref(), Some("78910"));
+
+        // When None, fields should be omitted from JSON
+        let meta_none = BasebackupMeta::new(
+            "snap-none",
+            sample_time,
+            BackupType::Full,
+            "000000010000000000000005",
+            2048,
+        );
+        let json_none = serde_json::to_string(&meta_none).unwrap();
+        assert!(!json_none.contains("last_transaction_time"));
+        assert!(!json_none.contains("last_transaction_xid"));
     }
 }

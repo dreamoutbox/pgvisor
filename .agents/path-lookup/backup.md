@@ -23,7 +23,7 @@
 
 - `crates/pgvisor-core/src/backup/archive.rs` = `generate_snapshot_id`, `parse_backup_label`, `process_basebackup_archive` excluding `backup_label.old` and injecting `metadata.json`, and `create_simulated_basebackup`
 - `crates/pgvisor-core/src/backup/mod.rs` = re-exports for archive processing and manager
-- `crates/pgvisor-core/src/backup/manager.rs` = `BasebackupMeta` metadata struct (`snapshot_id`, `backup_id`, `label`, `backup_start_date`, `backup_finish_date`, `timeline`, `start_lsn`, `checkpoint_location`, `backup_from`, `pg_version`) and OpenDAL storage manager
+- `crates/pgvisor-core/src/backup/manager.rs` = `BasebackupMeta` metadata struct (`snapshot_id`, `backup_id`, `label`, `backup_start_date`, `backup_finish_date`, `timeline`, `start_lsn`, `checkpoint_location`, `backup_from`, `pg_version`, `last_transaction_time`, `last_transaction_xid`) and OpenDAL storage manager
 - `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::create_backup` formatting snapshot ID with label, running `pg_basebackup`, and invoking `process_basebackup_archive`
 - `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor::restore_from_snapshot` cleaning up `backup_label.old` defense-in-depth
 - `crates/pgvisor-dashboard/src/models.rs` = `CreateBackupRequest` and `BackupItemView` view models
