@@ -249,3 +249,4 @@ done < <(echo "${COMBINED_JSON}" | jq -r '
         .last_transaction_xid // "-"
     ] | @tsv
 ')
+

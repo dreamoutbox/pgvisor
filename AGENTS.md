@@ -32,7 +32,22 @@ pgvisor/
 
 ---
 
-## Cautions & Rules for AI Agents
+## Rules & Cautions for AI Agents
+
+### 4. Technical Gotchas
+- **OpenRaft Storage**: Do not pull in RocksDB or external C++ dependencies. PgVisor builds its own custom pure-Rust append-only storage engine.
+- **Package Manager**: If any web assets or frontend tools are used, use `pnpm` exclusively (never `npm` or `yarn`).
+- **PID 1 Responsibilities in Sidecar**: The sidecar acts as container PID 1. It must properly reap child zombie processes (`waitpid`) and propagate signals (`SIGTERM`, `SIGINT`, `SIGQUIT`) to Postgres.
+- **Fencing over Promotion**: During network splits, the old leader must be fenced (killed via `pg_ctl stop -m immediate`) before or concurrently with standby promotion to prevent split-brain data corruption.
+- **Cluster Restore & Standby Timeline Realignment**: Restoring a database snapshot rewinds the leader's timeline and LSN. Standby replicas cannot resume replication without re-cloning from the restored leader. Cluster restores must be coordinated through the sidecar control API:
+  1. Restore leader node via `POST /control/restore`.
+  2. Re-sync all standby replicas via `POST /control/resync` (`pg_basebackup`).
+  3. Drain proxy connection pool (`pool.drain_all()`) so client connections refresh to the restored timeline.
+- **Sidecar Supervision Boundaries (No Out-of-Band `pg_ctl`)**: When `pgvisor-sidecar` runs as container PID 1, never execute out-of-band `pg_ctl stop`/`pg_ctl start` commands via shell scripts or `docker exec`. External stops corrupt process accounting and supervisor state. Always issue lifecycle and restore commands through the sidecar's internal HTTP control API.
+- **Cluster Reset & Docker Compose Helper (`reset-docker-compose.sh`)**: Running `./reset-docker-compose.sh` wipes volumes and restarts containers with fresh data, rebuilding Docker images by default. Pass `--no-build` (`./reset-docker-compose.sh --no-build`) to skip rebuilding images, or `-s`/`--silent` to suppress verbose output unless an error occurs.
+- **Test Flakiness from Read/Write Splitting & Replication Lag**:
+  - **Why it occurs**: `pgvisor-proxy` enforces L7 read/write splitting: mutating queries and DDL (`CREATE TABLE`, `DROP TABLE`, `CREATE ROLE`, `GRANT`, `ALTER`, etc.) route to the Raft leader, while read-only queries (`SELECT`, catalog lookups in `pg_roles` or `information_schema`) route to standby replicas. Under concurrent test runs (such as `./test.sh -j 5`) or heavy system load, PostgreSQL asynchronous streaming replication to standbys exhibits non-zero lag (from tens of milliseconds up to a few seconds). If a test script executes a write or DDL statement and immediately fires an instantaneous `SELECT` verification through the proxy, the read query can hit a replica that has not yet replayed the corresponding WAL, triggering false assertion failures (e.g., table still found after `DROP TABLE`, or newly created role/privilege not yet visible in `pg_roles`).
+  - **Remedy & Rule**: Test scripts verifying state through the proxy after mutating commands must never rely on single-shot reads. Always use a polling retry loop (e.g., 5–10 attempts with 1-second sleeps) until the replica catches up, or query the leader directly if strict immediate consistency is required.
 
 # Rust Rules
 
@@ -204,19 +219,3 @@ cargo run 2>&1 | grep -E "TARGET_1|TARGET_2|TARGET_3"
 - Always redirect stderr too (`2>&1`) — default `tracing` output can go to either stream depending on subscriber config.
 
 Prefer scoping at the source with `RUST_LOG` targets (above) over grepping when possible — filtering before print is cheaper than filtering after.
-
-### 4. Technical Gotchas
-- **OpenRaft Storage**: Do not pull in RocksDB or external C++ dependencies. PgVisor builds its own custom pure-Rust append-only storage engine.
-- **Package Manager**: If any web assets or frontend tools are used, use `pnpm` exclusively (never `npm` or `yarn`).
-- **PID 1 Responsibilities in Sidecar**: The sidecar acts as container PID 1. It must properly reap child zombie processes (`waitpid`) and propagate signals (`SIGTERM`, `SIGINT`, `SIGQUIT`) to Postgres.
-- **Fencing over Promotion**: During network splits, the old leader must be fenced (killed via `pg_ctl stop -m immediate`) before or concurrently with standby promotion to prevent split-brain data corruption.
-- **Cluster Restore & Standby Timeline Realignment**: Restoring a database snapshot rewinds the leader's timeline and LSN. Standby replicas cannot resume replication without re-cloning from the restored leader. Cluster restores must be coordinated through the sidecar control API:
-  1. Restore leader node via `POST /control/restore`.
-  2. Re-sync all standby replicas via `POST /control/resync` (`pg_basebackup`).
-  3. Drain proxy connection pool (`pool.drain_all()`) so client connections refresh to the restored timeline.
-- **Sidecar Supervision Boundaries (No Out-of-Band `pg_ctl`)**: When `pgvisor-sidecar` runs as container PID 1, never execute out-of-band `pg_ctl stop`/`pg_ctl start` commands via shell scripts or `docker exec`. External stops corrupt process accounting and supervisor state. Always issue lifecycle and restore commands through the sidecar's internal HTTP control API.
-- **Cluster Reset & Docker Compose Helper (`reset-docker-compose.sh`)**: Running `./reset-docker-compose.sh` wipes volumes and restarts containers with fresh data, rebuilding Docker images by default. Pass `--no-build` (`./reset-docker-compose.sh --no-build`) to skip rebuilding images, or `-s`/`--silent` to suppress verbose output unless an error occurs.
-- **Test Flakiness from Read/Write Splitting & Replication Lag**:
-  - **Why it occurs**: `pgvisor-proxy` enforces L7 read/write splitting: mutating queries and DDL (`CREATE TABLE`, `DROP TABLE`, `CREATE ROLE`, `GRANT`, `ALTER`, etc.) route to the Raft leader, while read-only queries (`SELECT`, catalog lookups in `pg_roles` or `information_schema`) route to standby replicas. Under concurrent test runs (such as `./test.sh -j 5`) or heavy system load, PostgreSQL asynchronous streaming replication to standbys exhibits non-zero lag (from tens of milliseconds up to a few seconds). If a test script executes a write or DDL statement and immediately fires an instantaneous `SELECT` verification through the proxy, the read query can hit a replica that has not yet replayed the corresponding WAL, triggering false assertion failures (e.g., table still found after `DROP TABLE`, or newly created role/privilege not yet visible in `pg_roles`).
-  - **Remedy & Rule**: Test scripts verifying state through the proxy after mutating commands must never rely on single-shot reads. Always use a polling retry loop (e.g., 5–10 attempts with 1-second sleeps) until the replica catches up, or query the leader directly if strict immediate consistency is required.
-

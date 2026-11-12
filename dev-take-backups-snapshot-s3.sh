@@ -113,3 +113,4 @@ rm -rf "${TARGET_DIR}"
 mv "${TMP_DIR}" "${TARGET_DIR}"
 
 echo "Successfully exported ${count} object(s) from S3 bucket '${S3_BUCKET}' to '${TARGET_DIR}'."
+

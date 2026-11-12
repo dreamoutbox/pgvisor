@@ -224,16 +224,23 @@
 
 - [ ] restore function. add validation for PITR time. check from backup json.
 
+- [ ] show `last_transaction_time` & `last_transaction_xid` in backup list table in `http://localhost:8080/backups`
+
+- [ ] restore add restore with xid.
+
 ---
 
 ## Bug
 
-- [ ] if leader failed to restore. the follower should not replicate data. 
-and stop server.
+- [ ] currently. if leader failed to restore. leader node pgvisor-sidecar stopped. but container still running. 
 
-currently. if leader failed to restore. the follower nodes stop. and can’t interact any buttons in browser for restart. need to stop and start with docker command directly.
+expected behavior: if leader failed to restore. it should not stop pgvisor-sidecar. it should restart back to previous state before backup. 
 
-leader should restore first. then follower replicate data. 
+- leader should restore first. then follower start replicate data. incase leader failed. so follower nodes won't get invalid data.
+
+- when restoring it any nodes should not accept any connections from clients.
+
+- if leader failed to restore. the follower should not replicate data.
 
 ---
 

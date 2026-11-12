@@ -195,3 +195,4 @@ s3_wipe_bucket() {
         fi
     done <<< "${keys}"
 }
+

@@ -141,6 +141,12 @@ For debugging, bug reproduction, and inspecting backup metadata:
   # Formats backup metadata (snapshot ID, label, created at, last transaction time, and last transaction xid) in an aligned table.
   # Use --dir=./debug-s3-bucket-snapshot for offline inspection, or pass snapshot-id and --json for machine-readable output.
   ```
+- **Inspect Cluster Timelines & Divergence**:
+  ```bash
+  ./dev-inspect-timeline.sh
+  # Inspects timeline IDs, checkpoint LSNs, replication roles, and timeline history across all cluster nodes.
+  # Detects timeline divergence, prints branching lineage, and supports --json and --s3 flags.
+  ```
 
 ### Project Structure
 

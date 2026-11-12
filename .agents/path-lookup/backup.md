@@ -18,6 +18,7 @@
 - `crates/pgvisor-sidecar/src/main.rs` = `handle_prepare_restore`, `handle_restore`, and `handle_resync` setting `ProcessStatus::Restoring`, and heartbeat loop treating responding leader as alive
 - `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor` preserving `ProcessStatus::Restoring` across `start()`/`stop()`, and setting `Running` only after `wait_ready()` succeeds
 - `tests/test-timeline-divergence.sh` = Automated regression test verifying timeline branching, standby re-sync on divergent timelines, and repeated PITR restores
+- `dev-inspect-timeline.sh` = Inspects cluster timeline IDs, checkpoint locations, roles, divergence, and history across all nodes
 
 ### If you want to modify backup metadata (labels, notes, WAL ranges, timeline), snapshot triggering, archive filtering, or backup table views, then check:
 
