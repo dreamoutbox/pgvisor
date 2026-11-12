@@ -239,11 +239,11 @@ leader should restore first. then follower replicate data.
 
 ## Debug Enhance
 
-- [ ] backup json (in s3 `clusters/pgvisor-cluster/basebackups/<backup-snapshot-id>.json`) add field to store last transaction time and xid. for user to know and use last transaction time with PITR restore.
+- [x] backup json (in s3 `clusters/pgvisor-cluster/basebackups/<backup-snapshot-id>.json`) add field to store last transaction time and xid. for user to know and use last transaction time with PITR restore.
 
-- [ ] add dev-take-backups-snapshot-s3.sh = store s3 backups bucket to dir `debug-s3-bucket-snapshot`, for reproducible bug. also add dev-import-backups-snapshot-s3.sh to restore s3 bucket from local `debug-s3-bucket-snapshot` dir.
+- [x] add dev-take-backups-snapshot-s3.sh = store s3 backups bucket to dir `debug-s3-bucket-snapshot`, for reproducible bug. also add dev-import-backups-snapshot-s3.sh to restore s3 bucket from local `debug-s3-bucket-snapshot` dir.
 
-- [ ] add dev-inspect-backup.sh = inspect backup name/label/create_time/last_transaction_time/last_transaction_xid
+- [x] add dev-inspect-backup.sh = inspect backup name/label/create_time/last_transaction_time/last_transaction_xid
 
 ---
 

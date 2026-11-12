@@ -27,6 +27,9 @@
 ### If you want to modify Docker image builds, dependency caching, or cargo-chef layers, then check:
 
 - `dev-build-image.sh` = Reusable CLI script to build single PgVisor Docker image (`dreamoutbox/pgvisor:latest`) with configurable tags.
+- `dev-take-backups-snapshot-s3.sh` = Exports entire S3 backups bucket to local snapshot directory for offline bug reproduction
+- `dev-import-backups-snapshot-s3.sh` = Imports and restores S3 backups bucket from local snapshot directory
+- `dev-inspect-backup.sh` = Inspects backup metadata (snapshot ID, label, created at, last transaction time, last transaction xid) from S3 or local directory
 - `dev-build-and-push.sh` = Script to authenticate with Docker registry, build PgVisor image via `dev-build-image.sh`, and push.
 - `reset-docker-compose.sh` = Dev cluster reset script invoking `dev-build-image.sh` before launching containers.
 - `Dockerfile` = Multi-stage Docker build recipe using `cargo-chef` (`chef`, `planner`, `builder`) and runtime PostgreSQL 18.6 base.

@@ -48,12 +48,12 @@ Existing code (from exploration):
   - [x] Add a case to the Phase 3 test script that inspects a sample JSON, including one without the new fields.
 - Done when: running against a fresh backup shows all five fields, and old backups render with `-`.
 
-### Phase 5: Docs and path-lookup [STATUS: TODO]
+### Phase 5: Docs and path-lookup [STATUS: DONE]
 - Goal: Document the fields and scripts.
 - Tasks:
-  - [ ] Mention the new fields and scripts in `DEVELOPMENT.md`.
-  - [ ] Update `.agents/path-lookup/backup.md` and `misc.md` (repo-relative paths).
-  - [ ] Tick the three items in `TODO.md`.
+  - [x] Mention the new fields and scripts in `DEVELOPMENT.md`.
+  - [x] Update `.agents/path-lookup/backup.md` and `misc.md` (repo-relative paths).
+  - [x] Tick the three items in `TODO.md`.
 - Done when: docs build links and paths are valid, and the full `./test.sh` passes.
 
 ## Unknowns, risks, assumptions

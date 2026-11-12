@@ -121,6 +121,27 @@ Run the full integration test suite:
 
 Individual test suites located in `tests/`
 
+### Developer Utilities (S3 Snapshots & Backup Inspection)
+
+For debugging, bug reproduction, and inspecting backup metadata:
+
+- **Export S3 Backups to Local Directory**:
+  ```bash
+  ./dev-take-backups-snapshot-s3.sh
+  # Dumps all objects from S3 to ./debug-s3-bucket-snapshot
+  ```
+- **Import S3 Backups from Local Directory**:
+  ```bash
+  ./dev-import-backups-snapshot-s3.sh --clean
+  # Wipes the target S3 bucket and restores objects from ./debug-s3-bucket-snapshot
+  ```
+- **Inspect Backup Metadata**:
+  ```bash
+  ./dev-inspect-backup.sh
+  # Formats backup metadata (snapshot ID, label, created at, last transaction time, and last transaction xid) in an aligned table.
+  # Use --dir=./debug-s3-bucket-snapshot for offline inspection, or pass snapshot-id and --json for machine-readable output.
+  ```
+
 ### Project Structure
 
 ```
