@@ -711,147 +711,215 @@ impl PostgresSupervisor {
         Ok(child)
     }
 
-    /// Restores PostgreSQL data directory from basebackup tarball bytes.
-    /// Gracefully shuts down Postgres if running, cleans data directory, extracts snapshot,
-    /// writes recovery settings if requested, and restarts Postgres.
+    /// Polls shadow PostgreSQL instance until recovery finishes and promote completes.
+    ///
+    /// Checks for early process termination (to fail fast on recovery errors such as missing WAL
+    /// or unreachable target time), waits for `recovery.signal` to be removed by Postgres upon promote,
+    /// and checks `pg_isready` on the shadow port (e.g. 5433).
+    ///
+    /// # Arguments
+    /// * `child` - Mutable reference to the shadow PostgreSQL process.
+    /// * `staging_dir` - Path to the staging data directory.
+    /// * `port` - Port number the shadow process is listening on.
+    /// * `max_retries` - Maximum polling attempts (500ms intervals).
+    pub async fn wait_shadow_ready(
+        &self,
+        child: &mut Child,
+        staging_dir: &Path,
+        port: u16,
+        max_retries: u32,
+    ) -> Result<(), SupervisorError> {
+        let mut retries = max_retries;
+        let recovery_signal = staging_dir.join("recovery.signal");
+
+        while retries > 0 {
+            // Check if shadow process exited unexpectedly to fail fast
+            if let Ok(Some(status)) = child.try_wait() {
+                return Err(SupervisorError::CommandFailed(format!(
+                    "Postgres process exited unexpectedly with status: {status}"
+                )));
+            }
+
+            // If recovery.signal still exists, Postgres is still replaying archive WAL and has not yet promoted
+            if !recovery_signal.exists() {
+                let status = Command::new("pg_isready")
+                    .arg("-h")
+                    .arg("127.0.0.1")
+                    .arg("-p")
+                    .arg(port.to_string())
+                    .arg("-U")
+                    .arg("postgres")
+                    .status()
+                    .await;
+
+                if let Ok(s) = status {
+                    if s.success() {
+                        info!(port, "Shadow Postgres finished recovery and is accepting connections");
+                        return Ok(());
+                    }
+                }
+            }
+
+            retries -= 1;
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
+
+        Err(SupervisorError::CommandFailed(
+            "Shadow Postgres did not finish recovery within timeout".into(),
+        ))
+    }
+
+    /// Stops the shadow PostgreSQL process cleanly using `pg_ctl stop -m fast` and waits for child exit.
+    ///
+    /// If `pg_ctl` fails or times out, forcefully kills the child process.
+    pub async fn stop_shadow_postgres(
+        &self,
+        mut child: Child,
+        staging_dir: &Path,
+    ) {
+        info!(dir = ?staging_dir, "Stopping shadow PostgreSQL process");
+        let status = Command::new("pg_ctl")
+            .arg("stop")
+            .arg("-D")
+            .arg(staging_dir)
+            .arg("-m")
+            .arg("fast")
+            .status()
+            .await;
+
+        match status {
+            Ok(s) if s.success() => {
+                let _ = child.wait().await;
+                info!("Shadow PostgreSQL stopped cleanly");
+            }
+            _ => {
+                let _ = child.kill().await;
+                warn!("Forcefully killed shadow PostgreSQL process");
+            }
+        }
+    }
+
+    /// Restores PostgreSQL data directory from basebackup tarball bytes using shadow staging.
+    ///
+    /// Executes extraction and recovery inside a staging directory on an alternate port (`config.port + 1`)
+    /// while the active PostgreSQL process on port 5432 remains running and serving traffic.
+    /// If shadow recovery fails (e.g. invalid target time or corrupted archive), the staging directory is
+    /// cleaned up, active PostgreSQL is untouched, and supervisor status returns to `Running`.
+    /// On success, shadow process is stopped, active process is stopped, directories are atomically swapped,
+    /// and primary PostgreSQL starts cleanly on port 5432.
     pub async fn restore_from_snapshot(
         &self,
         tar_bytes: &[u8],
         config: &PostgresConfig,
         recovery_target_time: Option<&str>,
     ) -> Result<(), SupervisorError> {
-        info!(dir = ?self.data_dir, "Initiating in-place cluster restore from snapshot");
+        info!(dir = ?self.data_dir, "Initiating staged cluster restore from snapshot");
 
-        // 1. Mark status as Restoring before stopping Postgres
+        // 1. Mark status as Restoring while keeping active Postgres running
         {
             let mut st = self.status.lock().await;
             *st = ProcessStatus::Restoring;
         }
-        let _ = self.stop().await;
 
-        // 2. Clear old data directory
-        if self.data_dir.exists() {
-            let mut entries = tokio::fs::read_dir(&self.data_dir).await?;
-            while let Some(entry) = entries.next_entry().await? {
-                let path = entry.path();
-                if path.is_dir() {
-                    let _ = tokio::fs::remove_dir_all(&path).await;
+        // 2. Prepare clean staging directory and extract snapshot tarball
+        let staging_dir = match self.prepare_staging_directory(tar_bytes).await {
+            Ok(dir) => dir,
+            Err(e) => {
+                let mut st = self.status.lock().await;
+                if self.is_running().await {
+                    *st = ProcessStatus::Running;
                 } else {
-                    let _ = tokio::fs::remove_file(&path).await;
+                    *st = ProcessStatus::Stopped;
                 }
+                return Err(e);
             }
-        } else {
-            tokio::fs::create_dir_all(&self.data_dir).await?;
-        }
+        };
 
-        // 3. Extract tarball
-        let temp_tar = self.data_dir.join("restore_snapshot.tar.gz");
-        tokio::fs::write(&temp_tar, tar_bytes).await?;
+        // 3. Generate staging configuration with port + 1 and PITR settings
+        let staging_config = Self::generate_staging_config(config, recovery_target_time);
 
-        let status = Command::new("tar")
-            .arg("-xzf")
-            .arg(&temp_tar)
-            .arg("-C")
-            .arg(&self.data_dir)
-            .status()
+        // 4. Spawn shadow Postgres process on staging directory
+        let mut shadow_child = match self.spawn_shadow_postgres(&staging_dir, &staging_config).await {
+            Ok(child) => child,
+            Err(e) => {
+                self.clean_staging_directory().await;
+                let mut st = self.status.lock().await;
+                if self.is_running().await {
+                    *st = ProcessStatus::Running;
+                } else {
+                    *st = ProcessStatus::Stopped;
+                }
+                return Err(e);
+            }
+        };
+
+        // 5. Wait for shadow recovery and promote
+        let wait_result = self
+            .wait_shadow_ready(&mut shadow_child, &staging_dir, staging_config.port, 30)
             .await;
 
-        let _ = tokio::fs::remove_file(&temp_tar).await;
+        if let Err(e) = wait_result {
+            warn!(?e, "Shadow PostgreSQL recovery failed, rolling back staging directory");
+            self.stop_shadow_postgres(shadow_child, &staging_dir).await;
+            self.clean_staging_directory().await;
 
-        if let Ok(s) = status {
-            if !s.success() {
-                warn!("tar extraction returned non-zero status");
-                return Err(SupervisorError::CommandFailed(
-                    "tar extraction returned non-zero status".to_string(),
-                ));
+            let mut st = self.status.lock().await;
+            if self.is_running().await {
+                *st = ProcessStatus::Running;
+            } else {
+                *st = ProcessStatus::Stopped;
             }
+
+            return Err(e);
         }
 
-        // 4. Configure restore settings including PITR target and restore_command
-        let mut restore_config = config.clone();
-        // Restored node is always the cluster primary leader, never a standby replica
-        restore_config.primary_conninfo = None;
+        // 6. Shadow recovery succeeded: cleanly stop shadow process
+        info!("Shadow PostgreSQL recovery succeeded, proceeding to atomic swap");
+        self.stop_shadow_postgres(shadow_child, &staging_dir).await;
 
-        // Clean up any residual standby signal or auto configuration from snapshot
-        let standby_signal = self.data_dir.join("standby.signal");
-        if standby_signal.exists() {
-            let _ = tokio::fs::remove_file(&standby_signal).await;
-        }
-        let auto_conf = self.data_dir.join("postgresql.auto.conf");
-        if auto_conf.exists() {
-            let _ = tokio::fs::remove_file(&auto_conf).await;
-        }
-        let old_label = self.data_dir.join("backup_label.old");
-        if old_label.exists() {
-            let _ = tokio::fs::remove_file(&old_label).await;
+        // 7. Gracefully stop active production PostgreSQL
+        let _ = self.stop().await;
+
+        // 8. Atomically swap directories on the same volume
+        let old_dir = self.old_data_dir();
+        if old_dir.exists() {
+            let _ = tokio::fs::remove_dir_all(&old_dir).await;
         }
 
-        if let Some(target_time) = recovery_target_time {
-            let sidecar_bin = std::env::current_exe()
-                .ok()
-                .and_then(|p| p.to_str().map(String::from))
-                .unwrap_or_else(|| "pgvisor-sidecar".to_string());
+        if self.data_dir.exists() {
+            tokio::fs::rename(&self.data_dir, &old_dir).await?;
+        }
+        tokio::fs::rename(&staging_dir, &self.data_dir).await?;
+        let _ = tokio::fs::remove_dir_all(&old_dir).await;
 
-            if restore_config.restore_command.is_none() {
-                restore_config.restore_command = Some(format!("{sidecar_bin} restore %f %p"));
-            }
-            restore_config.recovery_target_time = Some(target_time.to_string());
-            restore_config.recovery_target_action = Some("promote".to_string());
+        // Clean up recovery.signal if any remnant exists
+        let recovery_signal = self.data_dir.join("recovery.signal");
+        if recovery_signal.exists() {
+            let _ = tokio::fs::remove_file(&recovery_signal).await;
         }
 
-        // 5. Re-generate configs and restart Postgres
-        self.start(&restore_config).await?;
+        // 9. Configure and start production Postgres on primary port (e.g. 5432)
+        let mut prod_config = config.clone();
+        prod_config.primary_conninfo = None;
+        prod_config.recovery_target_time = None;
+        prod_config.recovery_target_action = None;
+
+        self.start(&prod_config).await?;
         if self.child_pid() > 0 {
             if let Err(e) = self.wait_ready(config.port, 30).await {
-                warn!(
-                    ?e,
-                    "PostgreSQL failed to become ready after restoring snapshot"
-                );
+                warn!(?e, "PostgreSQL failed to become ready after swap");
                 let mut st = self.status.lock().await;
                 *st = ProcessStatus::Stopped;
-
-                // Stop or kill any remnant child process
-                let mut active = self.active_child.lock().await;
-                if let Some(mut child) = active.take() {
-                    let _ = child.kill().await;
-                }
-                self.child_pid.store(0, Ordering::SeqCst);
-
-                // Clean up recovery.signal and reset recovery_target_* configs so
-                // that an invalid target time does not leave the database permanently
-                // broken or unable to start.
-                let recovery_signal = self.data_dir.join("recovery.signal");
-                if recovery_signal.exists() {
-                    let _ = tokio::fs::remove_file(&recovery_signal).await;
-                    info!("Cleaned up recovery.signal after failed restore attempt");
-                }
-                let mut clean_config = config.clone();
-                clean_config.primary_conninfo = None;
-                clean_config.recovery_target_time = None;
-                clean_config.recovery_target_action = None;
-                let _ = ConfigGenerator::write_conf_only(&self.data_dir, &clean_config);
-
                 return Err(e);
             }
         }
+
         {
             let mut st = self.status.lock().await;
             *st = ProcessStatus::Running;
         }
 
-        // 6. If targeted recovery was performed, clear recovery target settings now that Postgres is promoted
-        if recovery_target_time.is_some() {
-            let mut post_restore_config = config.clone();
-            post_restore_config.primary_conninfo = None;
-            post_restore_config.recovery_target_time = None;
-            post_restore_config.recovery_target_action = None;
-            // Use write_conf_only: Postgres's startup process is still running and owns
-            // recovery.signal removal as part of its promote sequence. Touching it here
-            // would race Postgres and cause a FATAL "could not remove file" crash.
-            let _ = ConfigGenerator::write_conf_only(&self.data_dir, &post_restore_config);
-        }
-
-        info!("PostgreSQL restore from snapshot completed");
+        info!("PostgreSQL restore from snapshot completed successfully");
         Ok(())
     }
 
@@ -1239,5 +1307,66 @@ mod tests {
 
         // Staging directory must be cleaned up on failure
         assert!(!supervisor.staging_data_dir().exists());
+    }
+
+    #[tokio::test]
+    async fn test_restore_from_snapshot_failure_preserves_running_status_and_data() {
+        let dir = tempdir().unwrap();
+        let prod_data = dir.path().join("pgdata");
+        tokio::fs::create_dir_all(&prod_data).await.unwrap();
+        tokio::fs::write(prod_data.join("PG_VERSION"), "16\n").await.unwrap();
+
+        let supervisor = PostgresSupervisor::new(&prod_data);
+        supervisor.set_status(ProcessStatus::Running).await;
+
+        let config = PostgresConfig {
+            port: 5432,
+            ..Default::default()
+        };
+
+        let dummy_corrupt_tar = vec![0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff];
+        let result = supervisor
+            .restore_from_snapshot(&dummy_corrupt_tar, &config, Some("2026-11-12 06:45:00 UTC"))
+            .await;
+
+        assert!(result.is_err());
+
+        // Production data remains untouched
+        assert!(prod_data.join("PG_VERSION").exists());
+        let content = tokio::fs::read_to_string(prod_data.join("PG_VERSION")).await.unwrap();
+        assert_eq!(content, "16\n");
+
+        // Staging directory was cleanly removed
+        assert!(!supervisor.staging_data_dir().exists());
+    }
+
+    #[tokio::test]
+    async fn test_wait_shadow_ready_fast_fails_on_child_exit() {
+        let dir = tempdir().unwrap();
+        let staging_dir = dir.path().join("pgdata_staging");
+        tokio::fs::create_dir_all(&staging_dir).await.unwrap();
+
+        let supervisor = PostgresSupervisor::new(dir.path().join("pgdata"));
+
+        // Spawn a short-lived process that exits with status 1 to simulate recovery failure
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("exit 1")
+            .spawn()
+            .unwrap();
+
+        // Give the process a moment to exit
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        let result = supervisor
+            .wait_shadow_ready(&mut child, &staging_dir, 59998, 10)
+            .await;
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("exited unexpectedly"),
+            "Expected 'exited unexpectedly', got: {err_msg}"
+        );
     }
 }

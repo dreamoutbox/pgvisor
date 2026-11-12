@@ -27,11 +27,11 @@ Implement a non-destructive, atomic shadow-recovery restore process on the clust
 
 ---
 
-### Phase 3: Shadow Recovery Validation, Promotion, and Rollback on Failure [STATUS: TODO]
+### Phase 3: Shadow Recovery Validation, Promotion, and Rollback on Failure [STATUS: DONE]
 - Goal: Execute PITR recovery in the shadow process and guarantee automatic rollback and cleanup if recovery fails.
 - Tasks:
-  - [ ] Implement `wait_shadow_ready(port: 5433, timeout_secs)` to wait for shadow PostgreSQL recovery and promote.
-  - [ ] In `crates/pgvisor-sidecar/src/supervisor.rs`, implement shadow recovery execution:
+  - [x] Implement `wait_shadow_ready(port: 5433, timeout_secs)` to wait for shadow PostgreSQL recovery and promote.
+  - [x] In `crates/pgvisor-sidecar/src/supervisor.rs`, implement shadow recovery execution:
     - If shadow process fails or exits with non-zero status (e.g. target time not reached):
       - Kill shadow process if still running.
       - Remove `pgdata_staging` completely.
@@ -42,19 +42,19 @@ Implement a non-destructive, atomic shadow-recovery restore process on the clust
 
 ---
 
-### Phase 4: Atomic Directory Swap and Resync on Recovery Success [STATUS: TODO]
+### Phase 4: Atomic Directory Swap and Resync on Recovery Success [STATUS: DONE]
 - Goal: Atomically swap verified staging data into production location and trigger follower replica realignment only after successful leader promote.
 - Tasks:
-  - [ ] Upon shadow recovery success, cleanly stop shadow process (`pg_ctl stop -m fast`).
-  - [ ] Stop active PostgreSQL process on 5432.
-  - [ ] Atomically swap directories:
+  - [x] Upon shadow recovery success, cleanly stop shadow process (`pg_ctl stop -m fast`).
+  - [x] Stop active PostgreSQL process on 5432.
+  - [x] Atomically swap directories:
     - `rename(pgdata, pgdata_old)`
     - `rename(pgdata_staging, pgdata)`
     - `remove_dir_all(pgdata_old)`
-  - [ ] Re-template `postgresql.conf` for port 5432 with clean settings (removing `recovery.signal` and `recovery_target_*`).
-  - [ ] Start new primary PostgreSQL process on port 5432.
-  - [ ] Update `handle_restore` in `crates/pgvisor-sidecar/src/control/handlers.rs` to return success only after port 5432 is healthy.
-  - [ ] Ensure standbys receive `/control/resync` only when leader restore returns 200 OK.
+  - [x] Re-template `postgresql.conf` for port 5432 with clean settings (removing `recovery.signal` and `recovery_target_*`).
+  - [x] Start new primary PostgreSQL process on port 5432.
+  - [x] Update `handle_restore` in `crates/pgvisor-sidecar/src/control/handlers.rs` to return success only after port 5432 is healthy.
+  - [x] Ensure standbys receive `/control/resync` only when leader restore returns 200 OK.
 - Done when: Successful restore switches database to restored timeline, starts on 5432, and followers resync via `pg_basebackup`.
 
 ---
