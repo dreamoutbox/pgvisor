@@ -285,6 +285,8 @@
             <th>Source Node</th>
             <th>Optional Label / Note</th>
             <th>Created At</th>
+            <th>Last Tx Time</th>
+            <th>Last Tx XID</th>
             <th>Archive Size</th>
             <th>WAL Segment Range</th>
             <th style="text-align: right;">Actions</th>
@@ -293,7 +295,7 @@
     <tbody>
         {% if backups.is_empty() %}
         <tr>
-            <td colspan="8">
+            <td colspan="10">
                 <div class="empty-state">
                     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
                         style="margin-bottom: 12px; color: var(--text-muted);">
@@ -338,6 +340,20 @@
             </td>
             <td style="color: var(--text-muted); font-size: 0.9rem;">
                 {{ b.created_at }}
+            </td>
+            <td style="color: var(--text-muted); font-size: 0.85rem;">
+                {% if let Some(tx_time) = b.last_transaction_time %}
+                {{ tx_time }}
+                {% else %}
+                -
+                {% endif %}
+            </td>
+            <td style="font-family: monospace; font-size: 0.85rem;">
+                {% if let Some(tx_xid) = b.last_transaction_xid %}
+                {{ tx_xid }}
+                {% else %}
+                -
+                {% endif %}
             </td>
             <td style="font-weight: 600;">
                 {{ b.size_pretty }}

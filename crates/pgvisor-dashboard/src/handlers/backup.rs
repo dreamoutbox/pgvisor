@@ -209,7 +209,11 @@ impl StandaloneBackupService {
                 2_450_000,
             )
             .with_stop_wal(Some("000000010000000000000004".into()))
-            .with_source_node(Some("pgvisor-node3".into())),
+            .with_source_node(Some("pgvisor-node3".into()))
+            .with_last_transaction(
+                Some(Utc::now() - chrono::Duration::hours(4)),
+                Some("10050".into()),
+            ),
         ];
         Self {
             backups: Arc::new(RwLock::new(initial)),
@@ -361,26 +365,7 @@ pub async fn get_backups_page(
         storage_bucket,
     };
 
-    let backup_items: Vec<BackupItemView> = list
-        .into_iter()
-        .map(|b| {
-            let backup_type = match b.backup_type {
-                BackupType::Full => "full".to_string(),
-                BackupType::Incremental => "incremental".to_string(),
-            };
-            BackupItemView {
-                snapshot_id: b.snapshot_id,
-                created_at: b.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
-                backup_type,
-                label: b.label,
-                start_wal: b.start_wal,
-                stop_wal: b.stop_wal.unwrap_or_else(|| "-".to_string()),
-                size_pretty: format_bytes(b.total_bytes),
-                total_bytes: b.total_bytes,
-                source_node: b.source_node,
-            }
-        })
-        .collect();
+    let backup_items: Vec<BackupItemView> = list.iter().map(BackupItemView::from_meta).collect();
 
     let template = BackupsTemplate {
         backups: &backup_items,
@@ -723,5 +708,41 @@ mod tests {
             !msg.contains(&target_rfc3339),
             "Must not pass raw RFC 3339 '{target_rfc3339}' to restore_backup: {msg}"
         );
+    }
+
+    #[test]
+    fn test_backup_item_view_from_meta_mapping() {
+        let now = Utc::now();
+        let meta_with_tx = BasebackupMeta::new(
+            "snap-tx",
+            now,
+            BackupType::Full,
+            "000000010000000000000001",
+            1024,
+        )
+        .with_last_transaction(Some(now), Some("9999".to_string()));
+
+        let view_with_tx = BackupItemView::from_meta(&meta_with_tx);
+        assert_eq!(view_with_tx.snapshot_id, "snap-tx");
+        assert_eq!(view_with_tx.backup_type, "full");
+        assert_eq!(
+            view_with_tx.last_transaction_time.as_deref(),
+            Some(now.format("%Y-%m-%d %H:%M:%S UTC").to_string().as_str())
+        );
+        assert_eq!(view_with_tx.last_transaction_xid.as_deref(), Some("9999"));
+
+        let meta_without_tx = BasebackupMeta::new(
+            "snap-notx",
+            now,
+            BackupType::Incremental,
+            "000000010000000000000002",
+            2048,
+        );
+
+        let view_without_tx = BackupItemView::from_meta(&meta_without_tx);
+        assert_eq!(view_without_tx.snapshot_id, "snap-notx");
+        assert_eq!(view_without_tx.backup_type, "incremental");
+        assert_eq!(view_without_tx.last_transaction_time, None);
+        assert_eq!(view_without_tx.last_transaction_xid, None);
     }
 }

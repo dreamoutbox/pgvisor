@@ -276,6 +276,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Last Tx Time"));
+        assert!(html.contains("Last Tx XID"));
+        assert!(html.contains("10050"));
 
         // 11. Test GET /api/backups
         let response = app

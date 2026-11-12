@@ -17,13 +17,13 @@ Foundations (metadata surfaced in UI, validation) -> restore features that depen
 
 ---
 
-### Phase 1: Show last transaction time/xid in backup list [STATUS: TODO]
+### Phase 1: Show last transaction time/xid in backup list [STATUS: DONE]
 - Goal: Backups page displays `last_transaction_time` and `last_transaction_xid`.
 - Tasks:
-  - [ ] Add both fields (optional) to `BackupItemView` and map them from `BasebackupMeta` in the backup handlers (dashboard + proxy mapping).
-  - [ ] Add columns to `backups.html`; render `-` for old backups without metadata.
-  - [ ] Unit test for mapping with and without metadata; extend dashboard route test.
-  - [ ] Update `.agents/path-lookup/backup.md`.
+  - [x] Add both fields (optional) to `BackupItemView` and map them from `BasebackupMeta` in the backup handlers (dashboard + proxy mapping).
+  - [x] Add columns to `backups.html`; render `-` for old backups without metadata.
+  - [x] Unit test for mapping with and without metadata; extend dashboard route test.
+  - [x] Update `.agents/path-lookup/backup.md`.
 - Done when: `cargo nextest run -p pgvisor-dashboard -p pgvisor-proxy` passes; `/api/backups` JSON and `/backups` page show the values for a new backup.
 
 ### Phase 2: PITR target time validation against backup metadata [STATUS: TODO]
@@ -65,7 +65,7 @@ Foundations (metadata surfaced in UI, validation) -> restore features that depen
 ### Phase 6: Per-node CPU/RAM/DISK in dashboard [STATUS: TODO]
 - Goal: Nodes page shows CPU, RAM, disk usage per node.
 - Tasks:
-  - [ ] Add disk usage (PGDATA volume used/total) to `SystemMetricsCollector` and the sidecar status struct (`control/state.rs`); parse logic as pure function with unit test.
+  - [ ] Add disk usage (PGDATA volume total size computed by recursively summing directory file sizes) to `SystemMetricsCollector` or a helper and the sidecar status struct (`control/state.rs`); parse/calculation logic with unit test. No external dependencies needed.
   - [ ] Carry fields through node DTO in `pgvisor-core/src/node.rs`, proxy cluster service, and dashboard models.
   - [ ] Render CPU/RAM/disk bars in `nodes.html` (reuse existing overview styling).
   - [ ] Update metrics test.
