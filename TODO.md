@@ -220,6 +220,31 @@
 
 - [ ] add CPU/RAM/DISK usage of each node in web dashboard
 
+- [ ] pgvisor add interactive slider drag for PITR target time 
+
+- [ ] restore function. add validation for PITR time. check from backup json.
+
+---
+
+## Bug
+
+- [ ] if leader failed to restore. the follower should not replicate data. 
+and stop server.
+
+currently. if leader failed to restore. the follower nodes stop. and can’t interact any buttons in browser for restart. need to stop and start with docker command directly.
+
+leader should restore first. then follower replicate data. 
+
+---
+
+## Debug Enhance
+
+- [ ] backup json (in s3 `clusters/pgvisor-cluster/basebackups/<backup-snapshot-id>.json`) add field to store last transaction time and xid. for user to know and use last transaction time with PITR restore.
+
+- [ ] add dev-take-backups-snapshot-s3.sh = store s3 backups bucket to dir `debug-s3-bucket-snapshot`, for reproducible bug. also add dev-import-backups-snapshot-s3.sh to restore s3 bucket from local `debug-s3-bucket-snapshot` dir.
+
+- [ ] add dev-inspect-backup.sh = inspect backup name/label/create_time/last_transaction_time/last_transaction_xid
+
 ---
 
 # Backlog
