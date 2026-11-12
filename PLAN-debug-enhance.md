@@ -29,14 +29,14 @@ Existing code (from exploration):
   - [x] Extend `tests/test-backup-restore.sh`: after creating a backup, poll the S3 JSON and assert the fields are present and the time is no later than now and no earlier than the backup start.
 - Done when: `cargo check` passes, unit tests pass, and `./test.sh` backup-restore passes. A new backup JSON shows both fields, and the time is usable as a PITR target.
 
-### Phase 3: dev-take-backups-snapshot-s3.sh and dev-import-backups-snapshot-s3.sh [STATUS: TODO]
+### Phase 3: dev-take-backups-snapshot-s3.sh and dev-import-backups-snapshot-s3.sh [STATUS: DONE]
 - Goal: Dump the S3 bucket to `debug-s3-bucket-snapshot/` and restore it from there, for reproducing bugs.
 - Tasks:
-  - [ ] Create a shared helper `scripts/lib/s3-common.sh` (endpoint and credential env defaults, SigV4 curl wrapper, list objects, get, put). Shared by all three scripts.
-  - [ ] `dev-take-backups-snapshot-s3.sh`: list all keys in the bucket (paginated, `list-type=2`), download each to `debug-s3-bucket-snapshot/<key>`, replace the old dir, and print a count. Support `--dir`, `--bucket`, `--endpoint` overrides. Plain text only.
-  - [ ] `dev-import-backups-snapshot-s3.sh`: ensure the bucket exists (reuse `scripts/init-s3-bucket.sh`), optionally empty it (`--clean`, off by default), and upload every file preserving key paths. Fail with a clear message if the dir is missing.
-  - [ ] Add `debug-s3-bucket-snapshot/` to `.gitignore`. `chmod +x`.
-  - [ ] Test script (`tests/test-dev-s3-snapshot.sh`): put sample objects, take, wipe, import, and assert identical keys and contents via a polling-safe check.
+  - [x] Create a shared helper `scripts/lib/s3-common.sh` (endpoint and credential env defaults, SigV4 curl wrapper, list objects, get, put). Shared by all three scripts.
+  - [x] `dev-take-backups-snapshot-s3.sh`: list all keys in the bucket (paginated, `list-type=2`), download each to `debug-s3-bucket-snapshot/<key>`, replace the old dir, and print a count. Support `--dir`, `--bucket`, `--endpoint` overrides. Plain text only.
+  - [x] `dev-import-backups-snapshot-s3.sh`: ensure the bucket exists (reuse `scripts/init-s3-bucket.sh`), optionally empty it (`--clean`, off by default), and upload every file preserving key paths. Fail with a clear message if the dir is missing.
+  - [x] Add `debug-s3-bucket-snapshot/` to `.gitignore`. `chmod +x`.
+  - [x] Test script (`tests/test-dev-s3-snapshot.sh`): put sample objects, take, wipe, import, and assert identical keys and contents via a polling-safe check.
 - Done when: a take, wipe, import round trip reproduces the bucket exactly, and the scripts pass shellcheck if available.
 
 ### Phase 4: dev-inspect-backup.sh [STATUS: TODO]

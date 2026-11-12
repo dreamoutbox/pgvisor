@@ -30,6 +30,11 @@
 - `crates/pgvisor-dashboard/src/handlers.rs` = Backup creation and list endpoints (`/api/backups`) and page renderer mapping metadata to `BackupItemView`
 - `crates/pgvisor-dashboard/templates/backups.html` = Dashboard UI table displaying backup items (Snapshot ID, Type, Optional Label / Note, Created At, Size, WAL range, actions) and creation modal
 - `tests/test-backup-restore.sh` = Automated test asserting snapshot ID label prefix, `metadata.json` archive inclusion, and `backup_label.old` exclusion
+- `scripts/lib/s3-common.sh` = S3 client utility functions (list, get, put, delete, wipe) using curl with AWS SigV4
+- `scripts/lib/parse-s3-xml.py` = S3 XML response parser extracting keys, truncation status, and continuation tokens
+- `dev-take-backups-snapshot-s3.sh` = Exports entire S3 backups bucket to local snapshot directory for offline bug reproduction
+- `dev-import-backups-snapshot-s3.sh` = Imports and restores S3 backups bucket from local snapshot directory
+- `tests/test-dev-s3-snapshot.sh` = Automated test verifying S3 snapshot export and import round-trip reproducibility
 
 ### If you want to modify Point-In-Time Recovery (PITR), Quick Restore, or snapshot selection, then check:
 

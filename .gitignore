@@ -18,3 +18,4 @@ failed-local-test-logs/
 *.log
 
 bug-notes/
+debug-s3-bucket-snapshot/
