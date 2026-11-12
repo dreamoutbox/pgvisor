@@ -36,14 +36,26 @@ pub fn parse_target_timestamp_with_now(raw: &str, now: DateTime<Utc>) -> Result<
         ));
     }
 
+    let unadorned = trimmed
+        .strip_suffix(" (UTC)")
+        .or_else(|| trimmed.strip_suffix(" (utc)"))
+        .or_else(|| trimmed.strip_suffix(" UTC"))
+        .or_else(|| trimmed.strip_suffix(" utc"))
+        .unwrap_or(trimmed)
+        .trim();
+
     let parsed = if let Ok(dt) = DateTime::parse_from_rfc3339(trimmed) {
         dt.with_timezone(&Utc)
+    } else if let Ok(dt) = DateTime::parse_from_rfc3339(unadorned) {
+        dt.with_timezone(&Utc)
     } else if let Ok(dt) = DateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S%z") {
+        dt.with_timezone(&Utc)
+    } else if let Ok(dt) = DateTime::parse_from_str(unadorned, "%Y-%m-%d %H:%M:%S%z") {
         dt.with_timezone(&Utc)
     } else {
         // Normalize single-digit components like "2026-09-16 00:35:0" -> "2026-09-16 00:35:00"
         let normalized = {
-            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            let parts: Vec<&str> = unadorned.split_whitespace().collect();
             if parts.len() == 2 {
                 let date_part = parts[0];
                 let time_parts: Vec<&str> = parts[1].split(':').collect();
@@ -77,10 +89,10 @@ pub fn parse_target_timestamp_with_now(raw: &str, now: DateTime<Utc>) -> Result<
                     };
                     format!("{} {}:{}", date_part, h, m)
                 } else {
-                    trimmed.to_string()
+                    unadorned.to_string()
                 }
             } else {
-                trimmed.to_string()
+                unadorned.to_string()
             }
         };
 
@@ -445,5 +457,17 @@ mod tests {
 
         let target_xid_invalid = crate::backup::RecoveryTarget::Xid("4999".to_string());
         assert!(validate_recovery_target(&target_xid_invalid, &snap, &[snap.clone()], now).is_err());
+    }
+
+    #[test]
+    fn test_parse_target_timestamp_supports_utc_suffix() {
+        let now = Utc::now();
+        let target_str = (now - Duration::minutes(10)).format("%Y-%m-%d %H:%M:%S UTC").to_string();
+        let parsed = parse_target_timestamp_with_now(&target_str, now);
+        assert!(parsed.is_ok());
+
+        let target_str_parens = (now - Duration::minutes(10)).format("%Y-%m-%d %H:%M:%S (UTC)").to_string();
+        let parsed2 = parse_target_timestamp_with_now(&target_str_parens, now);
+        assert!(parsed2.is_ok());
     }
 }

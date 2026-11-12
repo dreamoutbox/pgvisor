@@ -248,10 +248,18 @@ echo "✓ Verified metadata.json fields: backup_id='${META_BACKUP_ID}', label='$
 # ------------------------------------------------------------------------------
 echo ""
 echo "[4c/7] Verifying backup archive upload and import endpoint..."
-UPLOAD_RESP=$(curl -s -f -X POST "${DASHBOARD_URL}/api/backups/upload" \
+UPLOAD_TMP="/tmp/upload_resp_$$.json"
+UPLOAD_HTTP=$(curl -s -o "${UPLOAD_TMP}" -w "%{http_code}" -X POST "${DASHBOARD_URL}/api/backups/upload" \
     "${AUTH_HEADER[@]}" \
     -F "file=@${TMP_ARCHIVE}" \
     -F "label=imported-e2e-test")
+UPLOAD_RESP=$(cat "${UPLOAD_TMP}" || echo "")
+rm -f "${UPLOAD_TMP}"
+
+if [ "${UPLOAD_HTTP}" != "200" ]; then
+    echo "FAILED: /api/backups/upload returned HTTP ${UPLOAD_HTTP}: ${UPLOAD_RESP}"
+    exit 1
+fi
 
 IMPORTED_SNAPSHOT_ID=$(echo "${UPLOAD_RESP}" | json_extract "snapshot_id")
 IMPORTED_NODE=$(echo "${UPLOAD_RESP}" | json_extract "source_node")
