@@ -1,3 +1,11 @@
+### If you want to modify staged database restore, shadow recovery process spawning, or rollback protection, then check:
+
+- `crates/pgvisor-sidecar/src/supervisor.rs` = `staging_data_dir`, `old_data_dir`, `prepare_staging_directory`, `clean_staging_directory`, `generate_staging_config`, and `spawn_shadow_postgres` (runs on `config.port + 1` e.g. 5433 with `/tmp` unix socket)
+- `crates/pgvisor-sidecar/src/config.rs` = `ConfigGenerator::write_configs` (writes `port`, `restore_command`, and `recovery.signal` for shadow recovery)
+- `crates/pgvisor-sidecar/src/control/handlers.rs` = `handle_restore` validating recovery targets and invoking supervisor restore
+- `crates/pgvisor-proxy/src/pool.rs` = `pause_client_traffic` and `resume_client_traffic` buffering client queries during restore
+- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::restore_cluster` coordinating pause, restore, drain, and resume
+
 ### If you want to configure PostgreSQL query logging levels (write statements vs read-only) or statement log prefix, then check:
 
 - `crates/pgvisor-sidecar/src/config.rs` = `LogStatement` enum (`None`, `Ddl`, `Mod`, `All`) and `ConfigGenerator::write_postgresql_conf` configuring `log_statement` and `log_line_prefix`

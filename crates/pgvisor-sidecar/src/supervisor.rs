@@ -472,6 +472,245 @@ impl PostgresSupervisor {
         }
     }
 
+    /// Returns the staging data directory path used for shadow restore.
+    ///
+    /// Sibling directory `<data_dir>_staging` located in the same parent directory as `data_dir`
+    /// to guarantee that swapping directories after recovery is an atomic rename on the same volume.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use std::path::Path;
+    /// use pgvisor_sidecar::supervisor::PostgresSupervisor;
+    ///
+    /// let supervisor = PostgresSupervisor::new("/var/lib/postgresql/data/pgdata");
+    /// assert_eq!(
+    ///     supervisor.staging_data_dir(),
+    ///     Path::new("/var/lib/postgresql/data/pgdata_staging")
+    /// );
+    /// ```
+    pub fn staging_data_dir(&self) -> PathBuf {
+        if let Some(parent) = self.data_dir.parent() {
+            if !parent.as_os_str().is_empty() {
+                let name = self
+                    .data_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("pgdata");
+                return parent.join(format!("{name}_staging"));
+            }
+        }
+        let name = self
+            .data_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("pgdata");
+        PathBuf::from(format!("{name}_staging"))
+    }
+
+    /// Returns the backup directory path used during atomic swap (`<data_dir>_old`).
+    ///
+    /// Sibling directory located in the same parent directory as `data_dir`.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use std::path::Path;
+    /// use pgvisor_sidecar::supervisor::PostgresSupervisor;
+    ///
+    /// let supervisor = PostgresSupervisor::new("/var/lib/postgresql/data/pgdata");
+    /// assert_eq!(
+    ///     supervisor.old_data_dir(),
+    ///     Path::new("/var/lib/postgresql/data/pgdata_old")
+    /// );
+    /// ```
+    pub fn old_data_dir(&self) -> PathBuf {
+        if let Some(parent) = self.data_dir.parent() {
+            if !parent.as_os_str().is_empty() {
+                let name = self
+                    .data_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("pgdata");
+                return parent.join(format!("{name}_old"));
+            }
+        }
+        let name = self
+            .data_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("pgdata");
+        PathBuf::from(format!("{name}_old"))
+    }
+
+    /// Generates the configuration for the shadow PostgreSQL instance running in staging.
+    ///
+    /// Sets port to `config.port + 1` (default 5433), removes standby conninfo (restored node is leader),
+    /// and configures PITR target and restore_command if requested.
+    ///
+    /// # Arguments
+    /// * `config` - Base PostgreSQL configuration of the running instance.
+    /// * `recovery_target_time` - Optional PITR recovery target timestamp string.
+    ///
+    /// # Returns
+    /// Cloned and adjusted `PostgresConfig` for shadow process recovery.
+    pub fn generate_staging_config(
+        config: &PostgresConfig,
+        recovery_target_time: Option<&str>,
+    ) -> PostgresConfig {
+        let mut staging_config = config.clone();
+        staging_config.port = config.port.wrapping_add(1);
+        staging_config.primary_conninfo = None;
+
+        if let Some(target_time) = recovery_target_time {
+            let sidecar_bin = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.to_str().map(String::from))
+                .unwrap_or_else(|| "pgvisor-sidecar".to_string());
+
+            if staging_config.restore_command.is_none() {
+                staging_config.restore_command = Some(format!("{sidecar_bin} restore %f %p"));
+            }
+            staging_config.recovery_target_time = Some(target_time.to_string());
+            staging_config.recovery_target_action = Some("promote".to_string());
+        }
+
+        staging_config
+    }
+
+    /// Prepares staging directory by clearing existing staging files and extracting basebackup snapshot tarball.
+    ///
+    /// Removes residual configuration and indicator files (`standby.signal`, `postgresql.auto.conf`, `backup_label.old`)
+    /// and sets secure directory permissions (0700). Active production data directory remains untouched.
+    ///
+    /// # Arguments
+    /// * `tar_bytes` - Gzipped tar archive bytes of the basebackup snapshot.
+    ///
+    /// # Returns
+    /// Path to the extracted staging data directory.
+    pub async fn prepare_staging_directory(&self, tar_bytes: &[u8]) -> Result<PathBuf, SupervisorError> {
+        let staging_dir = self.staging_data_dir();
+        info!(dir = ?staging_dir, "Preparing clean staging data directory for shadow restore");
+
+        if staging_dir.exists() {
+            let mut entries = tokio::fs::read_dir(&staging_dir).await?;
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+                if path.is_dir() {
+                    let _ = tokio::fs::remove_dir_all(&path).await;
+                } else {
+                    let _ = tokio::fs::remove_file(&path).await;
+                }
+            }
+        } else {
+            tokio::fs::create_dir_all(&staging_dir).await?;
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = tokio::fs::set_permissions(&staging_dir, std::fs::Permissions::from_mode(0o700)).await;
+        }
+
+        let temp_tar = staging_dir.join("restore_snapshot.tar.gz");
+        tokio::fs::write(&temp_tar, tar_bytes).await?;
+
+        let status = Command::new("tar")
+            .arg("-xzf")
+            .arg(&temp_tar)
+            .arg("-C")
+            .arg(&staging_dir)
+            .status()
+            .await?;
+
+        let _ = tokio::fs::remove_file(&temp_tar).await;
+
+        if !status.success() {
+            warn!("tar extraction into staging directory returned non-zero status");
+            let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+            return Err(SupervisorError::CommandFailed(
+                "tar extraction returned non-zero status".to_string(),
+            ));
+        }
+
+        // Clean up any residual standby signal or auto configuration from snapshot in staging
+        let standby_signal = staging_dir.join("standby.signal");
+        if standby_signal.exists() {
+            let _ = tokio::fs::remove_file(&standby_signal).await;
+        }
+        let auto_conf = staging_dir.join("postgresql.auto.conf");
+        if auto_conf.exists() {
+            let _ = tokio::fs::remove_file(&auto_conf).await;
+        }
+        let old_label = staging_dir.join("backup_label.old");
+        if old_label.exists() {
+            let _ = tokio::fs::remove_file(&old_label).await;
+        }
+
+        info!(dir = ?staging_dir, "Staging directory prepared and snapshot extracted successfully");
+        Ok(staging_dir)
+    }
+
+    /// Completely removes the staging data directory if present.
+    ///
+    /// Used during rollback or cleanup after restore completion.
+    pub async fn clean_staging_directory(&self) {
+        let staging_dir = self.staging_data_dir();
+        if staging_dir.exists() {
+            info!(dir = ?staging_dir, "Cleaning up staging data directory");
+            let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+        }
+    }
+
+    /// Spawns a shadow PostgreSQL process on staging data directory and alternate port (e.g. 5433).
+    ///
+    /// The shadow process executes in the background and is returned as a `tokio::process::Child`.
+    /// The production PostgreSQL process (port 5432) remains running and supervised.
+    ///
+    /// # Arguments
+    /// * `staging_dir` - Path to the extracted staging data directory.
+    /// * `staging_config` - Configuration for shadow postgres (e.g. port 5433, recovery settings).
+    ///
+    /// # Returns
+    /// The running `Child` process handle for the shadow PostgreSQL instance.
+    pub async fn spawn_shadow_postgres(
+        &self,
+        staging_dir: &Path,
+        staging_config: &PostgresConfig,
+    ) -> Result<Child, SupervisorError> {
+        info!(dir = ?staging_dir, port = staging_config.port, "Writing staging configurations");
+        ConfigGenerator::write_configs(staging_dir, staging_config)?;
+
+        info!(dir = ?staging_dir, port = staging_config.port, "Spawning shadow postgres process");
+        let mut cmd = Command::new("postgres");
+        cmd.arg("-D")
+            .arg(staging_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut child = cmd.spawn()?;
+        let pid = child.id().unwrap_or(0);
+        info!(pid, port = staging_config.port, "Shadow postgres process spawned");
+
+        if let Some(stdout) = child.stdout.take() {
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stdout).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    info!(target: "postgres_shadow", "{}", line);
+                }
+            });
+        }
+
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    warn!(target: "postgres_shadow", "{}", line);
+                }
+            });
+        }
+
+        Ok(child)
+    }
+
     /// Restores PostgreSQL data directory from basebackup tarball bytes.
     /// Gracefully shuts down Postgres if running, cleans data directory, extracts snapshot,
     /// writes recovery settings if requested, and restarts Postgres.
@@ -922,5 +1161,83 @@ mod tests {
         assert_eq!(resp2.path, conf_path.to_string_lossy().to_string());
         assert!(resp2.content.contains("port = 5432"));
         assert_eq!(resp2.file_type, NodeConfigType::PostgresqlConf);
+    }
+
+    #[test]
+    fn test_staging_and_old_data_dir_paths() {
+        let supervisor = PostgresSupervisor::new("/var/lib/postgresql/data/pgdata");
+        assert_eq!(
+            supervisor.staging_data_dir(),
+            PathBuf::from("/var/lib/postgresql/data/pgdata_staging")
+        );
+        assert_eq!(
+            supervisor.old_data_dir(),
+            PathBuf::from("/var/lib/postgresql/data/pgdata_old")
+        );
+
+        let relative_supervisor = PostgresSupervisor::new("pgdata");
+        assert_eq!(
+            relative_supervisor.staging_data_dir(),
+            PathBuf::from("pgdata_staging")
+        );
+        assert_eq!(
+            relative_supervisor.old_data_dir(),
+            PathBuf::from("pgdata_old")
+        );
+    }
+
+    #[test]
+    fn test_generate_staging_config() {
+        let base_config = PostgresConfig {
+            port: 5432,
+            primary_conninfo: Some("host=node1 port=5432 user=replicator".into()),
+            recovery_target_time: None,
+            recovery_target_action: None,
+            ..Default::default()
+        };
+
+        let staging_config = PostgresSupervisor::generate_staging_config(
+            &base_config,
+            Some("2026-11-12 06:45:00 UTC"),
+        );
+
+        assert_eq!(staging_config.port, 5433);
+        assert!(staging_config.primary_conninfo.is_none());
+        assert_eq!(
+            staging_config.recovery_target_time.as_deref(),
+            Some("2026-11-12 06:45:00 UTC")
+        );
+        assert_eq!(
+            staging_config.recovery_target_action.as_deref(),
+            Some("promote")
+        );
+        assert!(staging_config.restore_command.is_some());
+        assert!(staging_config
+            .restore_command
+            .as_ref()
+            .unwrap()
+            .contains("restore %f %p"));
+    }
+
+    #[tokio::test]
+    async fn test_prepare_staging_directory_invalid_tar() {
+        let dir = tempdir().unwrap();
+        let prod_data = dir.path().join("pgdata");
+        tokio::fs::create_dir_all(&prod_data).await.unwrap();
+        tokio::fs::write(prod_data.join("PG_VERSION"), "16\n").await.unwrap();
+
+        let supervisor = PostgresSupervisor::new(&prod_data);
+        let dummy_corrupt_tar = vec![0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff];
+
+        let result = supervisor.prepare_staging_directory(&dummy_corrupt_tar).await;
+        assert!(result.is_err());
+
+        // Production data must remain completely intact
+        assert!(prod_data.join("PG_VERSION").exists());
+        let prod_content = tokio::fs::read_to_string(prod_data.join("PG_VERSION")).await.unwrap();
+        assert_eq!(prod_content, "16\n");
+
+        // Staging directory must be cleaned up on failure
+        assert!(!supervisor.staging_data_dir().exists());
     }
 }

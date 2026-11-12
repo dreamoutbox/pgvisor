@@ -197,8 +197,6 @@ impl ConfigGenerator {
             track_commit_timestamp = on\n\
             log_statement = '{log_statement}'\n\
             log_line_prefix = '%m [%p] tx=%x: '\n\
-            log_statement = '{log_statement}'\n\
-            log_line_prefix = '%m [%p] tx=%x: '\n\
             unix_socket_directories = '/tmp'\n",
             port = config.port,
             max_conn = config.max_connections,

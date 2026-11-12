@@ -16,13 +16,13 @@ Implement a non-destructive, atomic shadow-recovery restore process on the clust
 
 ---
 
-### Phase 2: Shadow Staging Directory & Process Spawning in Sidecar [STATUS: TODO]
+### Phase 2: Shadow Staging Directory & Process Spawning in Sidecar [STATUS: DONE]
 - Goal: Add shadow PostgreSQL process management to `PostgresSupervisor` to perform recovery in a staging directory alongside `pgdata`.
 - Tasks:
-  - [ ] Define staging path helper `staging_data_dir(&self) -> PathBuf` (e.g. `/var/lib/postgresql/data/pgdata_staging` on the same volume).
-  - [ ] Implement staging directory cleanup and archive extraction into `pgdata_staging` without touching the active `pgdata`.
-  - [ ] Implement `spawn_shadow_postgres()` in `crates/pgvisor-sidecar/src/supervisor.rs` running on staging port `config.port + 1` (5433) using `/tmp` unix socket directory.
-  - [ ] Generate staging `postgresql.conf` with `port = 5433` and PITR `recovery.signal` / `restore_command`.
+  - [x] Define staging path helper `staging_data_dir(&self) -> PathBuf` (e.g. `/var/lib/postgresql/data/pgdata_staging` on the same volume).
+  - [x] Implement staging directory cleanup and archive extraction into `pgdata_staging` without touching the active `pgdata`.
+  - [x] Implement `spawn_shadow_postgres()` in `crates/pgvisor-sidecar/src/supervisor.rs` running on staging port `config.port + 1` (5433) using `/tmp` unix socket directory.
+  - [x] Generate staging `postgresql.conf` with `port = 5433` and PITR `recovery.signal` / `restore_command`.
 - Done when: Unit tests in `crates/pgvisor-sidecar/src/supervisor.rs` verify staging path generation and staging configuration generation.
 
 ---
