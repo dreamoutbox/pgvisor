@@ -220,29 +220,13 @@
 
 - [ ] Database Explorer page. add dropdown switch between multiple databases
 
+- [ ] pgvisor add interactive slider drag for PITR target time 
+
 - [ ] add CPU/RAM/DISK usage of each node in web dashboard
 
 - [ ] restore function. add validation for PITR time. check from backup json.
 
-- [ ] pgvisor add interactive slider drag for PITR target time 
-
 - [ ] restore add restore with xid.
-
----
-
-## Bug
-
-- [x] currently. if leader failed to restore. leader node pgvisor-sidecar stopped. but container still running. 
-
-expected behavior: if leader failed to restore. it should not stop leader pgvisor-sidecar. it should restart back to previous state before backup. 
-
-and it should keep leader role and follower nodes should not take the leader role when leader failed to restore database.
-
-- leader should restore first. then follower start replicate data. incase leader failed. so follower nodes won't get invalid data.
-
-- when restoring. any nodes should not accept any connections from clients.
-
-- if leader failed to restore. the follower should not replicate data.
 
 ---
 
