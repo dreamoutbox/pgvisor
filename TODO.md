@@ -238,7 +238,7 @@ expected behavior: if leader failed to restore. it should not stop pgvisor-sidec
 
 - leader should restore first. then follower start replicate data. incase leader failed. so follower nodes won't get invalid data.
 
-- when restoring it any nodes should not accept any connections from clients.
+- when restoring. any nodes should not accept any connections from clients.
 
 - if leader failed to restore. the follower should not replicate data.
 

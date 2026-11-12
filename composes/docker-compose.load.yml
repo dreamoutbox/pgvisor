@@ -67,6 +67,13 @@ services:
       PGVISOR_TLS_CERT_FILE: ${PGVISOR_TLS_CERT_FILE:-}
       PGVISOR_TLS_KEY_FILE: ${PGVISOR_TLS_KEY_FILE:-}
       RUST_LOG: info
+      # TEMP DISABLE BACKUP CRON IN DEV MODE
+      # FOR BACKUP BUG REPRODUCTION, SHOULD NOT HAVE BACKUP CRON TO REDUCE UNNECESSARY WORK
+      PGVISOR_BACKUP_CRON_ENABLED: "false"
+      PGVISOR_BACKUP_KEEP_COUNT: 10
+      PGVISOR_BACKUP_RETENTION_DAYS: 7
+      PGVISOR_BACKUP_FULL_CRON: "0 1 * * *"
+      PGVISOR_BACKUP_INCREMENTAL_CRON: "0 * * * *"
     volumes:
       - node1_data:/var/lib/postgresql/data
     depends_on:
@@ -103,6 +110,11 @@ services:
       PGVISOR_TLS_CERT_FILE: ${PGVISOR_TLS_CERT_FILE:-}
       PGVISOR_TLS_KEY_FILE: ${PGVISOR_TLS_KEY_FILE:-}
       RUST_LOG: info
+      PGVISOR_BACKUP_CRON_ENABLED: "false"
+      PGVISOR_BACKUP_KEEP_COUNT: 10
+      PGVISOR_BACKUP_RETENTION_DAYS: 7
+      PGVISOR_BACKUP_FULL_CRON: "0 1 * * *"
+      PGVISOR_BACKUP_INCREMENTAL_CRON: "0 * * * *"
     volumes:
       - node2_data:/var/lib/postgresql/data
     depends_on:
@@ -139,6 +151,11 @@ services:
       PGVISOR_TLS_CERT_FILE: ${PGVISOR_TLS_CERT_FILE:-}
       PGVISOR_TLS_KEY_FILE: ${PGVISOR_TLS_KEY_FILE:-}
       RUST_LOG: info
+      PGVISOR_BACKUP_CRON_ENABLED: "false"
+      PGVISOR_BACKUP_KEEP_COUNT: 10
+      PGVISOR_BACKUP_RETENTION_DAYS: 7
+      PGVISOR_BACKUP_FULL_CRON: "0 1 * * *"
+      PGVISOR_BACKUP_INCREMENTAL_CRON: "0 * * * *"
     volumes:
       - node3_data:/var/lib/postgresql/data
     depends_on:
@@ -160,6 +177,9 @@ services:
     mem_limit: 1g
     ports:
       - "7432:5432"
+      # ON PRODUCTION NOTE:
+      # should bind with `- "127.0.0.1:8080:8080"`
+      # and SSH port forward for access to web dashboard.
       - "10080:8080"
     environment:
       PGVISOR_PROXY_LISTEN: 0.0.0.0:5432
