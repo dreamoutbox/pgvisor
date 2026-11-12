@@ -93,12 +93,23 @@ BACKUP_RESP=$(curl -s -f -X POST "${DASHBOARD_URL}/api/backups" \
 
 SNAPSHOT_ID=$(echo "${BACKUP_RESP}" | json_extract "snapshot_id")
 SOURCE_NODE=$(echo "${BACKUP_RESP}" | json_extract "source_node")
+BACKUP_TX_TIME=$(echo "${BACKUP_RESP}" | json_extract "last_transaction_time")
+BACKUP_TX_XID=$(echo "${BACKUP_RESP}" | json_extract "last_transaction_xid")
 if [ -z "${SNAPSHOT_ID}" ]; then
     echo "Failed to create backup. API response: ${BACKUP_RESP}"
     exit 1
 fi
+if [ -z "${BACKUP_TX_TIME}" ]; then
+    echo "FAILED: last_transaction_time is missing from backup API response!"
+    exit 1
+fi
+if [ -z "${BACKUP_TX_XID}" ]; then
+    echo "FAILED: last_transaction_xid is missing from backup API response!"
+    exit 1
+fi
 echo "✓ Basebackup created successfully. Snapshot ID: ${SNAPSHOT_ID}"
 echo "  Backup source node: '${SOURCE_NODE}'"
+echo "  Last transaction: time='${BACKUP_TX_TIME}', xid='${BACKUP_TX_XID}'"
 
 if [[ ! "${SNAPSHOT_ID}" =~ ^test-backup-restore-suite-snap- ]]; then
     echo "FAILED: Snapshot ID '${SNAPSHOT_ID}' does not contain label prefix 'test-backup-restore-suite-snap-'!"
@@ -198,6 +209,8 @@ META_LABEL=$(json_extract "label" < "${EXTRACT_DIR}/metadata.json")
 META_TYPE=$(json_extract "backup_type" < "${EXTRACT_DIR}/metadata.json")
 META_START_DATE=$(json_extract "backup_start_date" < "${EXTRACT_DIR}/metadata.json")
 META_TIMELINE=$(json_extract "timeline" < "${EXTRACT_DIR}/metadata.json")
+META_TX_TIME=$(json_extract "last_transaction_time" < "${EXTRACT_DIR}/metadata.json")
+META_TX_XID=$(json_extract "last_transaction_xid" < "${EXTRACT_DIR}/metadata.json")
 rm -rf "${EXTRACT_DIR}"
 
 if [ "${META_BACKUP_ID}" != "${SNAPSHOT_ID}" ]; then
@@ -220,7 +233,15 @@ if [ -z "${META_TIMELINE}" ]; then
     echo "FAILED: metadata.json timeline is missing!"
     exit 1
 fi
-echo "✓ Verified metadata.json fields: backup_id='${META_BACKUP_ID}', label='${META_LABEL}', type='${META_TYPE}', start_date='${META_START_DATE}', timeline='${META_TIMELINE}'."
+if [ -z "${META_TX_TIME}" ]; then
+    echo "FAILED: metadata.json last_transaction_time is missing!"
+    exit 1
+fi
+if [ -z "${META_TX_XID}" ]; then
+    echo "FAILED: metadata.json last_transaction_xid is missing!"
+    exit 1
+fi
+echo "✓ Verified metadata.json fields: backup_id='${META_BACKUP_ID}', label='${META_LABEL}', type='${META_TYPE}', start_date='${META_START_DATE}', timeline='${META_TIMELINE}', tx_time='${META_TX_TIME}', tx_xid='${META_TX_XID}'."
 
 # ------------------------------------------------------------------------------
 # [5/7] Simulate disaster: Drop table 't1'

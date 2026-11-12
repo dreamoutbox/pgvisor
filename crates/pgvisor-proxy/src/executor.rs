@@ -54,17 +54,27 @@ impl ProxySqlExecutor {
             },
         }
     }
-}
 
-#[async_trait::async_trait]
-impl SqlExecutor for ProxySqlExecutor {
-    async fn execute(&self, sql: &str, max_rows: usize) -> Result<SqlQueryResult, String> {
+    /// Executes a SQL query directly against a specific backend role (Leader or Standby).
+    ///
+    /// # Arguments
+    /// * `sql` - SQL string to execute
+    /// * `max_rows` - Maximum number of rows to return
+    /// * `role` - `BackendRole::Leader` or `BackendRole::Standby`
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # async fn doc_example(executor: &pgvisor_proxy::executor::ProxySqlExecutor) {
+    /// let res = executor.execute_with_role("SELECT 1", 1, pgvisor_proxy::pool::BackendRole::Leader).await;
+    /// # }
+    /// ```
+    pub async fn execute_with_role(
+        &self,
+        sql: &str,
+        max_rows: usize,
+        role: BackendRole,
+    ) -> Result<SqlQueryResult, String> {
         let start = Instant::now();
-        let role = if is_leader_required(sql) {
-            BackendRole::Leader
-        } else {
-            BackendRole::Standby
-        };
 
         // Acquire a connection from the pool for the required role
         let mut backend = self
@@ -167,5 +177,17 @@ impl SqlExecutor for ProxySqlExecutor {
             row_count,
             truncated,
         })
+    }
+}
+
+#[async_trait::async_trait]
+impl SqlExecutor for ProxySqlExecutor {
+    async fn execute(&self, sql: &str, max_rows: usize) -> Result<SqlQueryResult, String> {
+        let role = if is_leader_required(sql) {
+            BackendRole::Leader
+        } else {
+            BackendRole::Standby
+        };
+        self.execute_with_role(sql, max_rows, role).await
     }
 }

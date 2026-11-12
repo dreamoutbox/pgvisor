@@ -19,14 +19,14 @@ Existing code (from exploration):
   - [x] Update `dashboard` `BackupItemView` mapping only if it constructs `BasebackupMeta` literally (fix compile errors, no UI change).
 - Done when: `cargo check` and `cargo test -p pgvisor-core` pass.
 
-### Phase 2: Capture last transaction at backup time [STATUS: TODO]
+### Phase 2: Capture last transaction at backup time [STATUS: DONE]
 - Goal: `create_backup` records the last committed transaction time and xid in the JSON and in `metadata.json`.
 - Tasks:
-  - [ ] Decide the source (see risks). Default: on the leader, query `pg_last_committed_xact()` (`xid`, `timestamp`) just after `pg_basebackup` finishes. If commit timestamps are not tracked, fall back to `pg_current_xact_id()`/`txid_current_snapshot()` xmax for xid and `now()` for time, and mark the value as approximate.
-  - [ ] Enable `track_commit_timestamp = on` in the sidecar generated config (`crates/pgvisor-sidecar/src/config.rs`) if that source is chosen. Needs a restart, so check the initdb and config path.
-  - [ ] Add a helper in `crates/pgvisor-proxy/src/backup.rs` that runs the query and returns `Option<(DateTime<Utc>, String)>`. A failed query logs a warning and leaves the fields `None`, so the backup never fails. The simulated-snapshot path sets plausible values.
-  - [ ] Set the fields on `meta` before `process_basebackup_archive` serializes `metadata.json`, and before `save_basebackup`.
-  - [ ] Extend `tests/test-backup-restore.sh`: after creating a backup, poll the S3 JSON and assert the fields are present and the time is no later than now and no earlier than the backup start.
+  - [x] Decide the source (see risks). Default: on the leader, query `pg_last_committed_xact()` (`xid`, `timestamp`) just after `pg_basebackup` finishes. If commit timestamps are not tracked, fall back to `pg_current_xact_id()`/`txid_current_snapshot()` xmax for xid and `now()` for time, and mark the value as approximate.
+  - [x] Enable `track_commit_timestamp = on` in the sidecar generated config (`crates/pgvisor-sidecar/src/config.rs`) if that source is chosen. Needs a restart, so check the initdb and config path.
+  - [x] Add a helper in `crates/pgvisor-proxy/src/backup.rs` that runs the query and returns `Option<(DateTime<Utc>, String)>`. A failed query logs a warning and leaves the fields `None`, so the backup never fails. The simulated-snapshot path sets plausible values.
+  - [x] Set the fields on `meta` before `process_basebackup_archive` serializes `metadata.json`, and before `save_basebackup`.
+  - [x] Extend `tests/test-backup-restore.sh`: after creating a backup, poll the S3 JSON and assert the fields are present and the time is no later than now and no earlier than the backup start.
 - Done when: `cargo check` passes, unit tests pass, and `./test.sh` backup-restore passes. A new backup JSON shows both fields, and the time is usable as a PITR target.
 
 ### Phase 3: dev-take-backups-snapshot-s3.sh and dev-import-backups-snapshot-s3.sh [STATUS: TODO]

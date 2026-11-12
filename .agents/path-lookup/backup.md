@@ -3,7 +3,7 @@
 - `crates/pgvisor-core/src/backup/manager.rs` = `BackupManager` managing OpenDAL uploads, WAL archiving/restoration, basebackup snapshotting, `BackupScheduleConfig` (MinIO dev target, hourly incremental, midnight full backup), retention pruning, and snapshot retrieval/deletion
 - `crates/pgvisor-core/src/backup/mod.rs` = Backup module exports, `BasebackupMeta`, `BackupType`, `BackupScheduleConfig`, and `BackupError`
 - `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService` orchestrating live physical snapshots via `pg_basebackup`, cluster restore coordination via leader sidecar `/control/restore` and standby `/control/resync`, and connection pool draining
-- `crates/pgvisor-sidecar/src/config.rs` = `PostgresConfig` and `ConfigGenerator` generating `restore_command`, `archive_command`, and `recovery.signal` for PITR
+- `crates/pgvisor-sidecar/src/config.rs` = `PostgresConfig` and `ConfigGenerator` generating `restore_command`, `archive_command`, `track_commit_timestamp = on`, and `recovery.signal` for PITR
 - `crates/pgvisor-sidecar/src/main.rs` = `pgvisor-sidecar archive` and `restore` CLI handlers invoking `BackupManager` for PostgreSQL WAL archiving and recovery
 - `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor::restore_from_snapshot` and `resync_from_primary` for in-place cluster data directory restoration, standby re-cloning, and PITR recovery signaling
 - `knowledges/post-mortem-flaky-pitr-restore.md` = Post-mortem detailing cluster restore timeline, split-brain failover race conditions under parallel CPU load, and resolution
@@ -24,7 +24,7 @@
 - `crates/pgvisor-core/src/backup/archive.rs` = `generate_snapshot_id`, `parse_backup_label`, `process_basebackup_archive` excluding `backup_label.old` and injecting `metadata.json`, and `create_simulated_basebackup`
 - `crates/pgvisor-core/src/backup/mod.rs` = re-exports for archive processing and manager
 - `crates/pgvisor-core/src/backup/manager.rs` = `BasebackupMeta` metadata struct (`snapshot_id`, `backup_id`, `label`, `backup_start_date`, `backup_finish_date`, `timeline`, `start_lsn`, `checkpoint_location`, `backup_from`, `pg_version`, `last_transaction_time`, `last_transaction_xid`) and OpenDAL storage manager
-- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::create_backup` formatting snapshot ID with label, running `pg_basebackup`, and invoking `process_basebackup_archive`
+- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::create_backup` formatting snapshot ID with label, capturing leader last committed transaction timestamp and xid via `fetch_last_committed_transaction`, running `pg_basebackup`, and invoking `process_basebackup_archive`
 - `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor::restore_from_snapshot` cleaning up `backup_label.old` defense-in-depth
 - `crates/pgvisor-dashboard/src/models.rs` = `CreateBackupRequest` and `BackupItemView` view models
 - `crates/pgvisor-dashboard/src/handlers.rs` = Backup creation and list endpoints (`/api/backups`) and page renderer mapping metadata to `BackupItemView`
