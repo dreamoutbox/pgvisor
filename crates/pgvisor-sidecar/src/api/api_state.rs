@@ -2,9 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use pgvisor_core::audit::AuditLog;
+use pgvisor_core::sql_guard::SqlSecurityGuard;
 
+use super::metrics::MetricsRing;
 use super::password_verifier::{PasswordChecker, PostgresPasswordChecker};
 use super::session_token::SessionTokenSigner;
+use super::sql_runner::{ApiSqlRunner, LivePgSqlRunner};
 use super::superusers::SuperuserAllowlist;
 use crate::control::SidecarState;
 
@@ -14,17 +17,21 @@ const DEFAULT_PEER_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Clone)]
 pub struct ApiState {
     pub sidecar: SidecarState,
+    pub cluster_id: String,
     pub pg_addr: String,
     pub pg_superuser: String,
     pub superusers: Arc<SuperuserAllowlist>,
     pub token_signer: Arc<SessionTokenSigner>,
     pub password_checker: Arc<dyn PasswordChecker>,
+    pub sql_runner: Arc<dyn ApiSqlRunner>,
+    pub security_guard: Arc<SqlSecurityGuard>,
+    pub metrics_ring: Arc<MetricsRing>,
     pub audit_log: Arc<AuditLog>,
     pub http_client: reqwest::Client,
 }
 
 impl ApiState {
-    /// Constructs [`ApiState`] using the real [`PostgresPasswordChecker`] against `pg_addr`.
+    /// Constructs [`ApiState`] using live PostgreSQL connections at `pg_addr`.
     pub fn new(
         sidecar: SidecarState,
         pg_addr: impl Into<String>,
@@ -39,20 +46,43 @@ impl ApiState {
             pg_addr.clone(),
             pg_superuser.clone(),
         ));
+        let sql_runner = Arc::new(LivePgSqlRunner::new(pg_addr.clone()));
         let http_client = reqwest::Client::builder()
             .timeout(DEFAULT_PEER_HTTP_TIMEOUT)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             sidecar,
+            cluster_id: "pgvisor-cluster".to_string(),
             pg_addr,
             pg_superuser,
             superusers,
             token_signer,
             password_checker,
+            sql_runner,
+            security_guard: Arc::new(SqlSecurityGuard::default()),
+            metrics_ring: Arc::new(MetricsRing::new()),
             audit_log,
             http_client,
         }
+    }
+
+    /// Sets the cluster identifier displayed by `/api/status`.
+    pub fn with_cluster_id(mut self, cluster_id: impl Into<String>) -> Self {
+        self.cluster_id = cluster_id.into();
+        self
+    }
+
+    /// Overrides the SQL runner implementation (for unit tests).
+    pub fn with_sql_runner(mut self, runner: Arc<dyn ApiSqlRunner>) -> Self {
+        self.sql_runner = runner;
+        self
+    }
+
+    /// Overrides the SQL security guard policy.
+    pub fn with_security_guard(mut self, guard: Arc<SqlSecurityGuard>) -> Self {
+        self.security_guard = guard;
+        self
     }
 
     /// Overrides the password checker implementation (for unit tests).

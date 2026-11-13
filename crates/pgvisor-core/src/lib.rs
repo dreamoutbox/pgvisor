@@ -25,7 +25,8 @@ pub use logging::{
     format_highlight_banner, format_leader_down_highlight, format_restore_highlight, log_highlight,
 };
 pub use metrics::{
-    BackupMetrics, ClusterMetricsSnapshot, NodeMetricRole, NodeMetrics, ProxyMetrics,
+    BackupMetrics, ClusterActivity, ClusterMetricsSnapshot, NodeMetricRole, NodeMetrics,
+    PgNodeActivity,
 };
 pub use node::{LogLevel, NodeConfigResponse, NodeConfigType, NodeLogEntry, NodeLogsResponse};
 pub use protocol::{

@@ -7,7 +7,7 @@ use tokio::sync::RwLock;
 
 use crate::handlers::DashboardState;
 use pgvisor_core::api::{
-    BackupMetrics, ClusterMetricsSnapshot, NodeMetricRole, NodeMetrics, ProxyMetrics,
+    BackupMetrics, ClusterActivity, ClusterMetricsSnapshot, NodeMetricRole, NodeMetrics,
 };
 
 /// Abstraction for collecting cluster performance and health metrics.
@@ -83,7 +83,7 @@ impl StandaloneMetricsService {
                         pg_writes: 0,
                     },
                 ],
-                proxy: ProxyMetrics {
+                activity: ClusterActivity {
                     reads_total: 1630 + factor * 15,
                     writes_total: 450 + factor * 6,
                 },
@@ -115,7 +115,7 @@ impl MetricsService for StandaloneMetricsService {
             ClusterMetricsSnapshot {
                 timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
                 nodes: Vec::new(),
-                proxy: ProxyMetrics::default(),
+                activity: ClusterActivity::default(),
                 backups: BackupMetrics::default(),
             }
         }
@@ -152,7 +152,7 @@ mod tests {
         let service = StandaloneMetricsService::new();
         let snapshot = service.current_snapshot().await;
         assert_eq!(snapshot.nodes.len(), 3);
-        assert_eq!(snapshot.proxy.writes_total, 450 + 60 * 6);
+        assert_eq!(snapshot.activity.writes_total, 450 + 60 * 6);
 
         let hist = service.history().await;
         assert_eq!(hist.len(), 60);

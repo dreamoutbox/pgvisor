@@ -5,7 +5,7 @@ use tokio::sync::RwLock;
 
 use pgvisor_core::api::{ClusterOverview, NodeRole};
 use pgvisor_core::metrics::{
-    BackupMetrics, ClusterMetricsSnapshot, NodeMetricRole, NodeMetrics, ProxyMetrics,
+    BackupMetrics, ClusterActivity, ClusterMetricsSnapshot, NodeMetricRole, NodeMetrics,
 };
 use pgvisor_dashboard::handlers::{BackupService, MetricsService};
 
@@ -193,7 +193,7 @@ impl MetricsService for ProxyMetricsService {
             });
         }
 
-        let proxy = ProxyMetrics {
+        let activity = ClusterActivity {
             reads_total: self.store.reads_total(),
             writes_total: self.store.writes_total(),
         };
@@ -222,7 +222,7 @@ impl MetricsService for ProxyMetricsService {
         ClusterMetricsSnapshot {
             timestamp_ms,
             nodes,
-            proxy,
+            activity,
             backups,
         }
     }

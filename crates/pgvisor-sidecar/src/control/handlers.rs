@@ -18,7 +18,8 @@ use super::state::{
 
 use crate::supervisor::ProcessStatus;
 
-pub async fn handle_status(State(state): State<SidecarState>) -> impl IntoResponse {
+/// Collects current [`StatusResponse`] directly from local sidecar state and PostgreSQL.
+pub async fn collect_local_status(state: &SidecarState) -> StatusResponse {
     let supervisor_status = state.supervisor.status().await;
     let status_str = match supervisor_status {
         ProcessStatus::Running => "running",
@@ -30,9 +31,16 @@ pub async fn handle_status(State(state): State<SidecarState>) -> impl IntoRespon
     let uptime_secs = state.supervisor.uptime_secs().await;
     let cpu_percent = state.system_metrics.cpu_percent();
     let (memory_used_bytes, memory_total_bytes) = state.system_metrics.memory_usage();
-    let disk_used_bytes = crate::system::SystemMetricsCollector::dir_size_bytes(state.supervisor.data_dir());
+    let disk_used_bytes =
+        crate::system::SystemMetricsCollector::dir_size_bytes(state.supervisor.data_dir());
+    let activity = if matches!(supervisor_status, ProcessStatus::Running) {
+        let local_addr = format!("127.0.0.1:{}", state.pg_port);
+        crate::api::sample_local_activity(&local_addr, &state.pg_superuser).await
+    } else {
+        None
+    };
 
-    Json(StatusResponse {
+    StatusResponse {
         node_id: state.node_id,
         role: current_role,
         status: status_str.to_string(),
@@ -44,7 +52,12 @@ pub async fn handle_status(State(state): State<SidecarState>) -> impl IntoRespon
         memory_total_bytes,
         disk_used_bytes,
         api_port: state.api_port,
-    })
+        activity,
+    }
+}
+
+pub async fn handle_status(State(state): State<SidecarState>) -> impl IntoResponse {
+    Json(collect_local_status(&state).await)
 }
 
 pub async fn handle_events(

@@ -38,11 +38,37 @@ pub struct NodeMetrics {
     pub pg_writes: u64,
 }
 
-/// Cumulative query routing metrics from the L7 connection proxy.
+/// Cumulative cluster activity aggregated from per-node `pg_stat_database` counters.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct ProxyMetrics {
+pub struct ClusterActivity {
     pub reads_total: u64,
     pub writes_total: u64,
+}
+
+/// Per-node PostgreSQL activity counters sampled from `pg_stat_database`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PgNodeActivity {
+    pub xact_commit: u64,
+    pub xact_rollback: u64,
+    pub tup_returned: u64,
+    pub tup_fetched: u64,
+    pub tup_inserted: u64,
+    pub tup_updated: u64,
+    pub tup_deleted: u64,
+}
+
+impl PgNodeActivity {
+    /// Total tuple read operations (`tup_returned + tup_fetched`).
+    pub fn reads(&self) -> u64 {
+        self.tup_returned.saturating_add(self.tup_fetched)
+    }
+
+    /// Total tuple write operations (`tup_inserted + tup_updated + tup_deleted`).
+    pub fn writes(&self) -> u64 {
+        self.tup_inserted
+            .saturating_add(self.tup_updated)
+            .saturating_add(self.tup_deleted)
+    }
 }
 
 /// Aggregated backup metrics including size, throughput, and success rate.
@@ -60,7 +86,7 @@ pub struct BackupMetrics {
 pub struct ClusterMetricsSnapshot {
     pub timestamp_ms: u64,
     pub nodes: Vec<NodeMetrics>,
-    pub proxy: ProxyMetrics,
+    pub activity: ClusterActivity,
     pub backups: BackupMetrics,
 }
 
@@ -85,7 +111,7 @@ mod tests {
                 pg_reads: 1200,
                 pg_writes: 450,
             }],
-            proxy: ProxyMetrics {
+            activity: ClusterActivity {
                 reads_total: 500,
                 writes_total: 250,
             },

@@ -91,7 +91,8 @@ pub use table_summary::TableSummary;
 pub use update_row_request::UpdateRowRequest;
 
 pub use crate::metrics::{
-    BackupMetrics, ClusterMetricsSnapshot, NodeMetricRole, NodeMetrics, ProxyMetrics,
+    BackupMetrics, ClusterActivity, ClusterMetricsSnapshot, NodeMetricRole, NodeMetrics,
+    PgNodeActivity,
 };
 pub use crate::node::{
     LogLevel, NodeConfigResponse, NodeConfigType, NodeLogEntry, NodeLogsResponse,

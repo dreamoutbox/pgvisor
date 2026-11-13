@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use pgvisor_core::api::SidecarRole;
 use pgvisor_core::backup::BackupManager;
+use pgvisor_core::metrics::PgNodeActivity;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
@@ -12,6 +13,7 @@ use crate::supervisor::PostgresSupervisor;
 use crate::system::SystemMetricsCollector;
 
 pub const DEFAULT_API_PORT: u16 = 8081;
+const DEFAULT_PG_PORT: u16 = 5432;
 
 fn default_api_port() -> u16 {
     DEFAULT_API_PORT
@@ -43,6 +45,9 @@ pub struct SidecarState {
     pub backup_lock: Arc<RwLock<Option<BackupLockInfo>>>,
     /// HTTP port serving the client-facing `/api/*` router.
     pub api_port: u16,
+    /// Local PostgreSQL port and bootstrap superuser role for status telemetry queries.
+    pub pg_port: u16,
+    pub pg_superuser: String,
 }
 
 impl SidecarState {
@@ -70,12 +75,21 @@ impl SidecarState {
             cluster_secret,
             backup_lock: Arc::new(RwLock::new(None)),
             api_port: DEFAULT_API_PORT,
+            pg_port: DEFAULT_PG_PORT,
+            pg_superuser: "postgres".to_string(),
         }
     }
 
     /// Sets the sidecar client API port reported in status responses.
     pub fn with_api_port(mut self, api_port: u16) -> Self {
         self.api_port = api_port;
+        self
+    }
+
+    /// Sets the local PostgreSQL port and superuser role for local status telemetry sampling.
+    pub fn with_pg_endpoint(mut self, pg_port: u16, pg_superuser: impl Into<String>) -> Self {
+        self.pg_port = pg_port;
+        self.pg_superuser = pg_superuser.into();
         self
     }
 
@@ -146,7 +160,7 @@ pub struct RepointPayload {
     pub primary_conninfo: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusResponse {
     pub node_id: u64,
     pub role: String,
@@ -161,6 +175,8 @@ pub struct StatusResponse {
     pub disk_used_bytes: u64,
     #[serde(default = "default_api_port")]
     pub api_port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<PgNodeActivity>,
 }
 
 #[derive(Deserialize)]

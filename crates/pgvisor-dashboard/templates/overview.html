@@ -45,7 +45,7 @@
         <div class="value">{{ overview.total_backups }}</div>
     </div>
     <div class="card">
-        <h3>Total Proxy Queries</h3>
+        <h3>Total Cluster Queries</h3>
         <div class="value" id="kpi-proxy-total" style="color: var(--primary);">0</div>
         <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;" id="kpi-proxy-breakdown">Reads: 0 | Writes: 0</p>
     </div>
@@ -153,11 +153,11 @@
         </div>
     </div>
 
-    <!-- 5. Proxy Read/Write Routing -->
+    <!-- 5. Cluster Read/Write Activity -->
     <div class="card" style="padding: 20px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <h3 style="margin-bottom: 0;">Proxy Read / Write Routing</h3>
-            <span style="font-size: 0.75rem; color: var(--text-muted);">L7 Proxy Dispatched Queries</span>
+            <h3 style="margin-bottom: 0;">Cluster Read / Write Operations</h3>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">Aggregated pg_stat_database Tuple Activity</span>
         </div>
         <div style="position: relative; height: 260px;">
             <canvas id="proxyQueriesChart"></canvas>
@@ -352,11 +352,12 @@
         if (!history || history.length === 0) return;
         const latest = history[history.length - 1];
 
-        const totalProxy = (latest.proxy.reads_total || 0) + (latest.proxy.writes_total || 0);
+        const activity = latest.activity || { reads_total: 0, writes_total: 0 };
+        const totalProxy = (activity.reads_total || 0) + (activity.writes_total || 0);
         const kpiProxyEl = document.getElementById('kpi-proxy-total');
         if (kpiProxyEl) kpiProxyEl.textContent = totalProxy.toLocaleString();
         const kpiProxyBd = document.getElementById('kpi-proxy-breakdown');
-        if (kpiProxyBd) kpiProxyBd.textContent = 'Reads: ' + (latest.proxy.reads_total || 0).toLocaleString() + ' | Writes: ' + (latest.proxy.writes_total || 0).toLocaleString();
+        if (kpiProxyBd) kpiProxyBd.textContent = 'Reads: ' + (activity.reads_total || 0).toLocaleString() + ' | Writes: ' + (activity.writes_total || 0).toLocaleString();
 
         let maxLag = 0;
         latest.nodes.forEach(n => {
@@ -426,8 +427,8 @@
 
         if (proxyQueriesChart) {
             proxyQueriesChart.data.labels = timeLabels;
-            proxyQueriesChart.data.datasets[0].data = history.map(h => h.proxy.reads_total);
-            proxyQueriesChart.data.datasets[1].data = history.map(h => h.proxy.writes_total);
+            proxyQueriesChart.data.datasets[0].data = history.map(h => (h.activity || {}).reads_total || 0);
+            proxyQueriesChart.data.datasets[1].data = history.map(h => (h.activity || {}).writes_total || 0);
             proxyQueriesChart.update('none');
         }
 

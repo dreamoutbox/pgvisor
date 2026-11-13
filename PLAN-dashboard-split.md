@@ -117,30 +117,30 @@ flowchart LR
   - [x] Tests: fan-out with mock peers (axum test servers) covering a healthy peer, an unreachable peer, and the no-leader case.
 - Done when: nextest passes, and in compose the route returns the same leader from all three nodes, then the new leader after `./test.sh` failover.
 
-### Phase 5: Port read-only API handlers to the sidecar [STATUS: TODO]
+### Phase 5: Port read-only API handlers to the sidecar [STATUS: DONE]
 - Goal: Every read endpoint the dashboard uses is served by the sidecar, to superusers only.
 - Tasks:
-  - [ ] Port these handlers, each in its own `api/*.rs` file:
+  - [x] Port these handlers, each in its own `api/*.rs` file:
     - `/api/status`, `/api/nodes`
     - `/api/nodes/:id/logs`, `/api/nodes/:id/config/:type` (local, or forwarded to the peer's `/control`)
     - `/api/audit-logs`
-  - [ ] Add a Postgres activity sampler, `api/pg_activity.rs`:
+  - [x] Add a Postgres activity sampler, `api/pg_activity.rs`:
     - Each sidecar reads `pg_stat_database` from its local Postgres, summed over all databases: `xact_commit`, `xact_rollback`, `tup_returned`, `tup_fetched`, `tup_inserted`, `tup_updated`, `tup_deleted`.
     - Expose the values through `/control/status` as an optional `activity` field in `StatusResponse`, so peers can collect them.
     - Read counters are `tup_returned + tup_fetched`; write counters are `tup_inserted + tup_updated + tup_deleted`. Feed them into `NodeMetrics.pg_reads/pg_writes`. This fixes the per-node counters that are always 0 today.
-  - [ ] Port `/api/metrics/snapshot` and `/api/metrics/history` to the sidecar:
+  - [x] Port `/api/metrics/snapshot` and `/api/metrics/history` to the sidecar:
     - Node telemetry and activity come from peer `/control/status`.
     - Keep the 60-sample, 5s-interval history ring.
     - Replace `ProxyMetrics { reads_total, writes_total }` in `pgvisor-core/src/metrics.rs` with a cluster total: the sum of per-node activity. Rename it, e.g. `ClusterActivity`.
     - Update the dashboard metrics template labels to match.
-  - [ ] Port the SQL explorer reads: `/api/databases`, `/api/tables`, `/api/tables/:t/schema`, `/api/tables/:t/data`. They run **as the logged-in Postgres user** through `pg_client`, so normal Postgres privileges apply.
-  - [ ] Port `/api/sql`:
+  - [x] Port the SQL explorer reads: `/api/databases`, `/api/tables`, `/api/tables/:t/schema`, `/api/tables/:t/data`. They run **as the logged-in Postgres user** through `pg_client`, so normal Postgres privileges apply.
+  - [x] Port `/api/sql`:
     - Apply the `SqlSecurityGuard` rules.
     - Read-only statements run on any node.
     - Writes need the leader, so a standby returns `NotLeader`.
-  - [ ] Port the user reads: `/api/users`, `/api/users/:role`, privileges.
-  - [ ] Port the matching unit tests from `pgvisor-dashboard/src/lib.rs` and `handlers/*`.
-  - [ ] Unit-test the activity sampler: map `pg_stat_database` rows to read/write counts, sum across nodes, and handle a counter reset.
+  - [x] Port the user reads: `/api/users`, `/api/users/:role`, privileges.
+  - [x] Port the matching unit tests from `pgvisor-dashboard/src/lib.rs` and `handlers/*`.
+  - [x] Unit-test the activity sampler: map `pg_stat_database` rows to read/write counts, sum across nodes, and handle a counter reset.
 - Done when: nextest passes, and each read route returns the same data as the proxy dashboard endpoint in compose. The proxy dashboard keeps working unchanged.
 
 ### Phase 6: Port cluster, node and user management actions [STATUS: TODO]

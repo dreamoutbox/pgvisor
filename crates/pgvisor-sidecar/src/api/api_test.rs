@@ -5,19 +5,26 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::response::IntoResponse;
 use pgvisor_core::api::{
-    ClusterMembersResponse, LoginResponse, MeResponse, MemberHealth, SidecarRole,
+    AuditListResponse, ClusterMembersResponse, ClusterMetricsSnapshot, ClusterOverview, ColumnInfo,
+    LoginResponse, MeResponse, MemberHealth, NodeConfigResponse, NodeLogsResponse, NodeMetricRole,
+    NodeMetrics, NodeSummary, PgNodeActivity, PgRole, SidecarRole, SqlQueryError, SqlQueryRequest,
+    SqlQueryResult, TableDataResponse, TablePrivilege, TableSummary,
 };
-use pgvisor_core::audit::AuditLog;
-use tokio::sync::RwLock;
+use pgvisor_core::audit::{AuditEventKind, AuditLog};
+use pgvisor_core::sql_guard::SqlSecurityGuard;
+use tokio::sync::{Mutex, RwLock};
 use tower::ServiceExt;
 
 use super::api_state::ApiState;
 use super::error::ApiError;
 use super::members::{build_api_url_from_peer, parse_node_id_from_peer, require_leader};
+use super::metrics::build_metrics_snapshot;
 use super::password_verifier::{verify_scram_sha256, PasswordCheckOutcome, PasswordChecker};
+use super::pg_activity::{sum_cluster_activity, sum_pg_stat_database_rows, ActivityTracker};
 use super::router::build_api_router;
 use super::server::resolve_sidecar_ports;
 use super::session_token::SessionTokenSigner;
+use super::sql_runner::ApiSqlRunner;
 use super::superusers::SuperuserAllowlist;
 use crate::config::PostgresConfig;
 use crate::control::{build_control_router, SidecarState};
@@ -524,4 +531,729 @@ async fn test_require_leader_and_409_response() {
     assert!(require_leader(&api_state).await.is_ok());
 
     peer2_task.abort();
+}
+
+type RecordedQueryCall = (String, Option<String>, String);
+
+#[derive(Default)]
+struct RecordingSqlRunner {
+    calls: Arc<Mutex<Vec<RecordedQueryCall>>>,
+}
+
+#[async_trait::async_trait]
+impl ApiSqlRunner for RecordingSqlRunner {
+    async fn execute_as_user(
+        &self,
+        username: &str,
+        database: Option<&str>,
+        sql: &str,
+        max_rows: usize,
+    ) -> Result<SqlQueryResult, ApiError> {
+        self.calls.lock().await.push((
+            username.to_string(),
+            database.map(ToString::to_string),
+            sql.to_string(),
+        ));
+        let upper = sql.to_ascii_uppercase();
+        let (columns, rows) = if upper.contains("PG_DATABASE") {
+            (
+                vec!["datname".into()],
+                vec![vec!["postgres".into()], vec!["app_db".into()]],
+            )
+        } else if upper.contains("INFORMATION_SCHEMA.TABLES") && upper.contains("HAS_TABLE_PRIVILEGE")
+        {
+            (
+                vec![
+                    "table_name".into(),
+                    "can_select".into(),
+                    "can_insert".into(),
+                    "can_update".into(),
+                    "can_delete".into(),
+                    "can_truncate".into(),
+                    "can_references".into(),
+                    "can_trigger".into(),
+                ],
+                vec![vec![
+                    "pgvisor_demo".into(),
+                    "t".into(),
+                    "t".into(),
+                    "f".into(),
+                    "f".into(),
+                    "f".into(),
+                    "f".into(),
+                    "f".into(),
+                ]],
+            )
+        } else if upper.contains("INFORMATION_SCHEMA.TABLES") {
+            (
+                vec!["table_name".into()],
+                vec![vec!["pgvisor_demo".into()]],
+            )
+        } else if upper.contains("KEY_COLUMN_USAGE") {
+            (vec!["column_name".into()], vec![vec!["id".into()]])
+        } else if upper.contains("INFORMATION_SCHEMA.COLUMNS") {
+            (
+                vec![
+                    "column_name".into(),
+                    "data_type".into(),
+                    "is_nullable".into(),
+                    "column_default".into(),
+                ],
+                vec![
+                    vec!["id".into(), "integer".into(), "NO".into(), "NULL".into()],
+                    vec!["name".into(), "text".into(), "YES".into(), "NULL".into()],
+                ],
+            )
+        } else if upper.contains("COUNT(*)") {
+            (vec!["count".into()], vec![vec!["2".into()]])
+        } else if upper.contains("FROM PG_ROLES") {
+            (
+                vec![
+                    "rolname".into(),
+                    "rolcanlogin".into(),
+                    "rolcreatedb".into(),
+                    "rolcreaterole".into(),
+                    "rolreplication".into(),
+                    "rolsuper".into(),
+                    "rolconnlimit".into(),
+                    "member_of".into(),
+                ],
+                vec![vec![
+                    "app_user".into(),
+                    "t".into(),
+                    "f".into(),
+                    "f".into(),
+                    "f".into(),
+                    "f".into(),
+                    "25".into(),
+                    "readers".into(),
+                ]],
+            )
+        } else if upper.starts_with("SELECT * FROM") {
+            (
+                vec!["id".into(), "name".into()],
+                vec![
+                    vec!["1".into(), "alpha".into()],
+                    vec!["2".into(), "beta".into()],
+                ],
+            )
+        } else {
+            (
+                vec!["ok".into()],
+                vec![vec![format!("executed:{username}")]],
+            )
+        };
+        let row_count = rows.len().min(max_rows);
+        Ok(SqlQueryResult {
+            columns,
+            rows: rows.into_iter().take(row_count).collect(),
+            execution_time_ms: 1,
+            row_count,
+            truncated: false,
+        })
+    }
+}
+
+#[test]
+fn test_activity_sampler_and_counter_reset() {
+    let cols: Vec<String> = vec![
+        "xact_commit",
+        "xact_rollback",
+        "tup_returned",
+        "tup_fetched",
+        "tup_inserted",
+        "tup_updated",
+        "tup_deleted",
+    ]
+    .into_iter()
+    .map(ToString::to_string)
+    .collect();
+
+    let rows = vec![
+        vec!["10", "1", "100", "25", "5", "2", "1"]
+            .into_iter()
+            .map(ToString::to_string)
+            .collect(),
+        vec!["20", "2", "300", "75", "10", "3", "0"]
+            .into_iter()
+            .map(ToString::to_string)
+            .collect(),
+    ];
+
+    let parsed = sum_pg_stat_database_rows(&cols, &rows).unwrap();
+    assert_eq!(parsed.xact_commit, 30);
+    assert_eq!(parsed.xact_rollback, 3);
+    assert_eq!(parsed.reads(), 500);
+    assert_eq!(parsed.writes(), 21);
+
+    let mut tracker = ActivityTracker::default();
+    assert_eq!(tracker.observe(1, Some(parsed)), (500, 21));
+
+    // Counter temporarily unavailable preserves last cumulative counts.
+    assert_eq!(tracker.observe(1, None), (500, 21));
+
+    // Counter reset (e.g. pg_stat_reset() / restart) preserves prior total + adds post-reset reads/writes.
+    let post_reset = PgNodeActivity {
+        tup_returned: 30,
+        tup_fetched: 10,
+        tup_inserted: 4,
+        ..Default::default()
+    };
+    assert_eq!(tracker.observe(1, Some(post_reset)), (540, 25));
+
+    let node2_act = PgNodeActivity {
+        tup_returned: 200,
+        tup_fetched: 60,
+        tup_inserted: 1,
+        ..Default::default()
+    };
+    assert_eq!(tracker.observe(2, Some(node2_act)), (260, 1));
+
+    let cluster = sum_cluster_activity(&[
+        NodeMetrics {
+            node_id: 1,
+            address: "n1:5432".into(),
+            role: NodeMetricRole::Leader,
+            uptime_secs: 10,
+            replication_lag_bytes: 0,
+            cpu_percent: 1.0,
+            memory_used_bytes: 0,
+            memory_total_bytes: 0,
+            disk_used_bytes: 0,
+            pg_reads: 540,
+            pg_writes: 25,
+        },
+        NodeMetrics {
+            node_id: 2,
+            address: "n2:5432".into(),
+            role: NodeMetricRole::Standby,
+            uptime_secs: 10,
+            replication_lag_bytes: 0,
+            cpu_percent: 1.0,
+            memory_used_bytes: 0,
+            memory_total_bytes: 0,
+            disk_used_bytes: 0,
+            pg_reads: 260,
+            pg_writes: 1,
+        },
+    ]);
+    assert_eq!(cluster.reads_total, 800);
+    assert_eq!(cluster.writes_total, 26);
+}
+
+#[tokio::test]
+async fn test_metrics_snapshot_and_60_sample_ring() {
+    let secret = "cluster-secret";
+    let (peer2_url, _peer2_role, peer2_task) =
+        spawn_mock_control_peer(2, "standby", 18082, Some(secret)).await;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let supervisor = Arc::new(PostgresSupervisor::new(temp_dir.path()));
+    let sidecar = SidecarState::new(
+        supervisor,
+        Arc::new(RwLock::new(PostgresConfig::default())),
+        None,
+        1,
+        Arc::new(RwLock::new("leader".to_string())),
+        "18.6".to_string(),
+        Arc::new(vec![peer2_url]),
+        Some(secret.to_string()),
+    );
+    let api_state = ApiState::new(
+        sidecar,
+        "127.0.0.1:5432",
+        "postgres",
+        Arc::new(SuperuserAllowlist::parse(Some("postgres"), "postgres")),
+        Arc::new(SessionTokenSigner::from_cluster_secret(Some(secret))),
+        Arc::new(AuditLog::new("test-cluster", None, 100)),
+    );
+
+    // Pre-seed node activity via MetricsRing and verify 60-sample capacity cap.
+    api_state
+        .metrics_ring
+        .observe_node(
+            1,
+            Some(PgNodeActivity {
+                tup_returned: 70,
+                tup_fetched: 30,
+                tup_inserted: 5,
+                ..Default::default()
+            }),
+        )
+        .await;
+
+    for i in 0..65u64 {
+        let snap = ClusterMetricsSnapshot {
+            timestamp_ms: 1_000 + i * 5_000,
+            nodes: Vec::new(),
+            activity: Default::default(),
+            backups: Default::default(),
+        };
+        api_state.metrics_ring.push(snap).await;
+    }
+
+    let app = build_api_router(api_state.clone());
+    let (token, _) = api_state.token_signer.sign("postgres").unwrap();
+
+    let snap_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/metrics/snapshot")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(snap_resp.status(), StatusCode::OK);
+    let snap_bytes = axum::body::to_bytes(snap_resp.into_body(), 128 * 1024)
+        .await
+        .unwrap();
+    let snap: ClusterMetricsSnapshot = serde_json::from_slice(&snap_bytes).unwrap();
+    assert_eq!(snap.nodes.len(), 2);
+    let n1 = snap.nodes.iter().find(|n| n.node_id == 1).unwrap();
+    assert_eq!(n1.pg_reads, 100);
+    assert_eq!(n1.pg_writes, 5);
+    assert_eq!(snap.activity.reads_total, 100);
+    assert_eq!(snap.activity.writes_total, 5);
+
+    let hist_resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/metrics/history")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(hist_resp.status(), StatusCode::OK);
+    let hist_bytes = axum::body::to_bytes(hist_resp.into_body(), 512 * 1024)
+        .await
+        .unwrap();
+    let hist: Vec<ClusterMetricsSnapshot> = serde_json::from_slice(&hist_bytes).unwrap();
+    assert_eq!(hist.len(), 60);
+    assert_eq!(hist.first().unwrap().timestamp_ms, 1_000 + 5 * 5_000);
+
+    // Direct build_metrics_snapshot works cleanly too
+    let direct = build_metrics_snapshot(&api_state).await;
+    assert_eq!(direct.nodes.len(), 2);
+
+    peer2_task.abort();
+}
+
+#[tokio::test]
+async fn test_cluster_status_nodes_logs_config_and_audit_logs() {
+    let secret = "cluster-secret";
+    let (peer2_url, _peer2_role, peer2_task) =
+        spawn_mock_control_peer(2, "standby", 18082, Some(secret)).await;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let supervisor = Arc::new(PostgresSupervisor::new(temp_dir.path()));
+    let sidecar = SidecarState::new(
+        supervisor,
+        Arc::new(RwLock::new(PostgresConfig::default())),
+        None,
+        1,
+        Arc::new(RwLock::new("leader".to_string())),
+        "18.6".to_string(),
+        Arc::new(vec![peer2_url]),
+        Some(secret.to_string()),
+    );
+    let audit_log = Arc::new(AuditLog::new("test-cluster", None, 100));
+    audit_log
+        .append(
+            AuditEventKind::NodeUp,
+            Some(1),
+            Some("127.0.0.1:5432"),
+            "Node 1 came online",
+            None,
+        )
+        .await;
+
+    let api_state = ApiState::new(
+        sidecar,
+        "127.0.0.1:5432",
+        "postgres",
+        Arc::new(SuperuserAllowlist::parse(Some("postgres"), "postgres")),
+        Arc::new(SessionTokenSigner::from_cluster_secret(Some(secret))),
+        audit_log,
+    )
+    .with_cluster_id("prod-pg");
+    let app = build_api_router(api_state.clone());
+    let (token, _) = api_state.token_signer.sign("postgres").unwrap();
+
+    // /api/status
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/status")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let overview: ClusterOverview =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 128 * 1024).await.unwrap())
+            .unwrap();
+    assert_eq!(overview.cluster_id, "prod-pg");
+    assert_eq!(overview.total_nodes, 2);
+
+    // /api/nodes
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/nodes")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let nodes: Vec<NodeSummary> =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 128 * 1024).await.unwrap())
+            .unwrap();
+    assert_eq!(nodes.len(), 2);
+
+    // /api/nodes/1/logs (local) and /api/nodes/2/logs (forwarded to peer control API)
+    for node_id in [1u64, 2u64] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/nodes/{node_id}/logs?limit=25"))
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let logs: NodeLogsResponse = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), 128 * 1024).await.unwrap(),
+        )
+        .unwrap();
+        assert_eq!(logs.node_id, node_id);
+    }
+
+    // /api/nodes/2/config/postgresql.conf (forwarded to peer)
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/nodes/2/config/postgresql.conf")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let cfg: NodeConfigResponse =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 128 * 1024).await.unwrap())
+            .unwrap();
+    assert_eq!(cfg.node_id, 2);
+
+    // /api/audit-logs
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/audit-logs?kind=node_up")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let audits: AuditListResponse =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 128 * 1024).await.unwrap())
+            .unwrap();
+    assert_eq!(audits.total, 1);
+    assert_eq!(audits.events[0].detail, "Node 1 came online");
+
+    peer2_task.abort();
+}
+
+#[tokio::test]
+async fn test_sql_explorer_and_security_and_standby_write() {
+    let secret = "cluster-secret";
+    let (peer2_url, _peer2_role, peer2_task) =
+        spawn_mock_control_peer(2, "leader", 18082, Some(secret)).await;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let supervisor = Arc::new(PostgresSupervisor::new(temp_dir.path()));
+    let local_role = Arc::new(RwLock::new("standby".to_string()));
+    let sidecar = SidecarState::new(
+        supervisor,
+        Arc::new(RwLock::new(PostgresConfig::default())),
+        None,
+        1,
+        local_role.clone(),
+        "18.6".to_string(),
+        Arc::new(vec![peer2_url]),
+        Some(secret.to_string()),
+    )
+    .with_api_port(18081);
+
+    let runner = Arc::new(RecordingSqlRunner::default());
+    let api_state = ApiState::new(
+        sidecar,
+        "127.0.0.1:5432",
+        "postgres",
+        Arc::new(SuperuserAllowlist::parse(Some("postgres,bob"), "postgres")),
+        Arc::new(SessionTokenSigner::from_cluster_secret(Some(secret))),
+        Arc::new(AuditLog::new("test-cluster", None, 100)),
+    )
+    .with_sql_runner(runner.clone());
+
+    let app = build_api_router(api_state.clone());
+    // Authenticate as "bob" so we verify queries run as the logged-in Postgres user.
+    let (bob_token, _) = api_state.token_signer.sign("bob").unwrap();
+
+    // 1. /api/databases
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/databases")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let dbs: Vec<String> =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap())
+            .unwrap();
+    assert_eq!(dbs, vec!["postgres", "app_db"]);
+
+    // 2. /api/tables?db=app_db
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/tables?db=app_db")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let tables: Vec<TableSummary> =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap())
+            .unwrap();
+    assert_eq!(tables[0].name, "pgvisor_demo");
+
+    // 3. /api/tables/pgvisor_demo/schema & data
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/tables/pgvisor_demo/schema?db=app_db")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let cols: Vec<ColumnInfo> =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap())
+            .unwrap();
+    assert!(cols[0].is_primary_key);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/tables/pgvisor_demo/data?db=app_db")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let data: TableDataResponse =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap())
+            .unwrap();
+    assert_eq!(data.total_rows, 2);
+
+    // 4. Read-only /api/sql succeeds on Standby
+    let read_req = serde_json::to_vec(&SqlQueryRequest {
+        query: "SELECT * FROM pgvisor_demo".into(),
+        max_rows: None,
+        database: Some("app_db".into()),
+    })
+    .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sql")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(read_req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 5. Write /api/sql on Standby returns 409 NotLeader with leader_url
+    let write_req = serde_json::to_vec(&SqlQueryRequest {
+        query: "INSERT INTO pgvisor_demo(name) VALUES ('gamma')".into(),
+        max_rows: None,
+        database: Some("app_db".into()),
+    })
+    .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sql")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(write_req.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let err_json: serde_json::Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap())
+            .unwrap();
+    assert_eq!(err_json["leader_url"], "http://127.0.0.1:18082");
+
+    // 6. Write /api/sql on Leader succeeds and executes as "bob"
+    *local_role.write().await = "leader".to_string();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sql")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(write_req.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let recorded = runner.calls.lock().await;
+    assert!(!recorded.is_empty());
+    assert!(recorded.iter().all(|(u, _, _)| u == "bob"));
+
+    // 7. Read-only SqlSecurityGuard forbids mutations with 403 MUTATION_FORBIDDEN
+    let ro_state = api_state.with_security_guard(Arc::new(SqlSecurityGuard::new_read_only(
+        std::time::Duration::from_secs(5),
+        100,
+    )));
+    let ro_app = build_api_router(ro_state);
+    let resp = ro_app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sql")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(write_req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let sql_err: SqlQueryError =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap())
+            .unwrap();
+    assert_eq!(sql_err.code, "MUTATION_FORBIDDEN");
+
+    peer2_task.abort();
+}
+
+#[tokio::test]
+async fn test_user_reads_api() {
+    let runner = Arc::new(RecordingSqlRunner::default());
+    let api_state = make_test_api_state(Some("postgres"), Some("cluster-secret"))
+        .with_sql_runner(runner);
+    let app = build_api_router(api_state.clone());
+    let (token, _) = api_state.token_signer.sign("postgres").unwrap();
+
+    // GET /api/users
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/users")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let roles: Vec<PgRole> =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap())
+            .unwrap();
+    assert_eq!(roles.len(), 1);
+    assert_eq!(roles[0].rolname, "app_user");
+    assert_eq!(roles[0].member_of, vec!["readers"]);
+
+    // GET /api/users/app_user
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/users/app_user")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // GET /api/users/nonexistent -> 404
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/users/nonexistent")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // GET /api/users/app_user/privileges
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/users/app_user/privileges")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let privs: Vec<TablePrivilege> =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap())
+            .unwrap();
+    assert_eq!(privs.len(), 1);
+    assert!(privs[0].select && privs[0].insert && !privs[0].delete);
 }

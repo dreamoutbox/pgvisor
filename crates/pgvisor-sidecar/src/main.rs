@@ -285,7 +285,8 @@ async fn main() -> Result<()> {
         peers.clone(),
         cluster_secret.clone(),
     )
-    .with_api_port(api_port);
+    .with_api_port(api_port)
+    .with_pg_endpoint(port, &superuser);
 
     // Log initial startup event
     if role == "leader" {
@@ -312,14 +313,27 @@ async fn main() -> Result<()> {
     let token_signer = Arc::new(SessionTokenSigner::from_cluster_secret(
         cluster_secret.as_deref(),
     ));
-    let api_state = ApiState::new(
+    let mut api_state = ApiState::new(
         control_state.clone(),
         pg_addr,
         superuser,
         superusers,
         token_signer,
         audit_log,
-    );
+    )
+    .with_cluster_id(&cluster_id);
+    if env::var("PGVISOR_DASHBOARD_ALLOW_MUTATIONS")
+        .map(|v| v.eq_ignore_ascii_case("false") || v == "0")
+        .unwrap_or(false)
+    {
+        api_state = api_state.with_security_guard(Arc::new(
+            pgvisor_core::sql_guard::SqlSecurityGuard::new_read_only(
+                std::time::Duration::from_secs(10),
+                500,
+            ),
+        ));
+    }
+    api::spawn_metrics_sampler(api_state.clone());
     let api_addr = SocketAddr::from(([0, 0, 0, 0], api_port));
     let api_app = build_api_router(api_state);
     spawn_api_server(api_addr, api_app);
