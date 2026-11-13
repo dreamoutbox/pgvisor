@@ -1,7 +1,12 @@
+pub mod client;
 pub mod handlers;
 pub mod metrics;
 pub mod security;
 pub mod templates;
+
+pub use client::{
+    create_client_router, resolve_listen_addr, ClientDashboardState, SidecarClient,
+};
 
 use axum::extract::{Request, State};
 use axum::http::StatusCode;

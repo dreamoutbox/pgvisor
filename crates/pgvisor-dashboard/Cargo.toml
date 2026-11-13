@@ -26,4 +26,5 @@ axum = { workspace = true, features = ["multipart"] }
 askama = { workspace = true }
 tower = { workspace = true }
 async-trait = { workspace = true }
+reqwest = { workspace = true }
 tempfile = "3.12"

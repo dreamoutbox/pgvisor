@@ -165,17 +165,17 @@ flowchart LR
   - [x] Tests: restore orchestration against mock peers, and epoch-triggered drain in the proxy monitor.
 - Done when: nextest passes, and `./test.sh` backup-restore/pitr scenarios pass when driven through the sidecar API.
 
-### Phase 8: Standalone dashboard client (side by side with the old one) [STATUS: TODO]
+### Phase 8: Standalone dashboard client (side by side with the old one) [STATUS: DONE]
 - Goal: The dashboard can run as a UI-only service against the sidecar API. The proxy-embedded version still works.
 - Tasks:
-  - [ ] Add `pgvisor-dashboard/src/client/`:
+  - [x] Add `pgvisor-dashboard/src/client/`:
     - `sidecar_client.rs` (reqwest): takes a list of `PGVISOR_SIDECAR_URLS`, which are the sidecar **API** URLs (port `8081`, never the control port). It discovers the leader with `/api/cluster/members`, caches it, and on a connection error or `409 NotLeader` re-discovers and moves to the next URL.
-  - [ ] Add a new router, `create_client_router`:
+  - [x] Add a new router, `create_client_router`:
     - Pages render server-side from sidecar API calls made with the user's token (cookie).
     - `/api/*` is reverse-proxied: reads go to any healthy sidecar, mutations to the leader. The existing template JS keeps calling relative `/api/...`, so there is no CORS.
-  - [ ] Change the login page to username + password. It posts to the sidecar `/api/auth/login` and stores the token in an HttpOnly cookie. On `403`, show "user is not a PgVisor superuser". Every page redirects to login when the sidecar returns `401` or `403`.
-  - [ ] Add env `PGVISOR_DASHBOARD_LISTEN` (default `0.0.0.0:8080`).
-  - [ ] Tests: `sidecar_client` failover and leader re-discovery against mock axum servers, and login/cookie flow.
+  - [x] Change the login page to username + password. It posts to the sidecar `/api/auth/login` and stores the token in an HttpOnly cookie. On `403`, show "user is not a PgVisor superuser". Every page redirects to login when the sidecar returns `401` or `403`.
+  - [x] Add env `PGVISOR_DASHBOARD_LISTEN` (default `0.0.0.0:8080`).
+  - [x] Tests: `sidecar_client` failover and leader re-discovery against mock axum servers, and login/cookie flow.
 - Done when: nextest passes, and the `pgvisor-dashboard` binary pointed at the compose sidecars can log in, show nodes, run SQL and trigger a switchover.
 
 ### Phase 9: Cutover: the proxy only handles SQL [STATUS: TODO]

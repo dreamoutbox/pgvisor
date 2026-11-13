@@ -177,11 +177,16 @@
 
         <form method="POST" action="/login">
             <div class="field-group">
-                <label for="token">Admin Authentication Token</label>
-                <input type="password" id="token" name="token" placeholder="Enter admin token..." required autofocus
+                <label for="username">PostgreSQL Username</label>
+                <input type="text" id="username" name="username" placeholder="postgres" required autofocus
+                    autocomplete="username">
+            </div>
+            <div class="field-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" placeholder="Enter PostgreSQL password..." required
                     autocomplete="current-password">
             </div>
-            <button type="submit">Authenticate</button>
+            <button type="submit">Sign In</button>
         </form>
 
         <div class="footer">
