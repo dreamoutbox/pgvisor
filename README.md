@@ -15,7 +15,7 @@
 - **🛡️ Raft High Availability** — Peer-to-peer OpenRaft consensus with Quorum Lease fencing (`pg_ctl stop -m immediate` in 1,200ms) to strictly eliminate split-brain writes without Etcd or Consul.
 - **🗄️ Sidecar Supervisor** — Container process reaper and supervisor handling automated PostgreSQL config generation, replica bootstrapping, and dynamic cluster scaling.
 - **☁️ Continuous Backup & PITR** — Streaming WAL archiving and automated basebackups via OpenDAL (MinIO, S3, R2, GCS) with second-precision Point-In-Time-Recovery.
-- **🖥️ Web Management Dashboard** — Embedded UI and REST API for real-time cluster topology, live metrics, manual switchover, guarded read-only SQL console, and audit logging.
+- **Web Management Dashboard (`pgvisor-dashboard`)** — Standalone web UI communicating directly with sidecar `/api/*` endpoints (`8081`) for real-time cluster topology, live metrics, manual switchover, guarded SQL console, user management, and audit logging.
 
 ---
 
@@ -23,13 +23,15 @@
 
 ```mermaid
 flowchart TD
-    Clients["PostgreSQL Clients"] -->|":5432 Wire Protocol"| Proxy["pgvisor-proxy"]
-    User["Web Browser"] -->|":8080 HTTP"| Proxy
+    Clients["PostgreSQL Clients"] -->|":5432 Wire Protocol"| Proxy["pgvisor-proxy (SQL-Only)"]
+    User["Web Browser"] -->|":8080 HTTP"| Dashboard["pgvisor-dashboard (Standalone)"]
 
     subgraph Cluster ["3-Node PostgreSQL Cluster"]
-        Proxy -->|"Writes & Transactions"| Node1["Node 1 (Raft Leader)"]
+        Proxy -->|"Writes & Transactions"| Node1["Node 1 (Leader)"]
         Proxy -->|"Read Queries"| Node2["Node 2 (Standby Replica)"]
         Proxy -->|"Read Queries"| Node3["Node 3 (Standby Replica)"]
+        Dashboard -->|":8081 /api/*"| Node1
+        Dashboard -.->|":8081 /api/* Failover"| Node2
         Node1 -.->|"Streaming Replication"| Node2
         Node1 -.->|"Streaming Replication"| Node3
     end
@@ -45,7 +47,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for full architecture specifications and 
 
 ## Getting Started
 
-PgVisor provides a PostgreSQL 18 High-Availability (HA) cluster with an L7 connection proxy, automatic Raft consensus failover, continuous S3/MinIO backup archiving, and an embedded web dashboard.
+PgVisor provides a PostgreSQL 18 High-Availability (HA) cluster with a SQL-only L7 connection proxy, automatic failover, continuous S3/SeaweedFS/MinIO backup archiving, and a standalone web dashboard talking directly to the sidecar API.
 
 ### Prerequisites (For Users)
 
@@ -68,7 +70,7 @@ The bootstrap script will:
 1. Initialize environment configuration from `examples/.env.example` into `examples/.env`.
 2. Launch MinIO/RustFS object storage and auto-create the `pgvisor-backups` bucket.
 3. Start `pgvisor-node1` (Leader), `pgvisor-node2` (Standby Replica), and `pgvisor-node3` (Standby Replica).
-4. Start `pgvisor-proxy` on port `5432` with the web management dashboard on port `8080`.
+4. Start `pgvisor-proxy` (SQL-only) on port `5432` and standalone `pgvisor-dashboard` on port `8080` (connecting to sidecar `/api/*` on port `8081`).
 5. Wait for all cluster health checks to report healthy and output connection details.
 
 ---
@@ -113,17 +115,17 @@ postgresql://postgres:postgres@localhost:5432/postgres
 
 ### Web Management Dashboard
 
-Open the embedded web dashboard in your browser:
+Open the standalone web dashboard in your browser:
 
 ```
 http://localhost:8080
 ```
 
-- **Authentication**: Enter your admin token (default: `postgres`, configured via `PGVISOR_ADMIN_TOKEN` in `examples/.env`).
+- **Authentication**: Sign in with a PostgreSQL username/password that is allowed in `PGVISOR_SUPERUSER` (default user: `postgres`, password from `POSTGRES_PASSWORD`). Non-superusers receive `403 Forbidden`.
 - **Cluster Overview**: Live cluster topology, node roles (Leader vs. Standby), consensus status, and replication lag.
 - **Manual Failover & Switchover**: Safely initiate graceful leader step-down or switchover from the UI.
 - **Backup & Restore**: View basebackup snapshots, trigger on-demand physical backups, and execute Point-In-Time-Recovery (PITR).
-- **SQL Runner & Audit Logs**: Interactive read-guarded SQL console and cluster audit logging (elections, node join/leave, DDL events).
+- **SQL Runner & Audit Logs**: Interactive SQL console, database/table explorer, role management, and cluster audit logging.
 
 ---
 

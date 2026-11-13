@@ -9,7 +9,7 @@ sidebar:
 
 ![PgVisor Cluster Overview](./images/overview-1.png)
 
-In this quick start guide, you will bootstrap a complete local 3-node HA cluster with automatic Raft consensus failover, continuous S3/MinIO backup archiving, and an embedded web dashboard.
+In this quick start guide, you will bootstrap a complete local 3-node HA cluster with automatic Raft consensus failover, continuous S3/MinIO backup archiving, and a standalone web dashboard.
 
 ---
 
@@ -51,7 +51,7 @@ PgVisor includes a bootstrap script that orchestrates the entire cluster setup:
     2. Starts **MinIO** object storage on port `9000` and provisions the `pgvisor-backups` bucket.
     3. Starts **pgvisor-node1** as initial Raft Leader.
     4. Bootstraps **pgvisor-node2** and **pgvisor-node3** as streaming standby replicas.
-    5. Starts **pgvisor-proxy** on port `5432` and the **Web Dashboard** on port `8080`.
+    5. Starts **pgvisor-proxy** on port `5432`, sidecar management APIs (`/api`) on port `8081`, and the standalone **Web Dashboard** (`pgvisor-dashboard`) on port `8080`.
     6. Polls health endpoints until all nodes and services report ready.
   </Step>
 </Steps>
@@ -188,6 +188,6 @@ The `pgvisorctl.sh` script provides lifecycle helpers:
     Learn how OpenRaft consensus, Quorum Lease fencing, and L7 proxying work under the hood.
   </Card>
   <Card title="Web Dashboard" icon="ph:gauge">
-    Explore the embedded monitoring UI, manual switchover controls, and guarded SQL console.
+    Explore the standalone monitoring UI, manual switchover controls, and guarded SQL console.
   </Card>
 </CardGrid>

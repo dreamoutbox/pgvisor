@@ -6,24 +6,24 @@
 
 ```mermaid
 graph TD
-    Client["PostgreSQL Clients (psql / Applications)"] -->|Postgres Wire Protocol 3.0| Proxy["pgvisor-proxy (Port 6432)"]
+    Client["PostgreSQL Clients (psql / Applications)"] -->|Postgres Wire Protocol 3.0 (:5432)| Proxy["pgvisor-proxy (SQL-Only Port 5432)"]
     Proxy -->|Read-Write Queries| LeaderPG["PostgreSQL Leader (Port 5432)"]
-    Proxy -->|Read-Only Queries| StandbyPG1["PostgreSQL Standby 1 (Port 5433)"]
-    Proxy -->|Read-Only Queries| StandbyPG2["PostgreSQL Standby 2 (Port 5434)"]
+    Proxy -->|Read-Only Queries| StandbyPG1["PostgreSQL Standby 1 (Port 5432)"]
+    Proxy -->|Read-Only Queries| StandbyPG2["PostgreSQL Standby 2 (Port 5432)"]
 
     subgraph Node1 ["Node 1 (Leader)"]
-        Sidecar1["pgvisor-sidecar (PID 1)"] -->|Supervises & Fences| LeaderPG
+        Sidecar1["pgvisor-sidecar (PID 1)\n/control :8080 | /api :8081"] -->|Supervises & Fences| LeaderPG
         Sidecar1 --- Raft1["OpenRaft Consensus Node 1"]
         Sidecar1 -->|Archive WAL & Basebackups| MinIO["OpenDAL (MinIO / S3 Storage)"]
     end
 
     subgraph Node2 ["Node 2 (Standby)"]
-        Sidecar2["pgvisor-sidecar (PID 1)"] -->|Supervises & Promotes| StandbyPG1
+        Sidecar2["pgvisor-sidecar (PID 1)\n/control :8080 | /api :8081"] -->|Supervises & Promotes| StandbyPG1
         Sidecar2 --- Raft2["OpenRaft Consensus Node 2"]
     end
 
     subgraph Node3 ["Node 3 (Standby)"]
-        Sidecar3["pgvisor-sidecar (PID 1)"] -->|Supervises| StandbyPG2
+        Sidecar3["pgvisor-sidecar (PID 1)\n/control :8080 | /api :8081"] -->|Supervises| StandbyPG2
         Sidecar3 --- Raft3["OpenRaft Consensus Node 3"]
     end
 
@@ -31,7 +31,10 @@ graph TD
     Raft2 <.->|Consensus RPC| Raft3
     Raft3 <.->|Consensus RPC| Raft1
 
-    Dashboard["pgvisor-dashboard (Port 8080)"] -->|Health Inspection & Guarded SQL| Proxy
+    Browser["Web Browser / Future CLI"] -->|:8080 HTTP| Dashboard["pgvisor-dashboard (Standalone Port 8080)"]
+    Dashboard -->|/api/* :8081 (Reads: any, Writes: Leader)| Sidecar1
+    Dashboard -.->|/api/* Failover| Sidecar2
+    Proxy -.->|/control/status :8080| Sidecar1
 ```
 
 ---
@@ -56,10 +59,10 @@ pgvisor/
 
 | Crate | Responsibility | Primary Modules |
 |---|---|---|
-| **`pgvisor-core`** | Wire protocol framing, custom append-only OpenRaft storage engine, failover orchestration, quorum lease, OpenDAL backup manager | `protocol/`, `storage/`, `raft/`, `backup/` |
-| **`pgvisor-proxy`** | L7 PostgreSQL 3.0 transaction connection pooler, read/write splitting, failover query buffering, and transparent reconnection | `pool.rs`, `session.rs`, `main.rs` |
-| **`pgvisor-sidecar`** | Container PID 1 process supervisor, signal forwarding, automated configuration generation, active fencing (`pg_ctl stop -m immediate`), standby promotion | `supervisor.rs`, `config.rs`, `main.rs` |
-| **`pgvisor-dashboard`** | Embedded/standalone Axum + Askama web UI, node topology inspection, AST-filtered read-only SQL console, statement timeout protection | `models.rs`, `security.rs`, `templates.rs`, `handlers.rs` |
+| **`pgvisor-core`** | Wire protocol framing, custom append-only OpenRaft storage engine, API DTOs, SQL security guard, OpenDAL backup manager, audit log | `protocol/`, `storage/`, `raft/`, `backup/`, `api/` |
+| **`pgvisor-proxy`** | SQL-only L7 PostgreSQL 3.0 transaction connection pooler, read/write splitting, failover query buffering, `restore_epoch` pool drain | `pool.rs`, `session.rs`, `node_target.rs`, `main.rs` |
+| **`pgvisor-sidecar`** | Container PID 1 process supervisor, internal `/control/*` (`8080`), authenticated client `/api/*` (`8081`), `pg_stat_database` metrics sampler, automated backups | `supervisor.rs`, `config.rs`, `control/`, `api/`, `scheduler.rs`, `main.rs` |
+| **`pgvisor-dashboard`** | Standalone Axum + Askama web UI (`8080`) proxying browser `/api/*` requests and rendering SSR pages from `pgvisor-sidecar` endpoints (`PGVISOR_SIDECAR_URLS`) | `client/`, `templates.rs`, `main.rs` |
 
 ---
 
@@ -152,42 +155,45 @@ Powered by OpenDAL (`crates/pgvisor-core/src/backup/manager.rs`):
 
 ---
 
-## 7. Web Dashboard & Guarded SQL Console
+## 7. Standalone Web Dashboard & Sidecar `/api` Contract
 
-The management dashboard (`pgvisor-dashboard`) provides an Axum + Askama web UI and JSON REST API:
+The management dashboard (`pgvisor-dashboard`) runs as a standalone Axum + Askama UI process (port `8080`) that talks directly to `pgvisor-sidecar` API servers (`PGVISOR_SIDECAR_URLS`, port `8081`):
 
-1. **Routes & Templates**:
-   - `GET /`: Cluster health overview, Raft term, quorum size, and node table (`overview.html`).
-   - `GET /nodes`: Detailed node status, replication latency, and process uptime (`nodes.html`).
-   - `GET /sql`: Interactive web SQL console (`sql.html`).
-   - `GET /api/status`: JSON cluster health snapshot.
-   - `POST /api/sql`: Guarded SQL execution endpoint.
-2. **SQL Console Security Engine (`SqlSecurityGuard`)**:
-   - **Comment Stripping**: Removes `--` and `/* ... */` comments prior to inspection to block bypass tricks.
-   - **Multi-Statement Rejection**: Rejects queries with internal semicolons to block stacked statement injection.
-   - **Strict Read-Only Enforcement**: Permits only `SELECT`, `SHOW`, `EXPLAIN`, and `WITH ... SELECT`. Strictly blocks mutating statements (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `CREATE`, `TRUNCATE`, `GRANT`, `REVOKE`, `VACUUM`, `CALL`, `DO`, `COPY`, `SELECT INTO`).
-   - **Statement Timeout**: Enforces `tokio::time::timeout` (default 5s) returning `STATEMENT_TIMEOUT` on overrun.
-   - **Row Limit**: Hard cap at 500 rows per query.
-3. **Admin Token Authentication**:
-   - Validates `Authorization: Bearer <token>` against configured `PGVISOR_ADMIN_TOKEN`.
+1. **Routes & Templates (`pgvisor-dashboard`)**:
+   - `GET /`: Cluster health overview, topology, and live telemetry charts (`overview.html`).
+   - `GET /nodes`, `GET /nodes/:node_id/inspect`: Node status, replication latency, process uptime, live logs, and PostgreSQL config inspection (`nodes.html`, `node_inspect.html`).
+   - `GET /sql`, `GET /tables`: Interactive web SQL console and database/table explorer (`sql.html`, `tables.html`).
+   - `GET /backups`, `GET /users`, `GET /audit-logs`, `GET /login`: Backups/PITR, role/privilege management, audit log viewer, and login page.
+   - `/api/*`: Reverse-proxied to `pgvisor-sidecar` via `SidecarClient`.
+2. **Sidecar Port Separation (`pgvisor-sidecar`)**:
+   - **Control Port (`PGVISOR_CONTROL_PORT`, default `8080`)**: Internal `/control/*` endpoints for proxy/peer coordination, authenticated optionally with `PGVISOR_CLUSTER_SECRET`. `/api/*` returns `404` on this port.
+   - **Client API Port (`PGVISOR_API_PORT`, default `8081`)**: External `/api/*` endpoints for `pgvisor-dashboard` and CLI clients. `/control/*` returns `404` on this port.
+3. **PostgreSQL Superuser Auth & `/api` Contract (Dashboard & Future CLI)**:
+   - **Connection String**: Clients accept a comma-separated list of sidecar API URLs (`PGVISOR_SIDECAR_URLS`, e.g., `http://pgvisor-node1:8081,http://pgvisor-node2:8081,http://pgvisor-node3:8081`).
+   - **Login (`POST /api/auth/login`)**: Accepts JSON `{"username": "...", "password": "..."}`. First checks `PGVISOR_SUPERUSER` allowlist (`403 Forbidden` with `"status": "forbidden"` if not listed), then verifies the SCRAM-SHA-256 / MD5 password verifier against local `pg_authid` (`401 Unauthorized` on mismatch). Returns a signed HMAC session token (`token`, `username`, `expires_at`) and sets the `HttpOnly` `pgvisor_token` cookie.
+   - **Session Check (`GET /api/auth/me`)**: Validates `Authorization: Bearer <token>` or cookie and verifies `PGVISOR_SUPERUSER` membership on every request. Sign all nodes consistently with `PGVISOR_API_SESSION_SECRET` (or `PGVISOR_CLUSTER_SECRET`).
+   - **Leader Discovery (`GET /api/cluster/members`)**: Returns `{"leader_url": "...", "members": [{"node_id", "api_url", "role", "health", "is_self"}]}` so clients can cache which sidecar is leader and fail over if a node is unreachable.
+   - **Read vs. Write Routing & `NotLeader` Retry Rule**:
+     - Read endpoints (`GET`/`HEAD` and read-only `POST /api/sql` unless `PGVISOR_DASHBOARD_ALLOW_MUTATIONS=false`) can hit any healthy sidecar.
+     - Cluster-mutating actions (`POST /api/cluster/switchover`, `POST /api/nodes/:id/*`, `/api/backups/*` writes, `/api/users/*` writes, `/api/tables/:table/rows`) require the active leader. Calling a standby returns `409 Conflict` with `{"status": "not_leader", "leader_url": "..."}` so the client updates its cached leader URL and retries immediately.
+   - **SQL Security Engine (`SqlSecurityGuard` in `pgvisor-core`)**: Strips `--` and `/* ... */` comments, rejects multi-statement semicolons, enforces read-only queries when `PGVISOR_DASHBOARD_ALLOW_MUTATIONS=false`, and applies statement timeout and 500-row cap.
 
 ---
 
 ## 8. Development & Verification Commands
 
-- **Start Local MinIO Dev Server**:
+- **Start Local MinIO/Compose Dev Cluster**:
   ```bash
   ./reset-docker-compose.sh
   ```
-- **Check Workspace Compilation**:
+- **Check Workspace & Run Unit Tests**:
   ```bash
   cargo check --workspace
+  cargo nextest run --test-threads 1 --fail-fast
   ```
-- **Run Standalone Dashboard**:
+- **Run Binaries Locally**:
   ```bash
-  cargo run -p pgvisor-dashboard
-  ```
-- **Run Proxy**:
-  ```bash
+  cargo run -p pgvisor-sidecar
   cargo run -p pgvisor-proxy
+  PGVISOR_SIDECAR_URLS=http://127.0.0.1:8081 cargo run -p pgvisor-dashboard
   ```

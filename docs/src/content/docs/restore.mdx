@@ -90,7 +90,7 @@ Each standby sidecar:
 
 Once the leader and standby replicas finish recovery, **`pgvisor-proxy` automatically flushes its connection pool** via internal `pool.drain_all()` execution:
 
-- **No Manual Action Required**: There is no need to manually call any API endpoint. The proxy backup orchestrator triggers `pool.drain_all().await` immediately following standby re-synchronization.
+- **No Manual Action Required**: There is no need to manually call any API endpoint. Each `pgvisor-sidecar` increments its `restore_epoch` after standby re-synchronization, and `pgvisor-proxy` detects the epoch change during health probing and triggers `pool.drain_all().await`.
 - **Why Draining is Necessary**: Restoring rewinds the LSN and increments the PostgreSQL timeline ID. Draining closes stale idle backend connections so connections are not mixed across timelines.
 - **Transparent Client Reconnection**: On their subsequent transaction or query, client applications automatically acquire fresh connections to the restored leader and replicas on the new timeline without client-side connection resets.
 

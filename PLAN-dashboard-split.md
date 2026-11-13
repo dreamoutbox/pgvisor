@@ -206,12 +206,12 @@ flowchart LR
     - Update the Playwright specs in `frontend_tests/` if they use the admin token.
 - Done when: `cargo build --workspace`, `cargo nextest run --test-threads 1 --fail-fast` and the full `./test.sh` pass. `grep -r pgvisor_dashboard crates/pgvisor-proxy` finds nothing.
 
-### Phase 10: Docs and path-lookup cache [STATUS: TODO]
+### Phase 10: Docs and path-lookup cache [STATUS: DONE]
 - Goal: The docs match the new architecture.
 - Tasks:
-  - [ ] Update `AGENTS.md` (overview and structure: the dashboard is no longer "embedded in the proxy"), `ARCHITECTURE.md`, `README.md`, `DEVELOPMENT.md`, `docs/` and the env var tables: `PGVISOR_SUPERUSER`, `PGVISOR_API_PORT`, `PGVISOR_SIDECAR_URLS`, `POSTGRES_PASSWORD`, removed `PGVISOR_ADMIN_TOKEN` / `PGVISOR_DASHBOARD_LISTEN` on the proxy.
-  - [ ] Document the `/api` contract for the future CLI: auth, members, the `NotLeader` retry rule.
-  - [ ] Update `.agents/path-lookup/dashboard.md`, `sidecar.md` and `proxy.md`.
+  - [x] Update `AGENTS.md` (overview and structure: the dashboard is no longer "embedded in the proxy"), `ARCHITECTURE.md`, `README.md`, `DEVELOPMENT.md`, `docs/` and the env var tables: `PGVISOR_SUPERUSER`, `PGVISOR_API_PORT`, `PGVISOR_SIDECAR_URLS`, `POSTGRES_PASSWORD`, removed `PGVISOR_ADMIN_TOKEN` / `PGVISOR_DASHBOARD_LISTEN` on the proxy.
+  - [x] Document the `/api` contract for the future CLI: auth, members, the `NotLeader` retry rule.
+  - [x] Update `.agents/path-lookup/dashboard.md`, `sidecar.md` and `proxy.md`.
 - Done when: the docs mention no proxy-embedded dashboard, and the path-lookup entries point to files that exist.
 
 ---

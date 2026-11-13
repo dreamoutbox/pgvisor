@@ -1,11 +1,11 @@
 ---
 title: Web Dashboard
-description: Operate and monitor your PgVisor cluster using the embedded real-time web management console.
+description: Operate and monitor your PgVisor cluster using the standalone real-time web management console.
 sidebar:
   order: 3
 ---
 
-**PgVisor** includes an embedded administrative web dashboard served directly by the proxy process on port `8080`.
+**PgVisor** provides a standalone administrative web dashboard (`pgvisor-dashboard`) listening on port `8080` that communicates directly with the sidecar management API (`/api/*` on port `8081`). `pgvisor-proxy` handles SQL traffic only.
 
 ![PgVisor Web Management Dashboard](./images/overview-1.png)
 
@@ -23,12 +23,11 @@ http://localhost:8080
 
 ### Authentication
 
-Access to management actions and the SQL runner is protected by an admin bearer token:
+Access to management actions, cluster views, and the SQL runner requires a PostgreSQL user listed in `PGVISOR_SUPERUSER` (comma-separated, default `postgres`):
 
-- **Default Token**: `postgres`
-- **Environment Variable**: `PGVISOR_ADMIN_TOKEN`
-
-When prompted in the browser UI, provide this token to authenticate your administrative session.
+- **Allowed Superusers**: Set `PGVISOR_SUPERUSER=postgres,bob` on each `pgvisor-sidecar`. Users not listed receive `403 Forbidden`.
+- **Password Verification**: Verified against the leader's local `pg_authid` catalog (use your PostgreSQL user password / `POSTGRES_PASSWORD`).
+- **Sidecar Discovery**: Configure `PGVISOR_SIDECAR_URLS` on `pgvisor-dashboard` (default `http://127.0.0.1:8081`). The dashboard discovers the active leader via `GET /api/cluster/members` and fails over automatically on `409 Conflict` (`not_leader`).
 
 ---
 

@@ -57,9 +57,10 @@
 
 - `tests/test-incremental-pitr.sh` = PITR test; uses `wait_for_healthy` and `wait_for_proxy_ready` after `restore_cluster_node`, and ensures `pg_switch_wal()` executes on the leader.
 - `crates/pgvisor-sidecar/src/supervisor.rs` = `ProcessStatus::Restoring` state set during `restore_from_snapshot` and `resync_from_primary` to pause standby elections during active restores.
-- `crates/pgvisor-sidecar/src/main.rs` = sidecar `/control/status` handler exposing `"restoring"` status and heartbeat loop honoring `"restoring"` leader status to prevent split-brain elections.
-- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::restore_backup` re-syncing both dynamic and configured standbys with 3-attempt retry loop.
-- `crates/pgvisor-proxy/src/main.rs` = proxy discovery loop preserving discovered leader while in `"restoring"` status and passing configured standbys.
+- `crates/pgvisor-sidecar/src/control/handlers.rs` = sidecar `/control/status` handler exposing `"restoring"` status and `restore_epoch`
+- `crates/pgvisor-sidecar/src/api/backup/orchestrator.rs` = cluster restore orchestration re-syncing both dynamic and configured standbys
+- `crates/pgvisor-proxy/src/main.rs` = proxy discovery loop preserving discovered leader while in `"restoring"` status and draining pools on `restore_epoch` increment
+- `crates/pgvisor-proxy/src/restore_epoch_tracker.rs` = `RestoreEpochTracker` detecting post-restore epoch advances to trigger `pool.drain_all()`
 - `tests/test-backup-restore.sh` = similar restore+verify pattern; apply the same retry budget if it shows similar flakiness.
 - `tests/lib/cluster.sh` = `wait_for_proxy_ready` and `wait_for_healthy` container health helpers.
 

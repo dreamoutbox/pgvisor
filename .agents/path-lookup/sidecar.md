@@ -3,8 +3,9 @@
 - `crates/pgvisor-sidecar/src/supervisor.rs` = `staging_data_dir`, `old_data_dir`, `prepare_staging_directory`, `clean_staging_directory`, `generate_staging_config`, and `spawn_shadow_postgres` (runs on `config.port + 1` e.g. 5433 with `/tmp` unix socket)
 - `crates/pgvisor-sidecar/src/config.rs` = `ConfigGenerator::write_configs` (writes `port`, `restore_command`, and `recovery.signal` for shadow recovery)
 - `crates/pgvisor-sidecar/src/control/handlers.rs` = `handle_restore` validating recovery targets and invoking supervisor restore
-- `crates/pgvisor-proxy/src/pool.rs` = `pause_client_traffic` and `resume_client_traffic` buffering client queries during restore
-- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::restore_cluster` coordinating pause, restore, drain, and resume
+- `crates/pgvisor-proxy/src/pool.rs` = `pause_client_traffic` and `resume_client_traffic` buffering client queries while sidecar `/control/status` reports `restoring`
+- `crates/pgvisor-proxy/src/restore_epoch_tracker.rs` = `RestoreEpochTracker` detecting post-restore `restore_epoch` advances to trigger `pool.drain_all()`
+- `crates/pgvisor-sidecar/src/api/backup/orchestrator.rs` = leader restore orchestration coordinating standby `/control/prepare-restore`, leader `/control/restore`, and standby `/control/resync`
 
 ### If you want to configure PostgreSQL query logging levels (write statements vs read-only) or statement log prefix, then check:
 
@@ -57,7 +58,7 @@
 - `crates/pgvisor-sidecar/src/control/handlers.rs` = `handle_demote` setting `ProcessStatus::Fenced`
 - `crates/pgvisor-sidecar/src/election.rs` = Background election monitor loop allowing fenced nodes to auto-rejoin under active leader
 - `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor::set_status` and `resync_from_primary` resetting status on error
-- `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService::switchover` orchestrating demotion of current leader, promotion of target standby, and repointing of remaining standbys
+- `crates/pgvisor-sidecar/src/api/cluster_actions.rs` = `switchover` handler orchestrating demotion of current leader, promotion of target standby, and repointing of remaining standbys
 - `tests/test-switchover.sh` = Integration test verifying graceful switchover, demoted leader auto-rejoin, streaming replication, and second reverse switchover
 
 ### If you want to modify proxy-to-sidecar or sidecar-to-sidecar cluster authentication, then check:
@@ -68,9 +69,10 @@
 - `crates/pgvisor-sidecar/src/control/state.rs` = `SidecarState.cluster_secret` field and constructor
 - `crates/pgvisor-sidecar/src/control/handlers.rs` = `start_postgres_safely` peer leader discovery client with auth header
 - `crates/pgvisor-sidecar/src/election.rs` = `spawn_election_monitor` peer heartbeat and repoint broadcast client with auth header
-- `crates/pgvisor-proxy/src/main.rs` = Proxy reading `PGVISOR_CLUSTER_SECRET` and configuring topology monitor client
-- `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService::with_cluster_secret` attaching auth header to switchover/node lifecycle calls
-- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::with_cluster_secret` attaching auth header to restore/resync calls
+- `crates/pgvisor-proxy/src/main.rs` = Proxy reading `PGVISOR_CLUSTER_SECRET` and configuring topology monitor client querying `/control/status`
+- `crates/pgvisor-sidecar/src/api/peer_probe.rs` = Sidecar `/api` cluster probe attaching `PGVISOR_CLUSTER_SECRET` auth header when calling peer `/control/*` endpoints
+- `crates/pgvisor-sidecar/src/api/cluster_actions.rs` = Sidecar `/api` switchover/node lifecycle calls attaching `PGVISOR_CLUSTER_SECRET` auth header
+- `crates/pgvisor-sidecar/src/api/backup/orchestrator.rs` = Sidecar `/api` backup/restore orchestration calls attaching `PGVISOR_CLUSTER_SECRET` auth header
 - `knowledges/proxy-sidecar-communication.md` = Documentation on HTTP control API, consensus over Axum, and cluster secret authentication
 - `docker-compose.yml` = `PGVISOR_CLUSTER_SECRET` environment variable distribution across cluster services
 

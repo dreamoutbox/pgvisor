@@ -3,11 +3,11 @@
 ## Project Overview
 
 **PgVisor** is a lightweight, simplified PostgreSQL High Availability (HA) cluster supervisor and proxy built in Rust. It eliminates the complexity of traditional PostgreSQL cluster setups for developers through:
-- **L7 Connection Proxy (`pgvisor-proxy`)**: PostgreSQL wire protocol proxy supporting transaction-level connection pooling and read/write splitting (writes to Raft leader, reads to standby replicas) with failover connection buffering.
-- **Sidecar Supervisor (`pgvisor-sidecar`)**: Container PID 1 process managing the local PostgreSQL instance (`initdb`, configuration generation, process supervision, healthchecks, Raft quorum lease fencing via `pg_ctl stop -m immediate`, and promotion via `pg_ctl promote`).
+- **L7 Connection Proxy (`pgvisor-proxy`)**: Dedicated SQL-only PostgreSQL wire protocol proxy (`:5432`) supporting transaction-level connection pooling and read/write splitting (writes to leader, reads to standby replicas) with failover connection buffering and `restore_epoch` pool draining.
+- **Sidecar Supervisor & Cluster API (`pgvisor-sidecar`)**: Container PID 1 process managing the local PostgreSQL instance (`initdb`, configuration generation, process supervision, healthchecks, split-brain fencing via `pg_ctl stop -m immediate`, and promotion via `pg_ctl promote`), exposing the internal peer/proxy control server on `PGVISOR_CONTROL_PORT` (`8080`) and the authenticated client-facing REST API (`/api/*`) on `PGVISOR_API_PORT` (`8081`).
 - **Distributed Consensus**: OpenRaft-based HA election and membership using a custom pure-Rust append-only storage engine.
-- **Continuous Backups**: Physical basebackup snapshots and continuous WAL archiving (`archive_command`) to S3/MinIO/cloud storage via OpenDAL, supporting Point-In-Time-Recovery (PITR).
-- **Web Dashboard (`pgvisor-dashboard`)**: Axum + Askama UI embedded in the proxy service for cluster status, node inspection, backup management, and SQL execution.
+- **Continuous Backups**: Physical basebackup snapshots, automated cron scheduling (`BackupScheduler`), and continuous WAL archiving (`archive_command`) to S3/SeaweedFS/MinIO/cloud storage via OpenDAL, supporting Point-In-Time-Recovery (PITR).
+- **Standalone Web Dashboard (`pgvisor-dashboard`)**: Standalone Axum + Askama web UI (`:8080`) communicating directly with `pgvisor-sidecar` `/api/*` endpoints via `PGVISOR_SIDECAR_URLS` for cluster status, node inspection, backup management, user management, audit logs, and SQL execution.
 
 ---
 
@@ -19,10 +19,10 @@ pgvisor/
 │   ├── map.md                       # Canonical map index
 │   └── tickets/                     # Open and closed decision tickets
 ├── crates/
-│   ├── pgvisor-core/                # Shared types, Raft state machine, storage traits, wire protocol common
-│   ├── pgvisor-proxy/               # L7 Postgres wire protocol proxy & connection pooler
-│   ├── pgvisor-sidecar/             # PID 1 Postgres process supervisor, Raft node, OpenDAL backup worker
-│   └── pgvisor-dashboard/           # Axum + Askama web UI and API handlers
+│   ├── pgvisor-core/                # Shared types, Raft state machine, API DTOs, SQL guard, backup manager
+│   ├── pgvisor-proxy/               # SQL-only L7 Postgres wire protocol proxy & connection pooler
+│   ├── pgvisor-sidecar/             # PID 1 Postgres supervisor, internal /control (:8080) & client /api (:8081), backups
+│   └── pgvisor-dashboard/           # Standalone Axum + Askama web UI and sidecar API client
 ├── docker-compose.yml               # Local MinIO dev setup & cluster compose
 ├── reset-docker-compose.sh          # Helper to wipe volumes and restart compose services
 ├── THIS-PROJECT-GOAL.md             # High-level product requirements

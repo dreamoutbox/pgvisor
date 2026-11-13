@@ -18,8 +18,9 @@ flowchart TD
         Browser["Web Browser"]
     end
 
-    CLI -->|":5432 Postgres Wire Protocol"| Proxy["pgvisor-proxy (L7 Proxy & Pooler)"]
-    Browser -->|":8080 HTTP"| Proxy
+    CLI -->|":5432 Postgres Wire Protocol"| Proxy["pgvisor-proxy (L7 SQL Proxy & Pooler)"]
+    Browser -->|":8080 HTTP"| Dashboard["pgvisor-dashboard (Standalone Web UI)"]
+    Dashboard -->|":8081 Sidecar /api"| N1
 
     subgraph Cluster["3-Node PostgreSQL Cluster"]
         Proxy -->|"Writes & Transactions"| Node1["Node 1 (Raft Leader)"]
@@ -46,7 +47,7 @@ The PgVisor workspace is organized into modular Rust crates:
 | **`pgvisor-core`** | Domain models & common protocols | Custom pure-Rust WAL storage, OpenRaft state machine, Quorum lease, OpenDAL backup manager |
 | **`pgvisor-proxy`** | L7 wire protocol proxy | Transaction-level connection pooling, read/write splitting, failover query buffering |
 | **`pgvisor-sidecar`** | Container PID 1 supervisor | Subprocess reaper (`waitpid`), signal forwarding, automated `postgresql.conf`, active fencing |
-| **`pgvisor-dashboard`** | Embedded web console | Real-time cluster status, node inspection, guarded read-only SQL console, audit logging |
+| **`pgvisor-dashboard`** | Standalone web console | Real-time cluster status, node inspection, guarded SQL console, backup & user management client over sidecar `/api` |
 
 ---
 
@@ -145,7 +146,7 @@ PgVisor integrates **Apache OpenDAL** for unified object storage across AWS S3, 
 
 ## 5. Web Management Dashboard
 
-The management dashboard runs inside `pgvisor-proxy` (port `8080`) built with Axum and Askama templates:
+The management dashboard runs as a standalone Axum + Askama service (`pgvisor-dashboard`, port `8080`) backed by the sidecar cluster API (`pgvisor-sidecar` `/api/*` on port `8081`):
 
 - **Real-Time Topology**: Node states, roles, and consensus terms.
 - **Administrative Switchover**: Graceful leader step-down trigger.

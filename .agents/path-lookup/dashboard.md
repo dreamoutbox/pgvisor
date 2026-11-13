@@ -1,107 +1,71 @@
-### If you want to modify the web dashboard, Askama HTML templates, or SQL console security, then check:
+### If you want to modify the standalone web dashboard UI, Askama HTML templates, or sidecar `/api` HTTP proxy client, then check:
 
-- `crates/pgvisor-dashboard/src/models.rs` = Data transfer models for cluster overview, node summaries, SQL query request/response (including optional `database`), TableSummary, ColumnInfo, TableDataResponse, backup models, PgRole, TablePrivilege, TablePrivilegeKind, and user management request models
-- `crates/pgvisor-dashboard/src/security.rs` = `SqlSecurityGuard` (comment stripping, multi-statement rejection, read-only validation, `validate_user_management_ddl`) and admin token authentication (`verify_admin_token`, `extract_token_from_headers`)
-- `crates/pgvisor-dashboard/src/templates.rs` = Askama template structs (`OverviewTemplate`, `NodesTemplate`, `SqlConsoleTemplate`, `TablesTemplate` with `databases` and `active_db`, `BackupsTemplate`, `UsersTemplate`, `LoginTemplate`)
-- `crates/pgvisor-dashboard/templates/` = HTML templates (`base.html`, `overview.html`, `nodes.html`, `sql.html`, `tables.html` with database selector, `backups.html`, `users.html`, `login.html`)
-- `crates/pgvisor-dashboard/src/handlers/mod.rs` = Sparse module root with explicit re-exports of all dashboard handler services and endpoints
-- `crates/pgvisor-dashboard/src/handlers/state.rs` = `DashboardState` struct and initialization
-- `crates/pgvisor-dashboard/src/handlers/sql.rs` = `SqlExecutor` trait (`execute_on_db`), `StandaloneSqlExecutor`, `TablesQuery` with `db`, `/api/databases` endpoint, and SQL explorer / table schema endpoints
-- `crates/pgvisor-dashboard/src/handlers/backup.rs` = `BackupService` trait, `StandaloneBackupService`, snapshot selection, and backup / PITR restore endpoints
-- `crates/pgvisor-dashboard/src/handlers/cluster.rs` = `ClusterService` trait (`get_node_logs`, `get_node_config`), `StandaloneClusterService`, `/api/nodes/:node_id/logs`, and `/api/nodes/:node_id/config/:config_type` endpoints
-- `crates/pgvisor-dashboard/src/handlers/users.rs` = `UserService` trait, `StandaloneUserService`, `SqlUserService`, and role / permission management endpoints
-- `crates/pgvisor-dashboard/src/handlers/auth.rs` = Login, logout, and token session cookie handlers
-- `crates/pgvisor-dashboard/src/handlers/audit.rs` = Audit log page and API list handlers
-- `crates/pgvisor-dashboard/src/lib.rs` = Router assembly, `auth_middleware`, and unit tests
-- `crates/pgvisor-dashboard/src/main.rs` = Standalone HTTP server binary
-- `crates/pgvisor-proxy/src/main.rs` = Proxy server entrypoint, injects `ProxySqlExecutor`, `ProxyBackupService`, `ProxyClusterService`, and `SqlUserService` into dashboard state
-- `crates/pgvisor-proxy/src/pool.rs` = `ConnectionPool::acquire_for` matching database and `PooledConnection.database`
-- `crates/pgvisor-proxy/src/executor.rs` = `ProxySqlExecutor::execute_with_role_and_db` running dashboard queries against live Postgres cluster connections on specific databases
-- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService` orchestrating OpenDAL backups and restores for the proxy dashboard
-- `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService` orchestrating manual leader switchover, standby repointing, node logs forwarding, and config inspection for the proxy dashboard
+- `crates/pgvisor-dashboard/src/main.rs` = Standalone HTTP server binary reading `PGVISOR_DASHBOARD_LISTEN`, `PGVISOR_SIDECAR_URLS`, `PGVISOR_CLUSTER_ID`, and `PGVISOR_CLUSTER_NAME`
+- `crates/pgvisor-dashboard/src/lib.rs` = Crate exports and router wiring for standalone `pgvisor-dashboard`
+- `crates/pgvisor-dashboard/src/client/router.rs` = Standalone Axum router mapping SSR pages and `/api/*` BFF endpoints
+- `crates/pgvisor-dashboard/src/client/client_dashboard_state.rs` = `ClientDashboardState` holding `SidecarClient`, `cluster_id`, and `cluster_name`
+- `crates/pgvisor-dashboard/src/client/sidecar_client.rs` = `SidecarClient` discovering the leader via `GET /api/cluster/members` and retrying `409 Conflict` (`not_leader`) against `leader_url`
+- `crates/pgvisor-dashboard/src/client/sidecar_response.rs` = Upstream sidecar HTTP response wrapper and `not_leader` JSON parser
+- `crates/pgvisor-dashboard/src/client/auth_handlers.rs` = `/login`, `/logout`, and `pgvisor_token` cookie forwarding
+- `crates/pgvisor-dashboard/src/client/page_handlers.rs` = Askama SSR page handlers fetching views from sidecar `/api/*`
+- `crates/pgvisor-dashboard/src/client/proxy_handlers.rs` = Transparent `/api/*` JSON/multipart proxy handlers forwarding `Authorization` and cookies to sidecar
+- `crates/pgvisor-dashboard/src/templates.rs` = Askama template structs (`OverviewTemplate`, `NodesTemplate`, `SqlConsoleTemplate`, `TablesTemplate`, `BackupsTemplate`, `UsersTemplate`, `AuditTemplate`, `LoginTemplate`)
+- `crates/pgvisor-dashboard/templates/` = HTML templates (`base.html`, `overview.html`, `nodes.html`, `node_inspect.html`, `sql.html`, `tables.html`, `backups.html`, `users.html`, `audit.html`, `login.html`)
 
-### If you want to inspect node PostgreSQL logs, postgresql.conf, pg_hba.conf, or runtime diagnostic files in the web dashboard:
+### If you want to modify sidecar `/api` authentication (`PGVISOR_SUPERUSER`), `pg_authid` password login, or `/api/cluster/members` leader discovery, then check:
 
-- `crates/pgvisor-core/src/node.rs` = `NodeConfigType` enum (`PostgresqlConf`, `PostgresqlAutoConf`, `PgHbaConf`, `PgIdentConf`, `PostmasterPid`, `PostmasterOpts`, `StandbySignal`, `RecoverySignal`, `BackupLabel`), `NodeLogEntry`, and DTO models
-- `crates/pgvisor-dashboard/src/handlers/cluster.rs` = `ClusterService` trait (`get_node_logs`, `get_node_config`), `api_node_logs`, and `api_node_config` endpoints
-- `crates/pgvisor-dashboard/templates/nodes.html` = Inspect button on node rows, modal tabs for live log streaming / search / auto-refresh, and diagnostic file viewer
-- `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService::get_node_logs` and `get_node_config` proxying requests to sidecars via HTTP auth
+- `crates/pgvisor-sidecar/src/api/server.rs` = Sidecar `/api` Axum listener bound to `PGVISOR_API_PORT` (default `8081`), separate from `/control` (`PGVISOR_CONTROL_PORT`, default `8080`)
+- `crates/pgvisor-sidecar/src/api/router.rs` = Sidecar `/api` route registration (`auth/login`, `auth/me`, `cluster/members`, `overview`, `nodes/*`, `sql`, `tables/*`, `backups/*`, `users/*`, `audit-logs`, `metrics/*`) and `PGVISOR_SUPERUSER` auth middleware
+- `crates/pgvisor-sidecar/src/api/auth.rs` = `POST /api/auth/login` and `GET /api/auth/me` handlers plus `AuthMiddleware` enforcing Bearer/cookie token and `PGVISOR_SUPERUSER`
+- `crates/pgvisor-sidecar/src/api/superusers.rs` = `SuperuserAllowlist` parsing `PGVISOR_SUPERUSER` (default `postgres`, returns `403 Forbidden` if user is not listed)
+- `crates/pgvisor-sidecar/src/api/password_verifier.rs` = Verifying PostgreSQL passwords against local `pg_authid` SCRAM-SHA-256 / MD5 hashes
+- `crates/pgvisor-sidecar/src/api/session_token.rs` = HMAC session token issue/verify logic (`DEFAULT_TOKEN_TTL_SECS`)
+- `crates/pgvisor-sidecar/src/api/members.rs` = `GET /api/cluster/members` handler reporting all configured/discovered members, `api_url`, `role`, `health`, `is_self`, and `leader_url`
+- `crates/pgvisor-sidecar/src/api/error.rs` = Sidecar API error responses including `409 Conflict` `{"status": "not_leader", "leader_url": ...}`
+- `crates/pgvisor-core/src/api/` = Shared API request/response DTOs (`login_request.rs`, `login_response.rs`, `me_response.rs`, `cluster_members_response.rs`, `cluster_member.rs`, `sidecar_role.rs`, `member_health.rs`)
 
-### If you want to manage database users, roles, memberships, or table privileges:
+### If you want to modify SQL console security, table explorer, row editing/deletion, or `/api/users/*` PostgreSQL role management, then check:
 
-- `crates/pgvisor-dashboard/src/models.rs` = `PgRole`, `TablePrivilege`, `TablePrivilegeKind`, and user management request models
-- `crates/pgvisor-dashboard/src/security.rs` = `SqlSecurityGuard::validate_user_management_ddl` allow-list for role DDL and GRANT/REVOKE
-- `crates/pgvisor-dashboard/src/handlers/users.rs` = `UserService` trait, `StandaloneUserService`, `SqlUserService`, and `/api/users/*` handlers
-- `crates/pgvisor-dashboard/src/templates.rs` = `UsersTemplate` Askama definition
-- `crates/pgvisor-dashboard/templates/users.html` = Users & roles management HTML template with attributes, memberships, and privileges tabs
-- `crates/pgvisor-dashboard/templates/base.html` = Sidebar navigation link for `Users & Roles`
-- `crates/pgvisor-dashboard/src/lib.rs` = Route registration for `/users` and `/api/users/*`
+- `crates/pgvisor-core/src/sql_guard/sql_security_guard.rs` = `SqlSecurityGuard` (comment stripping, multi-statement rejection, read-only validation, `validate_user_management_ddl`)
+- `crates/pgvisor-core/src/api/` = `sql_query_request.rs`, `sql_query_result.rs`, `table_summary.rs`, `column_info.rs`, `table_data_response.rs`, `delete_row_request.rs`, `update_row_request.rs`, `row_mutation_response.rs`, `pg_role.rs`, `table_privilege.rs`, `table_privilege_kind.rs`
+- `crates/pgvisor-sidecar/src/api/sql.rs` = `/api/sql`, `/api/databases`, `/api/tables`, `/api/tables/:table/data`, `DELETE/PUT /api/tables/:table/rows` handlers, primary key lookup, and row mutation SQL builders
+- `crates/pgvisor-sidecar/src/api/sql_runner.rs` = Executing SQL queries against local/leader PostgreSQL via `pg_client`
+- `crates/pgvisor-sidecar/src/api/users.rs` = `/api/users` role CRUD, memberships, and table privilege management handlers
+- `crates/pgvisor-dashboard/templates/tables.html` = Data Browse view with database selector, no-PK warning, Delete/Edit Row Modals, and AJAX handlers
+- `crates/pgvisor-dashboard/templates/users.html` = Users & roles management UI with attributes, memberships, and privileges tabs
 - `tests/test-users-permissions.sh` = Integration test for role CRUD, memberships, and table privilege grants
+- `tests/test-dashboard-tables-nodes.sh` = Integration test verifying row editing, row deletion, and audit logging
 
-### If you want to modify cluster audit logs, dangerous SQL tracking, PITR recovery recommendations, or S3 audit event persistence:
+### If you want to inspect node PostgreSQL logs, config files, or start/stop/restart/switchover nodes from the sidecar API or web dashboard, then check:
 
-- `crates/pgvisor-core/src/audit.rs` = `AuditEventKind` enum, `AuditEvent` model, `AuditLog` ring buffer with multi-event JSON batch persistence (`MAX_EVENTS_PER_BATCH`, `MAX_BATCH_BYTES`), size/count rotation, and backward-compatible startup loader
-- `crates/pgvisor-dashboard/src/models.rs` = `AuditEventView`, `AuditListResponse`, `AuditOverviewStats`
-- `crates/pgvisor-dashboard/src/templates.rs` = `PageItem` struct and `AuditTemplate` Askama definition with `page_items`, `start_item`, `end_item`
-- `crates/pgvisor-dashboard/templates/audit.html` = Audit logs HTML dashboard page with search, filters, compact table density (`.audit-table`), compact badges and PITR box, rows-per-page selector, and full pagination navigation
-- `crates/pgvisor-dashboard/templates/base.html` = Sidebar navigation link and badge style formatting
-- `crates/pgvisor-dashboard/src/handlers/audit.rs` = `/audit-logs` and `/api/audit-logs` Axum handlers, pagination item computation, and audit event views
-- `crates/pgvisor-dashboard/src/handlers/users.rs` = Audit event recording on role creation, modification, and privilege changes
-- `crates/pgvisor-dashboard/src/lib.rs` = Route registration for `/audit-logs` and `/api/audit-logs`
-- `crates/pgvisor-proxy/src/session.rs` = Auditing dangerous SQL (DROP, TRUNCATE, DELETE) and user/permission SQL commands
-- `crates/pgvisor-proxy/src/backup.rs` = Auditing backup creation and restore operations
-- `crates/pgvisor-proxy/src/cluster.rs` = Auditing cluster switchover operations
-- `crates/pgvisor-proxy/src/main.rs` = AuditLog initialization with S3 operator, topology event polling, and sidecar `/control/events` ingestion
-- `crates/pgvisor-sidecar/src/control/handlers.rs` = Sidecar event recording and `GET /control/events` endpoint for promotion, demotion, and fencing
-- `tests/test-audit-logs.sh` = Integration test suite verifying 9 audit assertions end-to-end
+- `crates/pgvisor-core/src/node.rs` = `NodeConfigType`, `NodeLogEntry`, `NodeLogsResponse`, `NodeConfigResponse`
+- `crates/pgvisor-core/src/api/` = `node_summary.rs`, `node_health_state.rs`, `node_lifecycle_action.rs`, `node_action_request.rs`, `node_action_response.rs`, `switchover_request.rs`, `switchover_response.rs`
+- `crates/pgvisor-sidecar/src/api/cluster.rs` = `/api/overview`, `/api/nodes`, `/api/nodes/:node_id/logs`, `/api/nodes/:node_id/config/:config_type`
+- `crates/pgvisor-sidecar/src/api/peer_probe.rs` = Peer `/control/status` probing and dynamic `pg_stat_replication` peer discovery (`discover_replication_hosts`, `infer_control_port`)
+- `crates/pgvisor-sidecar/src/api/cluster_actions.rs` = Leader-only `/api/cluster/switchover` and `/api/nodes/:node_id/{start,stop,restart,action}` orchestrating sidecar `/control/*` calls
+- `crates/pgvisor-sidecar/src/control/handlers.rs` = Internal sidecar `/control/logs`, `/control/config/:config_type`, `/control/start`, `/control/stop`, `/control/restart`
+- `crates/pgvisor-dashboard/templates/nodes.html` = Nodes table with start/stop/restart actions, leader stop warning modal, and Inspect link
+- `crates/pgvisor-dashboard/templates/node_inspect.html` = Live server logs and config/diagnostic file viewer
+- `tests/test-node-lifecycle.sh` = Integration test verifying end-to-end node stop, start, restart, pool continuity, and error cases
 
-### If you want to modify web dashboard charts, metrics telemetry, node resource monitoring, or query rate tracking, then check:
+### If you want to modify cluster audit logs or S3 audit event persistence, then check:
 
-- `crates/pgvisor-core/src/metrics.rs` = Shared metric snapshot models (`ClusterMetricsSnapshot`, `NodeMetrics`, `ProxyMetrics`, `BackupMetrics`, `NodeMetricRole`)
+- `crates/pgvisor-core/src/audit.rs` = `AuditEventKind`, `AuditEvent`, `AuditLog` ring buffer with OpenDAL S3 persistence (`MAX_EVENTS_PER_BATCH`, `MAX_BATCH_BYTES`)
+- `crates/pgvisor-core/src/api/` = `audit_event_view.rs`, `audit_list_response.rs`, `audit_overview_stats.rs`
+- `crates/pgvisor-sidecar/src/api/api_state.rs` = `AuditLog` initialization with S3 operator and background sidecar `/control/events` ingestion
+- `crates/pgvisor-sidecar/src/api/audit.rs` = `/api/audit-logs` Axum handler, pagination computation, and audit views
+- `crates/pgvisor-sidecar/src/api/{sql,users,cluster_actions}.rs` and `crates/pgvisor-sidecar/src/api/backup/orchestrator.rs` = Recording audit events on SQL mutations, user changes, switchovers, and backup/restore operations
+- `crates/pgvisor-dashboard/src/templates.rs` = `AuditTemplate` with `page_items`, `start_item`, `end_item`
+- `crates/pgvisor-dashboard/templates/audit.html` = Audit logs HTML template with search, filters, PITR hint box, and pagination
+- `tests/test-audit-logs.sh` = Integration test suite verifying audit assertions end-to-end
+
+### If you want to modify telemetry metrics, node resource monitoring, or PostgreSQL replication/activity stats, then check:
+
+- `crates/pgvisor-core/src/metrics.rs` = `ClusterMetricsSnapshot`, `NodeMetrics`, `DatabaseMetrics`, `BackupMetrics`, `NodeMetricRole`
 - `crates/pgvisor-sidecar/src/system.rs` = Container `/proc/stat` and `/proc/meminfo` metrics collection for node CPU and memory
 - `crates/pgvisor-sidecar/src/supervisor.rs` = Node process uptime tracking (`uptime_secs`)
-- `crates/pgvisor-sidecar/src/control/handlers.rs` = Sidecar `StatusResponse` exposing CPU, memory, and uptime metrics over `/control/status`
-- `crates/pgvisor-dashboard/src/metrics.rs` = `MetricsService` trait, `StandaloneMetricsService`, and `/api/metrics/snapshot`, `/api/metrics/history` handlers
-- `crates/pgvisor-dashboard/src/models.rs` = Re-exporting metric snapshot types for dashboard
-- `crates/pgvisor-dashboard/src/templates.rs` = `OverviewTemplate` Askama definition
-- `crates/pgvisor-dashboard/templates/overview.html` = Integrated Chart.js HTML template with cluster topology and 7 live telemetry charts (uptime, node read/write, CPU, memory, proxy read/write, replication lag, backup throughput/rate)
-- `crates/pgvisor-dashboard/src/lib.rs` = Route registration for `/` and `/api/metrics/*`
-- `crates/pgvisor-proxy/src/metrics.rs` = `ProxyMetricsStore` atomic counters and `ProxyMetricsService` aggregating rolling history
-- `crates/pgvisor-proxy/src/session.rs` = L7 proxy read and write query counting (`ProxyMetricsStore::record_read` / `record_write`)
-- `crates/pgvisor-proxy/src/main.rs` = Proxy topology monitor querying replication lag from `pg_stat_replication` and sidecar telemetry
-- `tests/test-metrics.sh` = Integration test suite verifying metrics endpoints, proxy query counter increments, node telemetry, and backup metrics
-
-### If you want to start, stop, or restart cluster nodes from the web dashboard or API:
-
-- `crates/pgvisor-dashboard/src/models.rs` = `NodeHealthState::Stopped`, `NodeLifecycleAction` enum, `NodeActionRequest`, and `NodeActionResponse`
-- `crates/pgvisor-dashboard/src/handlers/cluster.rs` = `ClusterService` trait (`start_node`, `stop_node`, `restart_node`), `StandaloneClusterService`, and `/api/nodes/:node_id/{start,stop,restart,action}` handlers
-- `crates/pgvisor-dashboard/src/lib.rs` = Route registration and unit tests for node lifecycle
-- `crates/pgvisor-dashboard/templates/nodes.html` = Nodes page table actions, start/stop/restart buttons, leader stop warning modal, and fetch API invocation
-- `crates/pgvisor-dashboard/templates/overview.html` = Overview status badge for `NodeHealthState::Stopped`
-- `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService` orchestrating node start/stop/restart via sidecar HTTP API, pool draining, and audit logging
-- `crates/pgvisor-proxy/src/main.rs` = Topology heartbeat mapping sidecar `"stopped"` status to `NodeHealthState::Stopped`
-- `crates/pgvisor-sidecar/src/supervisor.rs` = `PostgresSupervisor` managing process start, stop, and restart with status verification
-- `crates/pgvisor-sidecar/src/control/handlers.rs` = Sidecar `/control/start`, `/control/stop`, `/control/restart` endpoints
-- `crates/pgvisor-sidecar/src/election.rs` = Election monitor pause on stopped status and fenced auto-rejoin
-- `tests/test-node-lifecycle.sh` = Integration test verifying end-to-end node stop, start, restart, pool continuity, error cases, and audit logs
-
-### If you want to inspect node stdout/stderr logs or configuration and diagnostic files (postgresql.conf, pg_hba.conf, postmaster.pid, standby.signal, etc.) from the dashboard, then check:
-
-- `crates/pgvisor-core/src/node.rs` = `NodeConfigType`, `NodeLogEntry`, `NodeLogsResponse`, and `NodeConfigResponse` models (with absolute `path` string)
-- `crates/pgvisor-sidecar/src/supervisor.rs` = Circular log buffer (`MAX_LOG_ENTRIES`) in `PostgresSupervisor` and `read_node_file` populating absolute file path
-- `crates/pgvisor-sidecar/src/control/handlers.rs` = `GET /control/logs` and `GET /control/config/:config_type` handlers
-- `crates/pgvisor-dashboard/src/handlers/cluster.rs` = `ClusterService` trait (`get_node_logs`, `get_node_config`), `get_node_inspect_page`, and `/api/nodes/:node_id/{logs,config/:config_type}` endpoints
-- `crates/pgvisor-proxy/src/cluster.rs` = `ProxyClusterService` forwarding log/config inspection calls to sidecar with cluster secret auth
-- `crates/pgvisor-dashboard/templates/nodes.html` = Inspect button linking to dedicated `/nodes/:node_id/inspect` page
-- `crates/pgvisor-dashboard/templates/node_inspect.html` = Dedicated full-page diagnostics layout with live server logs and configuration/diagnostic file viewer displaying absolute paths
-- `tests/test-dashboard-tables-nodes.sh` = Integration test verifying log and diagnostic file inspection endpoints — **note:** `NodeSummary` JSON uses `node_id` (not `id`); use `.node_id` in jq filters
-
-### If you want to modify table row deletion, editing, or primary key detection in the web dashboard, then check:
-
-- `crates/pgvisor-dashboard/src/models.rs` = `DeleteRowRequest`, `UpdateRowRequest`, `RowMutationResponse`, and `primary_keys` in `TableDataResponse`
-- `crates/pgvisor-dashboard/src/handlers/sql.rs` = `fetch_table_primary_keys`, `is_valid_identifier`, `format_sql_literal`, `api_delete_table_row`, and `api_update_table_row` handlers
-- `crates/pgvisor-dashboard/src/templates.rs` = `TablesTemplate` helper methods (`is_primary_key_col`, `has_primary_keys`, `table_data_json`)
-- `crates/pgvisor-dashboard/templates/tables.html` = Data Browse view with Actions column, no-PK warning, Delete Row Modal, Edit Row Modal, and AJAX mutation handlers
-- `crates/pgvisor-dashboard/src/lib.rs` = Route registration for `DELETE /api/tables/:table/rows` and `PUT /api/tables/:table/rows` and unit tests
-- `crates/pgvisor-proxy/src/executor.rs` = `ProxySqlExecutor` routing DELETE and UPDATE queries to Raft leader
-- `tests/test-dashboard-tables-nodes.sh` = Integration test verifying row editing, row deletion, and audit logging
+- `crates/pgvisor-sidecar/src/control/handlers.rs` = Sidecar `/control/status` exposing CPU, memory, and uptime metrics
+- `crates/pgvisor-sidecar/src/api/pg_activity.rs` = Polling `pg_stat_replication` lag and `pg_stat_activity` / `pg_stat_database` activity metrics
+- `crates/pgvisor-sidecar/src/api/metrics.rs` = Rolling history store and `/api/metrics/snapshot`, `/api/metrics/history` handlers
+- `crates/pgvisor-dashboard/templates/overview.html` = Chart.js overview dashboard displaying topology and live metrics charts
+- `tests/test-metrics.sh` = Integration test suite verifying metrics endpoints, node telemetry, and backup metrics

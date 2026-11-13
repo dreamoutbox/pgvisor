@@ -96,7 +96,6 @@ services:
       - ./certs/proxy.key:/etc/pgvisor/tls/proxy.key:ro
     ports:
       - "5432:5432"
-      - "8080:8080"
 
   pgvisor-node1:
     image: dreamoutbox/pgvisor:latest

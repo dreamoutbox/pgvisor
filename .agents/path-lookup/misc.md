@@ -63,10 +63,9 @@
 - `crates/pgvisor-core/src/lib.rs` = module exports for `log_highlight`, `extract_node_name`, and formatters
 - `crates/pgvisor-sidecar/src/supervisor.rs` = `START NODE` and `STOP NODE` process supervisor highlights
 - `crates/pgvisor-sidecar/src/main.rs` = `handle_restore` restore highlight, `handle_repoint` / `start_postgres_safely` / auto-rejoin failover listening highlights, and election auto-promote / `handle_promote` become leader highlights
-- `crates/pgvisor-proxy/src/backup.rs` = `ProxyBackupService::create_backup` backup highlight and `restore_backup` restore highlight
+- `crates/pgvisor-sidecar/src/api/backup/orchestrator.rs` = leader backup creation and cluster restore highlight logging
+- `crates/pgvisor-sidecar/src/api/cluster_actions.rs` = node start/stop/restart and cluster switchover highlights
 - `crates/pgvisor-proxy/src/main.rs` = proxy dynamic topology monitor failover listening highlight
-- `crates/pgvisor-proxy/src/cluster.rs` = proxy node start/stop and switchover highlights
-- `crates/pgvisor-dashboard/src/handlers.rs` = standalone backup and cluster service highlights
 
 ### If you want to modify or run the Python MVC demo application connecting to PgVisor, then check:
 

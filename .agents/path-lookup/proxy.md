@@ -4,7 +4,7 @@
 - `crates/pgvisor-core/src/protocol/tracker.rs` = `TransactionTracker` watching ReadyForQuery ('I'/'T'/'E') and query classifier for read/write splitting
 - `crates/pgvisor-proxy/src/pool.rs` = `ConnectionPool` managing round-robin standby routing, per-node idle connection pools, failover retry loop (`acquire_with_retry`), client query pausing/buffering (`pause_client_traffic`, `resume_client_traffic`), and topology notifications
 - `crates/pgvisor-proxy/src/session.rs` = `ClientSession` driving handshake, borrowing backend connections, failover query buffering/transparent replay, and returning them on transaction boundary
-- `crates/pgvisor-proxy/src/main.rs` = Proxy server entry point, TCP listener, embedded Axum dashboard, and dynamic topology monitor task polling sidecar nodes
+- `crates/pgvisor-proxy/src/main.rs` = SQL-only proxy server entry point, TCP listener, dynamic topology & `restore_epoch` monitor task polling sidecar `/control/status`
 
 ### If you want to modify TLS/SSL encryption on the proxy or backend pool, then check:
 

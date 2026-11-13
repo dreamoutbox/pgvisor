@@ -8,7 +8,7 @@ This document covers local development, testing, crate architecture, technology 
 
 | Layer | Technology |
 |---|---|
-| **Language** | [Rust](https://www.rust-lang.org/) (2021 edition) |
+| **Language** | [Rust](https://www.rust-lang.org/) (2024 edition) |
 | **Async Runtime** | [Tokio](https://tokio.rs/) |
 | **Distributed Consensus** | [OpenRaft](https://github.com/datafuselabs/openraft) 0.9 |
 | **Consensus Storage** | Custom pure-Rust append-only WAL (no RocksDB, no C++ deps) |
@@ -29,48 +29,75 @@ This document covers local development, testing, crate architecture, technology 
 
 | Crate | Role |
 |---|---|
-| `crates/pgvisor-core` | Shared types, PostgreSQL wire protocol codec, pure-Rust OpenRaft storage engine, OpenDAL backup manager |
-| `crates/pgvisor-proxy` | L7 transaction connection pooler, read/write splitter, failover buffering |
-| `crates/pgvisor-sidecar` | Container PID 1 supervisor, Raft node, automated config generation, backup worker |
-| `crates/pgvisor-dashboard` | Axum + Askama web UI, REST API, guarded SQL console, audit log |
+| `crates/pgvisor-core` | Shared types, API DTOs, SQL security guard, audit log, PostgreSQL wire protocol codec, pure-Rust OpenRaft storage engine, OpenDAL backup manager |
+| `crates/pgvisor-proxy` | SQL-only L7 transaction connection pooler, read/write splitter, failover buffering, `restore_epoch` pool draining |
+| `crates/pgvisor-sidecar` | Container PID 1 supervisor, internal `/control/*` (`8080`), authenticated `/api/*` (`8081`), `pg_stat_database` metrics sampler, backup CRON worker |
+| `crates/pgvisor-dashboard` | Standalone Axum + Askama web UI (`8080`) connecting directly to `pgvisor-sidecar` `/api/*` via `PGVISOR_SIDECAR_URLS` |
 
 ---
 
 ## Configuration Reference
 
-Cluster configuration is managed via environment variables (see `examples/.env.example`):
+Cluster configuration is managed via environment variables (see `docker-compose.yml` and `examples/.env.example`):
 
-### Sidecar Supervisor (`pgvisor-sidecar`)
+### Sidecar Supervisor & API (`pgvisor-sidecar`)
 
 | Variable | Description | Default |
 |---|---|---|
 | `PGVISOR_CLUSTER_ID` | Unique cluster identifier | `pgvisor-cluster` |
-| `PGVISOR_NODE_ID` | Unique integer node ID (e.g., `1`, `2`, `3`) | Required |
+| `PGVISOR_NODE_ID` | Unique integer node ID (e.g., `1`, `2`, `3`) | `1` |
 | `PGVISOR_ROLE` | Initial bootstrap role: `leader` or `standby` | `leader` |
-| `PGVISOR_PEERS` | Comma-separated sidecar HTTP peer endpoints | Required |
-| `PRIMARY_CONNINFO` | Connection string to leader (standby nodes only) | Host address of leader |
-| `S3_ENDPOINT` | S3-compatible object storage endpoint | `http://minio:9000` |
-| `S3_BUCKET` | Backup bucket name | `pgvisor-backups` |
+| `PGVISOR_PEERS` | Comma-separated sidecar internal `/control` URLs | Empty |
+| `PGVISOR_CONTROL_PORT` | Internal `/control/*` HTTP listen port | `8080` |
+| `PGVISOR_API_PORT` | Client-facing `/api/*` HTTP listen port | `8081` |
+| `POSTGRES_USER` | Primary PostgreSQL superuser role name | `postgres` |
+| `POSTGRES_PASSWORD` | Password bootstrapped for `POSTGRES_USER` after `initdb` | None |
+| `PGVISOR_SUPERUSER` | Comma-separated PostgreSQL roles allowed to log in to `/api/*` | Value of `POSTGRES_USER` (`postgres`) |
+| `PGVISOR_CLUSTER_SECRET` | Shared HMAC secret for `/control/*` auth (and fallback token signer) | None |
+| `PGVISOR_API_SESSION_SECRET` | HMAC secret for signing `/api/*` session tokens across sidecars | Falls back to `PGVISOR_CLUSTER_SECRET` / random |
+| `PGVISOR_SIDECAR_BACKUP_CRON` | Enable automated backup CRON scheduling in sidecar | Enabled when `cron_enabled` is true unless `false`/`0`/`no` |
+| `PGVISOR_DASHBOARD_ALLOW_MUTATIONS` | Allow SQL mutations in `/api/sql` (`false` enforces read-only guard) | `true` |
+| `PRIMARY_CONNINFO` | Connection string to leader (standby nodes only) | None |
+| `S3_ENDPOINT` / `PGVISOR_S3_ENDPOINT` | S3-compatible object storage endpoint | `http://minio:9000` |
+| `S3_BUCKET` / `PGVISOR_S3_BUCKET` | Backup bucket name | `pgvisor-backups` |
 | `S3_ACCESS_KEY` | Storage access key | `minioadmin` |
 | `S3_SECRET_KEY` | Storage secret key | `minioadmin` |
 | `PGPORT` | PostgreSQL port | `5432` |
-| `PGDATA` | PostgreSQL data directory | `/var/lib/postgresql/data/pgdata` |
+| `PGDATA` | PostgreSQL data directory | `/var/lib/postgresql/data` |
 | `RUST_LOG` | Logging verbosity (`error`, `warn`, `info`, `debug`) | `info` |
 
-### L7 Proxy & Dashboard (`pgvisor-proxy`)
+### L7 SQL Proxy (`pgvisor-proxy`)
 
 | Variable | Description | Default |
 |---|---|---|
-| `PGVISOR_PROXY_LISTEN` | Postgres proxy listen address | `0.0.0.0:5432` |
-| `PGVISOR_DASHBOARD_LISTEN` | Web dashboard listen address | `0.0.0.0:8080` |
+| `PGVISOR_PROXY_LISTEN` | Postgres SQL proxy listen address | `0.0.0.0:5432` |
 | `PGVISOR_LEADER_ADDR` | Initial leader PostgreSQL address | `pgvisor-node1:5432` |
-| `PGVISOR_STANDBY_ADDRS` | Comma-separated standby PostgreSQL addresses | `pgvisor-node2:5432,pgvisor-node3:5432` |
-| `PGVISOR_CLUSTER_ID` | Cluster identifier matching sidecars | `pgvisor-cluster` |
-| `PGVISOR_ADMIN_TOKEN` | Bearer token for dashboard authentication | `postgres` |
-| `S3_ENDPOINT` | Storage endpoint for backup inspection | `http://minio:9000` |
-| `S3_BUCKET` | Backup bucket name | `pgvisor-backups` |
-| `S3_ACCESS_KEY` | Storage access key | `minioadmin` |
-| `S3_SECRET_KEY` | Storage secret key | `minioadmin` |
+| `PGVISOR_STANDBY_ADDRS` | Comma-separated standby PostgreSQL addresses | Empty |
+| `PGVISOR_CONTROL_PORT` | Sidecar control port polled for topology and `restore_epoch` | `8080` |
+| `PGVISOR_CLUSTER_SECRET` | Shared HMAC secret matching sidecar `/control/*` auth | None |
+
+### Standalone Web Dashboard (`pgvisor-dashboard`)
+
+| Variable | Description | Default |
+|---|---|---|
+| `PGVISOR_SIDECAR_URLS` | Comma-separated sidecar `/api` base URLs | `http://127.0.0.1:8081` |
+| `PGVISOR_DASHBOARD_LISTEN` | Dashboard HTTP listen address | `0.0.0.0:8080` |
+| `PGVISOR_CLUSTER_ID` | Display cluster identifier for SSR views | `pgvisor-primary` |
+
+---
+
+## Sidecar `/api` Contract (Dashboard & Future CLI)
+
+Both `pgvisor-dashboard` and future CLI clients talk directly to `pgvisor-sidecar` `/api/*` (`PGVISOR_API_PORT`, default `8081`):
+
+1. **Discovery / Connection String**: Clients take a comma-separated list of sidecar API URLs (`PGVISOR_SIDECAR_URLS`).
+2. **Authentication**:
+   - `POST /api/auth/login` with `{"username": "...", "password": "..."}`. Returns `403 Forbidden` if username is not in `PGVISOR_SUPERUSER`, `401 Unauthorized` if password fails SCRAM-SHA-256 / MD5 verification against PostgreSQL, or `200 OK` with `{"token", "username", "expires_at"}` (plus `Set-Cookie: pgvisor_token=...`).
+   - Subsequent requests pass `Authorization: Bearer <token>` (checked via `GET /api/auth/me`).
+3. **Leader Discovery (`GET /api/cluster/members`)**: Returns `{"leader_url": "...", "members": [{"node_id", "api_url", "role", "health", "is_self"}]}` so clients cache the active leader URL and fail over across listed sidecars.
+4. **`NotLeader` Retry Rule**:
+   - Read calls (`GET`/`HEAD`, read-only SQL) can target any healthy sidecar.
+   - Cluster-mutating requests must reach the leader. If sent to a standby, the sidecar returns `409 Conflict` with `{"status": "not_leader", "leader_url": "..."}`. Clients update their cached leader URL (or re-query `/api/cluster/members`) and retry once against the leader.
 
 ---
 
@@ -89,12 +116,12 @@ Cluster configuration is managed via environment variables (see `examples/.env.e
 cargo check --workspace
 
 # Run Rust unit tests
-cargo test --workspace
+cargo nextest run --test-threads 1 --fail-fast
 
 # Run specific binary locally
-cargo run -p pgvisor-proxy
-cargo run -p pgvisor-dashboard
 cargo run -p pgvisor-sidecar
+cargo run -p pgvisor-proxy
+PGVISOR_SIDECAR_URLS=http://127.0.0.1:8081 cargo run -p pgvisor-dashboard
 ```
 
 ### Running Integration Tests
@@ -154,9 +181,9 @@ For debugging, bug reproduction, and inspecting backup metadata:
 pgvisor/
 ├── crates/
 │   ├── pgvisor-core/       # Shared types, protocol codec, Raft storage, backup
-│   ├── pgvisor-proxy/      # L7 wire protocol proxy & connection pooler
-│   ├── pgvisor-sidecar/    # PID 1 supervisor, Raft node, backup worker
-│   └── pgvisor-dashboard/  # Axum + Askama web UI & REST API
+│   ├── pgvisor-proxy/      # SQL-only L7 wire protocol proxy & connection pooler
+│   ├── pgvisor-sidecar/    # PID 1 supervisor, /control (:8080), /api (:8081), backup worker
+│   └── pgvisor-dashboard/  # Standalone Axum + Askama web UI & SidecarClient
 ├── examples/               # User / consumer deployment configuration
 │   ├── docker-compose.yml  # 3 nodes HA cluster compose template
 │   ├── .env.example        # Environment variable template for user deployment
