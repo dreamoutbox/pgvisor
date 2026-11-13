@@ -12,12 +12,12 @@ use tokio::sync::RwLock;
 use tracing::error;
 
 use super::state::DashboardState;
-use crate::models::{
+use crate::templates::BackupsTemplate;
+use pgvisor_core::api::{
     format_bytes, BackupItemView, BackupOverviewSummary, BestBackupQuery, BestBackupResponse,
     CreateBackupRequest, PitrWindowResponse, QuickRestoreRequest, QuickRestoreResponse,
     RestoreBackupRequest,
 };
-use crate::templates::BackupsTemplate;
 
 /// Helper to parse a target recovery timestamp flexibly.
 ///

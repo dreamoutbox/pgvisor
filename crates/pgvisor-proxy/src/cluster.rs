@@ -2,12 +2,12 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use pgvisor_core::audit::{AuditEventKind, AuditLog};
-use pgvisor_dashboard::handlers::ClusterService;
-use pgvisor_dashboard::models::{
+use pgvisor_core::api::{
     NodeActionResponse, NodeConfigResponse, NodeConfigType, NodeLifecycleAction,
     NodeLogsResponse, SwitchoverResponse,
 };
+use pgvisor_core::audit::{AuditEventKind, AuditLog};
+use pgvisor_dashboard::handlers::ClusterService;
 
 use crate::pool::ConnectionPool;
 

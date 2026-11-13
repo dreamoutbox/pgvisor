@@ -6,7 +6,7 @@ use axum::Json;
 use tokio::sync::RwLock;
 
 use crate::handlers::DashboardState;
-use crate::models::{
+use pgvisor_core::api::{
     BackupMetrics, ClusterMetricsSnapshot, NodeMetricRole, NodeMetrics, ProxyMetrics,
 };
 

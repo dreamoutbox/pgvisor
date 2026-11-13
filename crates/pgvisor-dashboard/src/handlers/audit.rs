@@ -9,8 +9,8 @@ use pgvisor_core::audit::AuditEventKind;
 use serde::Deserialize;
 
 use super::state::DashboardState;
-use crate::models::{AuditEventView, AuditListResponse, AuditOverviewStats};
 use crate::templates::{AuditTemplate, PageItem};
+use pgvisor_core::api::{AuditEventView, AuditListResponse, AuditOverviewStats};
 
 /// Query parameters for listing and searching audit events.
 #[derive(Deserialize, Default)]

@@ -1,10 +1,10 @@
 use std::time::Instant;
 
 use bytes::BytesMut;
+use pgvisor_core::api::SqlQueryResult;
 use pgvisor_core::protocol::message::{BackendMessage, FrontendMessage};
+use pgvisor_core::sql_guard::SqlSecurityGuard;
 use pgvisor_dashboard::handlers::SqlExecutor;
-use pgvisor_dashboard::models::SqlQueryResult;
-use pgvisor_dashboard::security::SqlSecurityGuard;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::warn;
 

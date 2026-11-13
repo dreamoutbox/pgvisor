@@ -49,13 +49,13 @@ flowchart LR
 
 ---
 
-### Phase 1: Shared API types and SQL guard in `pgvisor-core` [STATUS: TODO]
+### Phase 1: Shared API types and SQL guard in `pgvisor-core` [STATUS: DONE]
 - Goal: The API contract and the SQL guard live in a crate that the sidecar, dashboard, proxy and future CLI can all depend on.
 - Tasks:
-  - [ ] Create `pgvisor-core/src/api/`, one type per file. Move the DTOs from `pgvisor-dashboard/src/models.rs` into it: `ClusterOverview`, `NodeSummary`, `NodeRole`, `NodeHealthState`, SQL/table/backup/user models, `PgRole`, `TablePrivilege`, `TablePrivilegeKind`.
-  - [ ] Move `SqlSecurityGuard` (`pgvisor-dashboard/src/security.rs`) to `pgvisor-core/src/sql_guard/`. Leave the admin-token helpers in the dashboard for now.
-  - [ ] Update imports in `pgvisor-dashboard` and `pgvisor-proxy` (`executor.rs` uses `strip_comments`). No behavior change.
-  - [ ] Move the existing unit tests with their types (`*_test.rs`).
+  - [x] Create `pgvisor-core/src/api/`, one type per file. Move the DTOs from `pgvisor-dashboard/src/models.rs` into it: `ClusterOverview`, `NodeSummary`, `NodeRole`, `NodeHealthState`, SQL/table/backup/user models, `PgRole`, `TablePrivilege`, `TablePrivilegeKind`.
+  - [x] Move `SqlSecurityGuard` (`pgvisor-dashboard/src/security.rs`) to `pgvisor-core/src/sql_guard/`. Leave the admin-token helpers in the dashboard for now.
+  - [x] Update imports in `pgvisor-dashboard` and `pgvisor-proxy` (`executor.rs` uses `strip_comments`). No behavior change.
+  - [x] Move the existing unit tests with their types (`*_test.rs`).
 - Done when: `cargo build --workspace` and `cargo nextest run --test-threads 1 --fail-fast` pass, and the dashboard renders as before.
 
 ### Phase 2: Shared Postgres simple-query client in `pgvisor-core` [STATUS: TODO]

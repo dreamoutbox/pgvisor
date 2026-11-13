@@ -11,12 +11,12 @@ use serde::Deserialize;
 use tracing::{error, info, warn};
 
 use super::state::DashboardState;
-use crate::models::{
+use crate::templates::TablesTemplate;
+use pgvisor_core::api::{
     ColumnInfo, DeleteRowRequest, RowMutationResponse, SqlQueryError, SqlQueryRequest,
     SqlQueryResult, TableDataResponse, TableSummary, UpdateRowRequest,
 };
-use crate::security::SecurityError;
-use crate::templates::TablesTemplate;
+use pgvisor_core::sql_guard::SecurityError;
 
 /// Validate an SQL identifier to ensure it strictly conforms to PostgreSQL standard naming
 /// (starts with alphabetic char or underscore, alphanumeric/underscore, <= 63 chars).

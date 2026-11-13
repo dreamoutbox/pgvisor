@@ -1,6 +1,5 @@
 pub mod handlers;
 pub mod metrics;
-pub mod models;
 pub mod security;
 pub mod templates;
 
@@ -23,7 +22,7 @@ use crate::handlers::{
     get_node_inspect_page, get_nodes, get_overview, get_sql_console, get_tables_page, get_users_page, post_login,
     DashboardState,
 };
-use crate::security::SqlSecurityGuard;
+use crate::security::AdminTokenGuard;
 
 /// Authentication middleware enforcing PGVISOR_ADMIN_TOKEN when configured.
 pub async fn auth_middleware(
@@ -43,7 +42,7 @@ pub async fn auth_middleware(
     }
 
     // Check token from headers (Authorization Bearer, X-Admin-Token, or Cookie)
-    if let Some(token) = SqlSecurityGuard::extract_token_from_headers(req.headers()) {
+    if let Some(token) = AdminTokenGuard::extract_token_from_headers(req.headers()) {
         if token.trim() == expected_token.trim() {
             return next.run(req).await;
         }
@@ -216,7 +215,7 @@ mod tests {
 
         // 5b. Test POST /api/sql with read-only guard rejecting DROP TABLE
         let mut ro_state_inner = DashboardState::new("test-cluster", None);
-        ro_state_inner.security_guard = Arc::new(crate::security::SqlSecurityGuard::new_read_only(
+        ro_state_inner.security_guard = Arc::new(pgvisor_core::sql_guard::SqlSecurityGuard::new_read_only(
             std::time::Duration::from_secs(5),
             100,
         ));
@@ -1030,7 +1029,7 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
             .await
             .unwrap();
-        let snap: crate::models::ClusterMetricsSnapshot = serde_json::from_slice(&body).unwrap();
+        let snap: pgvisor_core::api::ClusterMetricsSnapshot = serde_json::from_slice(&body).unwrap();
         assert_eq!(snap.nodes.len(), 3);
         assert!(snap.nodes[0].disk_used_bytes > 0);
 
@@ -1044,7 +1043,7 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
             .await
             .unwrap();
-        let hist: Vec<crate::models::ClusterMetricsSnapshot> =
+        let hist: Vec<pgvisor_core::api::ClusterMetricsSnapshot> =
             serde_json::from_slice(&body).unwrap();
         assert_eq!(hist.len(), 60);
 
@@ -1094,7 +1093,7 @@ mod tests {
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
-        let logs: crate::models::NodeLogsResponse = serde_json::from_slice(&body).unwrap();
+        let logs: pgvisor_core::api::NodeLogsResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(logs.node_id, 1);
         assert_eq!(logs.entries.len(), 2);
 
@@ -1106,7 +1105,7 @@ mod tests {
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
-        let cfg: crate::models::NodeConfigResponse = serde_json::from_slice(&body).unwrap();
+        let cfg: pgvisor_core::api::NodeConfigResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(cfg.filename, "postgresql.conf");
         assert_eq!(cfg.path, "/var/lib/postgresql/data/postgresql.conf");
         assert!(cfg.content.contains("listen_addresses"));
@@ -1168,7 +1167,7 @@ mod tests {
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
-        let mutation: crate::models::RowMutationResponse = serde_json::from_slice(&body).unwrap();
+        let mutation: pgvisor_core::api::RowMutationResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(mutation.status, "ok");
         assert_eq!(mutation.affected_rows, 1);
 
@@ -1184,7 +1183,7 @@ mod tests {
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
-        let mutation: crate::models::RowMutationResponse = serde_json::from_slice(&body).unwrap();
+        let mutation: pgvisor_core::api::RowMutationResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(mutation.status, "ok");
         assert_eq!(mutation.affected_rows, 1);
 

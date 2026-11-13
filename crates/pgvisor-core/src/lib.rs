@@ -1,3 +1,4 @@
+pub mod api;
 pub mod audit;
 pub mod auth;
 pub mod backup;
@@ -7,6 +8,7 @@ pub mod metrics;
 pub mod node;
 pub mod protocol;
 pub mod raft;
+pub mod sql_guard;
 pub mod storage;
 pub mod tls;
 

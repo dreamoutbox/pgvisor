@@ -10,12 +10,12 @@ use tokio::sync::RwLock;
 use tracing::{error, info};
 
 use super::state::DashboardState;
-use crate::models::{
+use crate::templates::{NodeInspectTemplate, NodesTemplate, OverviewTemplate};
+use pgvisor_core::api::{
     ClusterOverview, LogLevel, NodeActionRequest, NodeActionResponse, NodeConfigResponse,
     NodeConfigType, NodeHealthState, NodeLifecycleAction, NodeLogEntry, NodeLogsResponse,
     NodeRole, NodeSummary, SwitchoverRequest, SwitchoverResponse,
 };
-use crate::templates::{NodeInspectTemplate, NodesTemplate, OverviewTemplate};
 
 /// Abstraction for managing cluster lifecycle, node operations, and leader switchover.
 #[async_trait::async_trait]

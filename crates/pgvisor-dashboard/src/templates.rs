@@ -1,4 +1,4 @@
-use crate::models::{
+use pgvisor_core::api::{
     AuditEventView, AuditOverviewStats, BackupItemView, BackupOverviewSummary, ClusterOverview,
     ColumnInfo, NodeHealthState, NodeRole, NodeSummary, PgRole, TablePrivilege, TableSummary,
 };

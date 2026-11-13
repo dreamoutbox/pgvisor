@@ -9,7 +9,7 @@ use serde::Deserialize;
 use tracing::error;
 
 use super::state::DashboardState;
-use crate::security::SqlSecurityGuard;
+use crate::security::AdminTokenGuard;
 use crate::templates::LoginTemplate;
 
 #[derive(Debug, Deserialize)]
@@ -28,7 +28,7 @@ pub async fn get_login_page(
     };
 
     // If already authenticated via cookie or header, redirect directly to /
-    if let Some(token) = SqlSecurityGuard::extract_token_from_headers(&headers) {
+    if let Some(token) = AdminTokenGuard::extract_token_from_headers(&headers) {
         if token == expected_token {
             return Redirect::to("/").into_response();
         }

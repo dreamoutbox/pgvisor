@@ -8,8 +8,8 @@ use super::cluster::{ClusterService, StandaloneClusterService};
 use super::sql::{SqlExecutor, StandaloneSqlExecutor};
 use super::users::{StandaloneUserService, UserService};
 use crate::metrics::{MetricsService, StandaloneMetricsService};
-use crate::models::{ClusterOverview, NodeHealthState, NodeRole, NodeSummary};
-use crate::security::SqlSecurityGuard;
+use pgvisor_core::api::{ClusterOverview, NodeHealthState, NodeRole, NodeSummary};
+use pgvisor_core::sql_guard::SqlSecurityGuard;
 
 /// Shared application state for dashboard HTTP handlers.
 #[derive(Clone)]

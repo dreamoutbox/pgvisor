@@ -3,11 +3,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use pgvisor_core::api::{ClusterOverview, NodeRole};
 use pgvisor_core::metrics::{
     BackupMetrics, ClusterMetricsSnapshot, NodeMetricRole, NodeMetrics, ProxyMetrics,
 };
 use pgvisor_dashboard::handlers::{BackupService, MetricsService};
-use pgvisor_dashboard::models::{ClusterOverview, NodeRole};
 
 /// Thread-safe counters tracking query routing throughput across the proxy and backends.
 #[derive(Debug, Clone, Default)]

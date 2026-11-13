@@ -12,11 +12,11 @@ use tracing::error;
 
 use super::sql::{api_list_tables, SqlExecutor};
 use super::state::DashboardState;
-use crate::models::{
+use crate::templates::UsersTemplate;
+use pgvisor_core::api::{
     AlterRoleRequest, CreateRoleRequest, PgRole, RoleMembershipRequest, TablePrivilege,
     TablePrivilegeKind, TablePrivilegeRequest,
 };
-use crate::templates::UsersTemplate;
 
 /// Abstraction for managing database roles and permissions.
 #[async_trait::async_trait]
