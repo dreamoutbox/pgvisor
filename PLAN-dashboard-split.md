@@ -143,16 +143,16 @@ flowchart LR
   - [x] Unit-test the activity sampler: map `pg_stat_database` rows to read/write counts, sum across nodes, and handle a counter reset.
 - Done when: nextest passes, and each read route returns the same data as the proxy dashboard endpoint in compose. The proxy dashboard keeps working unchanged.
 
-### Phase 6: Port cluster, node and user management actions [STATUS: TODO]
+### Phase 6: Port cluster, node and user management actions [STATUS: DONE]
 - Goal: Cluster operations run on the leader sidecar, superusers only.
 - Tasks:
-  - [ ] Move the `ProxyClusterService` orchestration (`pgvisor-proxy/src/cluster.rs`) into `api/cluster_actions.rs`, using `PGVISOR_PEERS` instead of the proxy's target list:
+  - [x] Move the `ProxyClusterService` orchestration (`pgvisor-proxy/src/cluster.rs`) into `api/cluster_actions.rs`, using `PGVISOR_PEERS` instead of the proxy's target list:
     - node start/stop/restart/action
     - `/api/cluster/switchover`
     - standby repoint
-  - [ ] Port the user management writes (create/alter/drop, memberships, privileges) and table row update/delete.
-  - [ ] Apply `require_leader` to every route above (superuser access is already enforced by `api_auth_middleware`). Record each action in `AuditLog`, with the actor set to the logged-in username.
-  - [ ] Tests: 403 for a non-superuser token, 409 on a standby, and switchover orchestration against mock peers.
+  - [x] Port the user management writes (create/alter/drop, memberships, privileges) and table row update/delete.
+  - [x] Apply `require_leader` to every route above (superuser access is already enforced by `api_auth_middleware`). Record each action in `AuditLog`, with the actor set to the logged-in username.
+  - [x] Tests: 403 for a non-superuser token, 409 on a standby, and switchover orchestration against mock peers.
 - Done when: nextest passes, and in compose a switchover through the sidecar API succeeds and the proxy follows the new leader.
 
 ### Phase 7: Port backup/restore and the restore signal for the proxy [STATUS: TODO]

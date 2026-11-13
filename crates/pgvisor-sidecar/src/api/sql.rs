@@ -1,10 +1,14 @@
+use std::collections::HashMap;
+
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use pgvisor_core::api::{
-    ColumnInfo, SqlQueryError, SqlQueryRequest, TableDataResponse, TableSummary,
+    ColumnInfo, DeleteRowRequest, RowMutationResponse, SqlQueryError, SqlQueryRequest,
+    SqlQueryResult, TableDataResponse, TableSummary, UpdateRowRequest,
 };
+use pgvisor_core::audit::AuditEventKind;
 use pgvisor_core::sql_guard::SecurityError;
 use serde::Deserialize;
 use tracing::{error, info, warn};
@@ -324,4 +328,215 @@ pub async fn execute_sql(
             )
         }
     }
+}
+
+fn format_sql_literal(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "NULL".to_string(),
+        serde_json::Value::Bool(b) => {
+            if *b {
+                "TRUE".to_string()
+            } else {
+                "FALSE".to_string()
+            }
+        }
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => format!("'{}'", s.replace('\'', "''")),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            let json_str = serde_json::to_string(value).unwrap_or_default();
+            format!("'{}'", json_str.replace('\'', "''"))
+        }
+    }
+}
+
+fn build_pk_where_clauses(
+    table: &str,
+    table_pks: &[String],
+    provided_pks: &HashMap<String, serde_json::Value>,
+) -> Result<Vec<String>, ApiError> {
+    if provided_pks.is_empty() {
+        return Err(ApiError::BadRequest(
+            "Primary keys must be provided to identify row".into(),
+        ));
+    }
+    if table_pks.is_empty() {
+        return Err(ApiError::BadRequest(format!(
+            "Table '{table}' has no primary key defined; row mutation is disabled"
+        )));
+    }
+    for pk in table_pks {
+        if !provided_pks.contains_key(pk) {
+            return Err(ApiError::BadRequest(format!(
+                "Missing required primary key column: '{pk}'"
+            )));
+        }
+    }
+
+    let mut clauses = Vec::with_capacity(table_pks.len());
+    for (col, val) in provided_pks {
+        if !is_valid_identifier(col) {
+            return Err(ApiError::BadRequest(format!(
+                "Invalid primary key column identifier: '{col}'"
+            )));
+        }
+        if !table_pks.iter().any(|p| p.eq_ignore_ascii_case(col)) {
+            return Err(ApiError::BadRequest(format!(
+                "Column '{col}' is not part of the primary key for '{table}'"
+            )));
+        }
+        if val.is_null() {
+            return Err(ApiError::BadRequest(format!(
+                "Primary key column '{col}' value cannot be null"
+            )));
+        }
+        clauses.push(format!("\"{col}\" = {}", format_sql_literal(val)));
+    }
+    Ok(clauses)
+}
+
+fn parse_affected_rows(res: &SqlQueryResult, command_prefix: &str) -> usize {
+    res.rows
+        .first()
+        .and_then(|r| r.first())
+        .and_then(|s| s.strip_prefix(command_prefix))
+        .and_then(|rest| rest.trim().parse::<usize>().ok())
+        .unwrap_or(1)
+}
+
+/// Handler for `DELETE /api/tables/:table/rows` (leader-only).
+pub async fn delete_table_row(
+    State(state): State<ApiState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(table): Path<String>,
+    Query(params): Query<TablesQuery>,
+    Json(payload): Json<DeleteRowRequest>,
+) -> Result<Json<RowMutationResponse>, ApiError> {
+    require_leader(&state).await?;
+    if !is_valid_identifier(&table) {
+        return Err(ApiError::BadRequest(format!(
+            "Invalid table name: '{table}'"
+        )));
+    }
+    validate_optional_db(params.db.as_deref())?;
+
+    let pks = fetch_table_primary_keys(&state, &user.username, &table, params.db.as_deref()).await;
+    let where_clauses = build_pk_where_clauses(&table, &pks, &payload.primary_keys)?;
+
+    let sql = format!(
+        "DELETE FROM \"{table}\" WHERE {};",
+        where_clauses.join(" AND ")
+    );
+    let res = state
+        .sql_runner
+        .execute_as_user(&user.username, params.db.as_deref(), &sql, 1)
+        .await?;
+    let affected_rows = parse_affected_rows(&res, "DELETE ");
+
+    state
+        .audit_log
+        .append(
+            AuditEventKind::DangerousSql,
+            Some(state.sidecar.node_id),
+            Some(&state.pg_addr),
+            format!(
+                "Deleted row from table '{table}' by actor '{}' (primary keys: {:?})",
+                user.username, payload.primary_keys
+            ),
+            Some(
+                serde_json::json!({
+                    "actor": user.username,
+                    "table": table,
+                    "primary_keys": payload.primary_keys,
+                    "affected_rows": affected_rows,
+                })
+                .to_string(),
+            ),
+        )
+        .await;
+
+    Ok(Json(RowMutationResponse {
+        status: "ok".into(),
+        message: format!("Row deleted successfully from '{table}'"),
+        affected_rows,
+    }))
+}
+
+/// Handler for `PUT /api/tables/:table/rows` (leader-only).
+pub async fn update_table_row(
+    State(state): State<ApiState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(table): Path<String>,
+    Query(params): Query<TablesQuery>,
+    Json(payload): Json<UpdateRowRequest>,
+) -> Result<Json<RowMutationResponse>, ApiError> {
+    require_leader(&state).await?;
+    if !is_valid_identifier(&table) {
+        return Err(ApiError::BadRequest(format!(
+            "Invalid table name: '{table}'"
+        )));
+    }
+    validate_optional_db(params.db.as_deref())?;
+    if payload.values.is_empty() {
+        return Err(ApiError::BadRequest(
+            "No column values provided to update".into(),
+        ));
+    }
+
+    let pks = fetch_table_primary_keys(&state, &user.username, &table, params.db.as_deref()).await;
+    let where_clauses = build_pk_where_clauses(&table, &pks, &payload.primary_keys)?;
+
+    let mut set_clauses = Vec::with_capacity(payload.values.len());
+    for (col, val) in &payload.values {
+        if !is_valid_identifier(col) {
+            return Err(ApiError::BadRequest(format!(
+                "Invalid column identifier: '{col}'"
+            )));
+        }
+        if pks.iter().any(|p| p.eq_ignore_ascii_case(col)) {
+            return Err(ApiError::BadRequest(format!(
+                "Primary key column '{col}' cannot be updated directly; delete and insert instead"
+            )));
+        }
+        set_clauses.push(format!("\"{col}\" = {}", format_sql_literal(val)));
+    }
+
+    let sql = format!(
+        "UPDATE \"{table}\" SET {} WHERE {};",
+        set_clauses.join(", "),
+        where_clauses.join(" AND ")
+    );
+    let res = state
+        .sql_runner
+        .execute_as_user(&user.username, params.db.as_deref(), &sql, 1)
+        .await?;
+    let affected_rows = parse_affected_rows(&res, "UPDATE ");
+
+    state
+        .audit_log
+        .append(
+            AuditEventKind::DangerousSql,
+            Some(state.sidecar.node_id),
+            Some(&state.pg_addr),
+            format!(
+                "Updated row in table '{table}' by actor '{}' (primary keys: {:?})",
+                user.username, payload.primary_keys
+            ),
+            Some(
+                serde_json::json!({
+                    "actor": user.username,
+                    "table": table,
+                    "primary_keys": payload.primary_keys,
+                    "values": payload.values,
+                    "affected_rows": affected_rows,
+                })
+                .to_string(),
+            ),
+        )
+        .await;
+
+    Ok(Json(RowMutationResponse {
+        status: "ok".into(),
+        message: format!("Row updated successfully in '{table}'"),
+        affected_rows,
+    }))
 }

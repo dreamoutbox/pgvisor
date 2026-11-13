@@ -4,11 +4,15 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::response::IntoResponse;
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use pgvisor_core::api::{
-    AuditListResponse, ClusterMembersResponse, ClusterMetricsSnapshot, ClusterOverview, ColumnInfo,
-    LoginResponse, MeResponse, MemberHealth, NodeConfigResponse, NodeLogsResponse, NodeMetricRole,
-    NodeMetrics, NodeSummary, PgNodeActivity, PgRole, SidecarRole, SqlQueryError, SqlQueryRequest,
-    SqlQueryResult, TableDataResponse, TablePrivilege, TableSummary,
+    AlterRoleRequest, AuditListResponse, ClusterMembersResponse, ClusterMetricsSnapshot,
+    ClusterOverview, ColumnInfo, CreateRoleRequest, DeleteRowRequest, LoginResponse, MeResponse,
+    MemberHealth, NodeConfigResponse, NodeLogsResponse, NodeMetricRole, NodeMetrics, NodeSummary,
+    PgNodeActivity, PgRole, RoleMembershipRequest, RowMutationResponse, SidecarRole, SqlQueryError,
+    SqlQueryRequest, SqlQueryResult, SwitchoverRequest, SwitchoverResponse, TableDataResponse,
+    TablePrivilege, TablePrivilegeKind, TablePrivilegeRequest, TableSummary, UpdateRowRequest,
 };
 use pgvisor_core::audit::{AuditEventKind, AuditLog};
 use pgvisor_core::sql_guard::SqlSecurityGuard;
@@ -1256,4 +1260,471 @@ async fn test_user_reads_api() {
             .unwrap();
     assert_eq!(privs.len(), 1);
     assert!(privs[0].select && privs[0].insert && !privs[0].delete);
+}
+
+#[tokio::test]
+async fn test_cluster_write_routes_enforce_superuser_and_leader() {
+    let secret = "cluster-secret";
+    let (peer2_url, _peer2_role, peer2_task) =
+        spawn_mock_control_peer(2, "leader", 18082, Some(secret)).await;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let supervisor = Arc::new(PostgresSupervisor::new(temp_dir.path()));
+    let sidecar = SidecarState::new(
+        supervisor,
+        Arc::new(RwLock::new(PostgresConfig::default())),
+        None,
+        1,
+        Arc::new(RwLock::new("standby".to_string())),
+        "18.6".to_string(),
+        Arc::new(vec![peer2_url]),
+        Some(secret.to_string()),
+    )
+    .with_api_port(18081);
+
+    let api_state = ApiState::new(
+        sidecar,
+        "127.0.0.1:5432",
+        "postgres",
+        Arc::new(SuperuserAllowlist::parse(Some("postgres"), "postgres")),
+        Arc::new(SessionTokenSigner::from_cluster_secret(Some(secret))),
+        Arc::new(AuditLog::new("test-cluster", None, 100)),
+    );
+    let app = build_api_router(api_state.clone());
+
+    let (alice_token, _) = api_state.token_signer.sign("alice").unwrap();
+    let (pg_token, _) = api_state.token_signer.sign("postgres").unwrap();
+
+    // 1. Non-superuser gets 403 on write routes
+    let switchover_body = serde_json::to_vec(&SwitchoverRequest { target_node_id: 2 }).unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/cluster/switchover")
+                .header("authorization", format!("Bearer {alice_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(switchover_body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // 2. Superuser on a standby gets 409 NotLeader with leader_url
+    for (method, uri, body) in [
+        ("POST", "/api/cluster/switchover", switchover_body),
+        ("POST", "/api/nodes/2/start", Vec::new()),
+        (
+            "POST",
+            "/api/users",
+            serde_json::to_vec(&CreateRoleRequest {
+                name: "bob".into(),
+                password: Some("secret".into()),
+                login: true,
+                createdb: false,
+                createrole: false,
+                replication: false,
+                connection_limit: -1,
+            })
+            .unwrap(),
+        ),
+        (
+            "PUT",
+            "/api/tables/pgvisor_demo/rows",
+            serde_json::to_vec(&UpdateRowRequest {
+                primary_keys: HashMap::from([("id".into(), serde_json::json!(1))]),
+                values: HashMap::from([("name".into(), serde_json::json!("updated"))]),
+            })
+            .unwrap(),
+        ),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header("authorization", format!("Bearer {pg_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::CONFLICT,
+            "expected 409 on standby for {method} {uri}"
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["leader_url"], "http://127.0.0.1:18082");
+    }
+
+    peer2_task.abort();
+}
+
+async fn spawn_recording_control_peer(
+    node_id: u64,
+    initial_role: &str,
+    api_port: u16,
+) -> (
+    String,
+    Arc<Mutex<Vec<String>>>,
+    tokio::task::JoinHandle<()>,
+) {
+    let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+    let role = Arc::new(RwLock::new(initial_role.to_string()));
+    let c_promote = calls.clone();
+    let r_promote = role.clone();
+    let c_demote = calls.clone();
+    let r_demote = role.clone();
+    let c_repoint = calls.clone();
+    let r_status = role.clone();
+
+    let app = Router::new()
+        .route(
+            "/control/status",
+            get(move || {
+                let r = r_status.clone();
+                async move {
+                    let current = r.read().await.clone();
+                    Json(crate::control::StatusResponse {
+                        node_id,
+                        role: current,
+                        status: "running".into(),
+                        child_pid: 1000 + node_id as u32,
+                        pg_version: "18.6".into(),
+                        uptime_secs: 100,
+                        cpu_percent: 1.0,
+                        memory_used_bytes: 0,
+                        memory_total_bytes: 0,
+                        disk_used_bytes: 0,
+                        api_port,
+                        activity: None,
+                    })
+                }
+            }),
+        )
+        .route(
+            "/control/promote",
+            post(move || {
+                let c = c_promote.clone();
+                let r = r_promote.clone();
+                async move {
+                    *r.write().await = "leader".into();
+                    c.lock().await.push("promote".into());
+                    Json(serde_json::json!({ "status": "ok" }))
+                }
+            }),
+        )
+        .route(
+            "/control/demote",
+            post(move || {
+                let c = c_demote.clone();
+                let r = r_demote.clone();
+                async move {
+                    *r.write().await = "fenced".into();
+                    c.lock().await.push("demote".into());
+                    Json(serde_json::json!({ "status": "ok" }))
+                }
+            }),
+        )
+        .route(
+            "/control/repoint",
+            post(move |Json(payload): Json<serde_json::Value>| {
+                let c = c_repoint.clone();
+                async move {
+                    let conn = payload
+                        .get("primary_conninfo")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    c.lock().await.push(format!("repoint:{conn}"));
+                    Json(serde_json::json!({ "status": "ok" }))
+                }
+            }),
+        );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (format!("http://127.0.0.1:{}", addr.port()), calls, handle)
+}
+
+#[tokio::test]
+async fn test_switchover_orchestration_against_mock_peers() {
+    let (peer2_url, peer2_calls, peer2_task) =
+        spawn_recording_control_peer(2, "standby", 18082).await;
+    let (peer3_url, peer3_calls, peer3_task) =
+        spawn_recording_control_peer(3, "standby", 18083).await;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let supervisor = Arc::new(PostgresSupervisor::new(temp_dir.path()));
+    let local_role = Arc::new(RwLock::new("leader".to_string()));
+    let sidecar = SidecarState::new(
+        supervisor,
+        Arc::new(RwLock::new(PostgresConfig::default())),
+        None,
+        1,
+        local_role.clone(),
+        "18.6".to_string(),
+        Arc::new(vec![peer2_url, peer3_url]),
+        None,
+    )
+    .with_api_port(18081);
+
+    let audit_log = Arc::new(AuditLog::new("test-cluster", None, 100));
+    let api_state = ApiState::new(
+        sidecar,
+        "127.0.0.1:5432",
+        "postgres",
+        Arc::new(SuperuserAllowlist::parse(Some("postgres,bob"), "postgres")),
+        Arc::new(SessionTokenSigner::from_cluster_secret(None)),
+        audit_log.clone(),
+    );
+
+    let app = build_api_router(api_state.clone());
+    let (bob_token, _) = api_state.token_signer.sign("bob").unwrap();
+
+    let body = serde_json::to_vec(&SwitchoverRequest { target_node_id: 2 }).unwrap();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/cluster/switchover")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let sw: SwitchoverResponse =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap())
+            .unwrap();
+    assert_eq!(sw.previous_leader_id, Some(1));
+    assert_eq!(sw.new_leader_id, 2);
+
+    // Local node 1 was demoted; peer 2 was promoted; peer 3 was repointed to 127.0.0.1
+    assert_eq!(*local_role.read().await, "fenced");
+    assert_eq!(&*peer2_calls.lock().await, &vec!["promote".to_string()]);
+    let p3 = peer3_calls.lock().await;
+    assert_eq!(p3.len(), 1);
+    assert!(p3[0].starts_with("repoint:host=127.0.0.1 port=5432"));
+
+    // Audit log recorded actor "bob"
+    let (events, total) = audit_log.list(10, 0, Some(AuditEventKind::ElectionResult), None).await;
+    assert_eq!(total, 1);
+    assert!(events[0].detail.contains("bob"));
+
+    peer2_task.abort();
+    peer3_task.abort();
+}
+
+#[tokio::test]
+async fn test_user_writes_and_row_mutations_audit_actor() {
+    let runner = Arc::new(RecordingSqlRunner::default());
+    let audit_log = Arc::new(AuditLog::new("test-cluster", None, 100));
+    let api_state = make_test_api_state(Some("postgres,bob"), Some("cluster-secret"))
+        .with_sql_runner(runner.clone());
+    let api_state = ApiState {
+        audit_log: audit_log.clone(),
+        ..api_state
+    };
+    let app = build_api_router(api_state.clone());
+    let (bob_token, _) = api_state.token_signer.sign("bob").unwrap();
+
+    // 1. Create role
+    let create_req = serde_json::to_vec(&CreateRoleRequest {
+        name: "app_writer".into(),
+        password: Some("s3cr3t".into()),
+        login: true,
+        createdb: false,
+        createrole: false,
+        replication: false,
+        connection_limit: 15,
+    })
+    .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/users")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(create_req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 2. Alter role
+    let alter_req = serde_json::to_vec(&AlterRoleRequest {
+        login: Some(false),
+        createdb: Some(true),
+        createrole: None,
+        replication: None,
+        connection_limit: Some(5),
+        password: None,
+    })
+    .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/users/app_writer")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(alter_req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 3. Grant & revoke membership
+    let mem_req = serde_json::to_vec(&RoleMembershipRequest {
+        member_role: "app_writer".into(),
+        group_role: "readers".into(),
+    })
+    .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/users/app_writer/memberships")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(mem_req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/users/app_writer/memberships/readers")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 4. Table privilege
+    let priv_req = serde_json::to_vec(&TablePrivilegeRequest {
+        table_name: "pgvisor_demo".into(),
+        schema: Some("public".into()),
+        privilege: TablePrivilegeKind::Insert,
+        grant: true,
+    })
+    .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/users/app_writer/privileges")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(priv_req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 5. Update & delete row
+    let update_req = serde_json::to_vec(&UpdateRowRequest {
+        primary_keys: HashMap::from([("id".into(), serde_json::json!(1))]),
+        values: HashMap::from([("name".into(), serde_json::json!("beta"))]),
+    })
+    .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/tables/pgvisor_demo/rows")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(update_req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let mut_resp: RowMutationResponse =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap())
+            .unwrap();
+    assert_eq!(mut_resp.status, "ok");
+
+    let del_req = serde_json::to_vec(&DeleteRowRequest {
+        primary_keys: HashMap::from([("id".into(), serde_json::json!(1))]),
+    })
+    .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/tables/pgvisor_demo/rows")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(del_req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 6. Drop role
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/users/app_writer")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Verify all queries ran as "bob" and audit log recorded every action with actor "bob"
+    let calls = runner.calls.lock().await;
+    assert!(calls.iter().any(|(u, _, sql)| u == "bob" && sql.contains("CREATE ROLE \"app_writer\"")));
+    assert!(calls.iter().any(|(u, _, sql)| u == "bob" && sql.contains("UPDATE \"pgvisor_demo\"")));
+    assert!(calls.iter().any(|(u, _, sql)| u == "bob" && sql.contains("DELETE FROM \"pgvisor_demo\"")));
+    assert!(calls.iter().any(|(u, _, sql)| u == "bob" && sql.contains("DROP ROLE \"app_writer\"")));
+
+    let (user_audits, _) = audit_log
+        .list(20, 0, Some(AuditEventKind::UserPermission), None)
+        .await;
+    assert_eq!(user_audits.len(), 6);
+    assert!(user_audits.iter().all(|e| e.detail.contains("bob")));
+
+    let (row_audits, _) = audit_log
+        .list(20, 0, Some(AuditEventKind::DangerousSql), None)
+        .await;
+    assert_eq!(row_audits.len(), 2);
+    assert!(row_audits.iter().all(|e| e.detail.contains("bob")));
 }
