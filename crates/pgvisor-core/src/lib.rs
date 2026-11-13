@@ -6,6 +6,7 @@ pub mod error;
 pub mod logging;
 pub mod metrics;
 pub mod node;
+pub mod pg_client;
 pub mod protocol;
 pub mod raft;
 pub mod sql_guard;

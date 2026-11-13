@@ -1,15 +1,9 @@
-use std::time::Instant;
-
-use bytes::BytesMut;
 use pgvisor_core::api::SqlQueryResult;
-use pgvisor_core::protocol::message::{BackendMessage, FrontendMessage};
+use pgvisor_core::pg_client::{execute_simple_query_on_stream, PgClientError};
 use pgvisor_core::sql_guard::SqlSecurityGuard;
 use pgvisor_dashboard::handlers::SqlExecutor;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tracing::warn;
 
 use crate::pool::{BackendRole, ConnectionPool, FailoverConfig};
-use crate::session::extract_backend_frame;
 
 /// Determines if a SQL query requires the Raft Leader connection (mutations, DDL, multi-statements, transactions).
 fn is_leader_required(sql: &str) -> bool {
@@ -86,8 +80,6 @@ impl ProxySqlExecutor {
         role: BackendRole,
         database: Option<&str>,
     ) -> Result<SqlQueryResult, String> {
-        let start = Instant::now();
-
         // Acquire a connection from the pool for the required role and database
         let mut backend = self
             .pool
@@ -95,100 +87,20 @@ impl ProxySqlExecutor {
             .await
             .map_err(|e| format!("Failed to acquire backend connection: {}", e))?;
 
-        // Format and send Query message
-        let mut query_buf = BytesMut::new();
-        FrontendMessage::Query(sql.to_string()).encode(&mut query_buf);
+        let result = execute_simple_query_on_stream(&mut backend.stream, sql, max_rows).await;
 
-        if let Err(e) = backend.stream.write_all(&query_buf).await {
-            return Err(format!("Failed to write SQL query to backend: {}", e));
-        }
-
-        let mut read_buf = BytesMut::with_capacity(4096);
-        let mut columns = Vec::new();
-        let mut rows = Vec::new();
-        let mut command_tags = Vec::new();
-        let mut error_msg: Option<String> = None;
-        let mut truncated = false;
-
-        loop {
-            let n = backend
-                .stream
-                .read_buf(&mut read_buf)
-                .await
-                .map_err(|e| format!("Error reading backend response: {}", e))?;
-
-            if n == 0 {
-                return Err("Backend connection closed unexpectedly during query".into());
+        match result {
+            Ok(query_result) => {
+                self.pool.release(backend).await;
+                Ok(query_result)
             }
-
-            let mut finished = false;
-            while let Some((_tag, mut frame)) = extract_backend_frame(&mut read_buf) {
-                match BackendMessage::decode(&mut frame) {
-                    Ok(Some(msg)) => match msg {
-                        BackendMessage::RowDescription { columns: cols } => {
-                            columns = cols;
-                            rows.clear();
-                        }
-                        BackendMessage::DataRow { values } => {
-                            if rows.len() < max_rows {
-                                rows.push(
-                                    values
-                                        .into_iter()
-                                        .map(|v| v.unwrap_or_else(|| "NULL".to_string()))
-                                        .collect(),
-                                );
-                            } else {
-                                truncated = true;
-                            }
-                        }
-                        BackendMessage::CommandComplete { tag } => {
-                            command_tags.push(tag);
-                        }
-                        BackendMessage::ErrorResponse { message } => {
-                            error_msg = Some(message);
-                        }
-                        BackendMessage::ReadyForQuery { .. } => {
-                            finished = true;
-                            break;
-                        }
-                        _ => {}
-                    },
-                    Ok(None) => {}
-                    Err(e) => {
-                        warn!(?e, "Error decoding backend message in ProxySqlExecutor");
-                    }
-                }
+            Err(PgClientError::SqlError(err)) => {
+                // Backend returned ReadyForQuery after ErrorResponse; connection is still healthy.
+                self.pool.release(backend).await;
+                Err(err)
             }
-
-            if finished {
-                break;
-            }
+            Err(err) => Err(err.to_string()),
         }
-
-        // Return connection back to the idle pool
-        self.pool.release(backend).await;
-
-        if let Some(err) = error_msg {
-            return Err(err);
-        }
-
-        // For DDL or DML statements without returned rows (e.g. CREATE, DROP, INSERT),
-        // synthesize status rows from the command completion tags.
-        if columns.is_empty() && !command_tags.is_empty() {
-            columns = vec!["status".into()];
-            rows = command_tags.into_iter().map(|tag| vec![tag]).collect();
-        }
-
-        let row_count = rows.len();
-        let elapsed = start.elapsed().as_millis() as u64;
-
-        Ok(SqlQueryResult {
-            columns,
-            rows,
-            execution_time_ms: elapsed,
-            row_count,
-            truncated,
-        })
     }
 }
 

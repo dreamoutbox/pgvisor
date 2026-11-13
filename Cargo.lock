@@ -1531,6 +1531,8 @@ dependencies = [
  "openraft",
  "pgwire",
  "rcgen",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "sha2",
@@ -1539,6 +1541,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-rustls",
  "tokio-util",
  "tracing",
 ]

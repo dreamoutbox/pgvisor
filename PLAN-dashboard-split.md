@@ -58,12 +58,12 @@ flowchart LR
   - [x] Move the existing unit tests with their types (`*_test.rs`).
 - Done when: `cargo build --workspace` and `cargo nextest run --test-threads 1 --fail-fast` pass, and the dashboard renders as before.
 
-### Phase 2: Shared Postgres simple-query client in `pgvisor-core` [STATUS: TODO]
+### Phase 2: Shared Postgres simple-query client in `pgvisor-core` [STATUS: DONE]
 - Goal: The sidecar can run SQL against its local Postgres without copying proxy code.
 - Tasks:
-  - [ ] Move the connection setup (`pool.rs::connect` / `connect_with_tls`) and the simple-query and result decoding (`executor.rs`) into `pgvisor-core/src/pg_client/`. It should take user and database parameters.
-  - [ ] Point `pgvisor-proxy` `pool.rs` and `executor.rs` at the shared client. Remove the duplicated code.
-  - [ ] Unit-test the result decoding against recorded backend frames.
+  - [x] Move the connection setup (`pool.rs::connect` / `connect_with_tls`) and the simple-query and result decoding (`executor.rs`) into `pgvisor-core/src/pg_client/`. It should take user and database parameters.
+  - [x] Point `pgvisor-proxy` `pool.rs` and `executor.rs` at the shared client. Remove the duplicated code.
+  - [x] Unit-test the result decoding against recorded backend frames.
 - Done when: the workspace builds, nextest passes, and `./test.sh` routing/transaction tests still pass.
 
 ### Phase 3: Sidecar API skeleton and Postgres-user login [STATUS: TODO]

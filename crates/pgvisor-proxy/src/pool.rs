@@ -2,12 +2,8 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bytes::BytesMut;
-use pgvisor_core::protocol::message::{BackendMessage, InitialClientMessage, StartupMessage};
-use rustls_pki_types::ServerName;
+use pgvisor_core::pg_client::{PgClientError, PgConnection};
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::sync::{watch, Mutex};
 use tokio_rustls::TlsConnector;
 use tracing::{debug, info, warn};
@@ -87,100 +83,22 @@ impl PooledConnection {
         database: Option<&str>,
         tls_connector: Option<Arc<TlsConnector>>,
     ) -> Result<Self, PoolError> {
-        debug!(
-            addr,
-            ?role,
-            has_tls = tls_connector.is_some(),
-            "Opening new backend connection"
-        );
-        let mut tcp_stream = TcpStream::connect(addr).await?;
-
-        let mut stream = if let Some(connector) = tls_connector {
-            // Send SSLRequest packet to backend
-            let mut ssl_req = [0u8; 8];
-            ssl_req[0..4].copy_from_slice(&8i32.to_be_bytes());
-            ssl_req[4..8]
-                .copy_from_slice(&(pgvisor_core::protocol::SSL_REQUEST_CODE).to_be_bytes());
-            tcp_stream.write_all(&ssl_req).await?;
-
-            let mut resp = [0u8; 1];
-            tcp_stream.read_exact(&mut resp).await?;
-            if resp[0] == b'S' {
-                let host = addr.split(':').next().unwrap_or(addr);
-                let server_name = ServerName::try_from(host.to_string()).map_err(|e| {
-                    PoolError::BackendUnavailable(format!("Invalid DNS name {}: {}", host, e))
-                })?;
-                let tls_stream = connector
-                    .connect(server_name, tcp_stream)
-                    .await
-                    .map_err(|e| {
-                        PoolError::BackendUnavailable(format!(
-                            "TLS handshake failed with backend {}: {}",
-                            addr, e
-                        ))
-                    })?;
-                BackendStream::Tls(tls_stream)
-            } else {
-                return Err(PoolError::BackendUnavailable(format!(
-                    "Backend at {} does not support SSL (received '{}')",
-                    addr, resp[0] as char
-                )));
-            }
-        } else {
-            BackendStream::Plain(tcp_stream)
-        };
-
-        // 1. Send StartupMessage to backend
-        let mut startup_buf = BytesMut::new();
-        let mut params = HashMap::new();
-        let db_name = database.unwrap_or("postgres").to_string();
-        params.insert("user".to_string(), user.unwrap_or("postgres").to_string());
-        params.insert("database".to_string(), db_name.clone());
-        params.insert("client_encoding".to_string(), "UTF8".to_string());
-
-        let startup = StartupMessage {
-            protocol_version: 196608,
-            parameters: params,
-        };
-        InitialClientMessage::encode_startup(&startup, &mut startup_buf);
-        stream.write_all(&startup_buf).await?;
-
-        // 2. Consume backend authentication and status packets until ReadyForQuery ('Z')
-        let mut read_buf = BytesMut::with_capacity(4096);
-        loop {
-            let n = stream.read_buf(&mut read_buf).await?;
-            if n == 0 {
-                return Err(PoolError::BackendUnavailable(format!(
-                    "Backend at {} unexpectedly closed connection during startup handshake",
-                    addr
-                )));
-            }
-
-            while let Some(msg) = BackendMessage::decode(&mut read_buf)? {
-                match msg {
-                    BackendMessage::ReadyForQuery { .. } => {
-                        debug!(
-                            addr,
-                            "Backend startup handshake completed, ready for query execution"
-                        );
-                        return Ok(Self {
-                            stream,
-                            role,
-                            addr: addr.to_string(),
-                            database: db_name,
-                            created_at: Instant::now(),
-                        });
-                    }
-                    BackendMessage::ErrorResponse { message } => {
-                        return Err(PoolError::BackendUnavailable(format!(
-                            "Backend at {} rejected startup handshake: {}",
-                            addr, message
-                        )));
-                    }
-                    _ => {}
+        let conn = PgConnection::connect_with_tls(addr, user, database, tls_connector)
+            .await
+            .map_err(|err| match err {
+                PgClientError::Io(io_err) => PoolError::Io(io_err),
+                PgClientError::BackendUnavailable(msg) | PgClientError::SqlError(msg) => {
+                    PoolError::BackendUnavailable(msg)
                 }
-            }
-        }
+            })?;
+
+        Ok(Self {
+            stream: conn.stream,
+            role,
+            addr: conn.addr,
+            database: conn.database,
+            created_at: Instant::now(),
+        })
     }
 }
 
