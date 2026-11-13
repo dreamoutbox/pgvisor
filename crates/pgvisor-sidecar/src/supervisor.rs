@@ -32,6 +32,14 @@ pub enum SupervisorError {
     NotRunning,
 }
 
+/// Outcome of cluster data directory initialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitOutcome {
+    AlreadyInitialized,
+    ClonedStandby,
+    InitializedPrimary,
+}
+
 /// Operational state of the supervised PostgreSQL child process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessStatus {
@@ -85,11 +93,11 @@ impl PostgresSupervisor {
         &self,
         superuser: &str,
         primary_conninfo: Option<&str>,
-    ) -> Result<(), SupervisorError> {
+    ) -> Result<InitOutcome, SupervisorError> {
         let version_file = self.data_dir.join("PG_VERSION");
         if version_file.exists() {
             info!(dir = ?self.data_dir, "Existing PostgreSQL cluster detected, skipping initialization");
-            return Ok(());
+            return Ok(InitOutcome::AlreadyInitialized);
         }
 
         if let Some(conninfo) = primary_conninfo {
@@ -133,6 +141,7 @@ impl PostgresSupervisor {
                 )));
             }
             info!("pg_basebackup clone completed successfully");
+            Ok(InitOutcome::ClonedStandby)
         } else {
             info!(dir = ?self.data_dir, superuser, "Running initdb to initialize new cluster");
             let status = Command::new("initdb")
@@ -151,14 +160,13 @@ impl PostgresSupervisor {
                 )));
             }
             info!("initdb completed successfully");
+            Ok(InitOutcome::InitializedPrimary)
         }
-
-        Ok(())
     }
 
     /// Initializes data directory if PG_VERSION is absent (convenience wrapper for primaries).
     pub async fn ensure_initdb(&self, superuser: &str) -> Result<(), SupervisorError> {
-        self.ensure_initialized(superuser, None).await
+        self.ensure_initialized(superuser, None).await.map(|_| ())
     }
 
     /// Generates configurations and starts the PostgreSQL child process.

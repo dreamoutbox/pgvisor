@@ -43,6 +43,7 @@ pub async fn handle_status(State(state): State<SidecarState>) -> impl IntoRespon
         memory_used_bytes,
         memory_total_bytes,
         disk_used_bytes,
+        api_port: state.api_port,
     })
 }
 

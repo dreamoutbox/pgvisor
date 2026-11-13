@@ -1,3 +1,4 @@
+pub mod api;
 pub mod config;
 pub mod control;
 pub mod election;
@@ -14,13 +15,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
+use api::{
+    build_api_router, resolve_sidecar_ports, spawn_api_server, ApiState, SessionTokenSigner,
+    SuperuserAllowlist,
+};
 use config::{LogStatement, PostgresConfig};
 use control::{build_control_router, spawn_control_server, SidecarState};
 pub use control::{SidecarEventRecord, StatusResponse};
 use election::spawn_election_monitor;
 use logging::SidecarLogCaptureLayer;
+use pgvisor_core::audit::AuditLog;
 use pgvisor_core::backup::{BackupManager, BackupScheduleConfig};
-use supervisor::PostgresSupervisor;
+use pgvisor_core::pg_client::PgConnection;
+use supervisor::{InitOutcome, PostgresSupervisor};
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
@@ -71,6 +78,18 @@ async fn main() -> Result<()> {
         .and_then(|p| p.parse().ok())
         .unwrap_or(5432);
 
+    let control_port: u16 = env::var("PGVISOR_CONTROL_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8080);
+
+    let api_port: u16 = env::var("PGVISOR_API_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8081);
+
+    resolve_sidecar_ports(control_port, api_port)?;
+
     let node_id: u64 = env::var("PGVISOR_NODE_ID")
         .ok()
         .and_then(|id| id.parse().ok())
@@ -91,7 +110,7 @@ async fn main() -> Result<()> {
     info!(?data_dir, port, %superuser, node_id, %role, "pgvisor-sidecar supervisor starting up");
 
     let supervisor = Arc::new(PostgresSupervisor::with_log_buffer(&data_dir, log_buffer));
-    supervisor
+    let init_outcome = supervisor
         .ensure_initialized(&superuser, primary_conninfo.as_deref())
         .await?;
 
@@ -195,6 +214,16 @@ async fn main() -> Result<()> {
 
     supervisor.start(&config).await?;
 
+    let pg_addr = format!("127.0.0.1:{port}");
+    if role == "leader" {
+        if let Ok(pg_password) = env::var("POSTGRES_PASSWORD") {
+            if !pg_password.is_empty() {
+                bootstrap_superuser_password(&pg_addr, &superuser, &pg_password, init_outcome)
+                    .await;
+            }
+        }
+    }
+
     let pg_version = detect_postgres_version(&data_dir).await;
     info!(%pg_version, "Detected PostgreSQL server version");
 
@@ -212,13 +241,22 @@ async fn main() -> Result<()> {
         ..Default::default()
     };
 
-    let backup_manager = match backup_config.build_operator() {
-        Ok(operator) => Some(Arc::new(BackupManager::new(&cluster_id, operator))),
-        Err(e) => {
-            warn!(?e, "OpenDAL operator not initialized in sidecar");
-            None
+    let s3_operator = backup_config.build_operator().ok();
+    let backup_manager = s3_operator
+        .clone()
+        .map(|operator| Arc::new(BackupManager::new(&cluster_id, operator)));
+    if backup_manager.is_none() {
+        warn!("OpenDAL operator not initialized in sidecar");
+    }
+
+    let audit_log = Arc::new(AuditLog::new(&cluster_id, s3_operator, 2000));
+    let audit_loader = Arc::clone(&audit_log);
+    tokio::spawn(async move {
+        match audit_loader.load_from_storage().await {
+            Ok(count) => info!(count, "Restored historical audit log events from S3 storage"),
+            Err(e) => warn!(?e, "Could not restore audit logs from S3"),
         }
-    };
+    });
 
     let role_ref = Arc::new(RwLock::new(role.clone()));
     let peers_str = env::var("PGVISOR_PEERS").unwrap_or_default();
@@ -245,8 +283,9 @@ async fn main() -> Result<()> {
         role_ref.clone(),
         pg_version,
         peers.clone(),
-        cluster_secret,
-    );
+        cluster_secret.clone(),
+    )
+    .with_api_port(api_port);
 
     // Log initial startup event
     if role == "leader" {
@@ -265,14 +304,25 @@ async fn main() -> Result<()> {
             .await;
     }
 
-    let control_port: u16 = env::var("PGVISOR_CONTROL_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(8080);
     let control_addr = SocketAddr::from(([0, 0, 0, 0], control_port));
+    let control_app = build_control_router(control_state.clone());
+    spawn_control_server(control_addr, control_app);
 
-    let app = build_control_router(control_state.clone());
-    spawn_control_server(control_addr, app);
+    let superusers = Arc::new(SuperuserAllowlist::from_env(&superuser));
+    let token_signer = Arc::new(SessionTokenSigner::from_cluster_secret(
+        cluster_secret.as_deref(),
+    ));
+    let api_state = ApiState::new(
+        control_state.clone(),
+        pg_addr,
+        superuser,
+        superusers,
+        token_signer,
+        audit_log,
+    );
+    let api_addr = SocketAddr::from(([0, 0, 0, 0], api_port));
+    let api_app = build_api_router(api_state);
+    spawn_api_server(api_addr, api_app);
 
     // Background heartbeat & auto-failover election monitor
     spawn_election_monitor(control_state, peers);
@@ -299,6 +349,52 @@ async fn main() -> Result<()> {
 
     info!("pgvisor-sidecar stopped cleanly");
     Ok(())
+}
+
+/// Sets the PostgreSQL superuser password from `POSTGRES_PASSWORD` after `initdb`
+/// or when no password verifier is currently stored on the leader.
+async fn bootstrap_superuser_password(
+    pg_addr: &str,
+    superuser: &str,
+    password: &str,
+    init_outcome: InitOutcome,
+) {
+    let escaped_role = superuser.replace('"', "\"\"");
+    let escaped_lit = superuser.replace('\'', "''");
+
+    let should_set = if init_outcome == InitOutcome::InitializedPrimary {
+        true
+    } else {
+        let check_sql = format!(
+            "SELECT COALESCE(rolpassword, '') FROM pg_authid WHERE rolname = '{escaped_lit}' LIMIT 1"
+        );
+        match PgConnection::query_simple(pg_addr, Some(superuser), Some("postgres"), &check_sql, 1)
+            .await
+        {
+            Ok(res) => res
+                .rows
+                .first()
+                .and_then(|r| r.first())
+                .map(|pw| pw.is_empty())
+                .unwrap_or(false),
+            Err(e) => {
+                warn!(?e, "Failed to check existing PostgreSQL superuser password");
+                false
+            }
+        }
+    };
+
+    if !should_set {
+        return;
+    }
+
+    let escaped_pw = password.replace('\'', "''");
+    let alter_sql = format!("ALTER USER \"{escaped_role}\" WITH PASSWORD '{escaped_pw}'");
+    match PgConnection::query_simple(pg_addr, Some(superuser), Some("postgres"), &alter_sql, 1).await
+    {
+        Ok(_) => info!(%superuser, "Bootstrapped PostgreSQL superuser password from POSTGRES_PASSWORD"),
+        Err(e) => warn!(?e, %superuser, "Failed to set PostgreSQL superuser password"),
+    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 mod auth;
 mod handlers;
 mod server;
+mod sidecar_role;
 mod state;
 
 pub use auth::cluster_auth_middleware;
@@ -10,6 +11,7 @@ pub use handlers::{
     handle_status, handle_stop, start_postgres_safely,
 };
 pub use server::{build_control_router, spawn_control_server};
+pub use sidecar_role::SidecarRole;
 pub use state::{
     EventsQuery, RepointPayload, RestorePayload, ResyncPayload, SidecarEventRecord, SidecarState,
     StatusResponse,

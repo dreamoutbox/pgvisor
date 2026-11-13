@@ -18,9 +18,14 @@ opendal = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+async-trait = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
 uuid = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+subtle = { workspace = true }
+base64 = { workspace = true }
 
 
 [dev-dependencies]

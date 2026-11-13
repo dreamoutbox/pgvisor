@@ -1601,13 +1601,18 @@ name = "pgvisor-sidecar"
 version = "0.4.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
+ "base64",
  "chrono",
+ "hmac",
  "opendal",
  "pgvisor-core",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
+ "subtle",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",

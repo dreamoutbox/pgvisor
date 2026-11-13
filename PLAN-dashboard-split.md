@@ -66,22 +66,22 @@ flowchart LR
   - [x] Unit-test the result decoding against recorded backend frames.
 - Done when: the workspace builds, nextest passes, and `./test.sh` routing/transaction tests still pass.
 
-### Phase 3: Sidecar API skeleton and Postgres-user login [STATUS: TODO]
+### Phase 3: Sidecar API skeleton and Postgres-user login [STATUS: DONE]
 - Goal: The sidecar serves `/api/*` on its own port. Users log in with a Postgres username and password, and only users in `PGVISOR_SUPERUSER` get in.
 - Tasks:
-  - [ ] Create `crates/pgvisor-sidecar/src/api/` with these files:
+  - [x] Create `crates/pgvisor-sidecar/src/api/` with these files:
     - `mod.rs` (only `mod` lines and re-exports)
     - `router.rs` (`build_api_router`)
     - `server.rs` (`spawn_api_server`)
     - `api_state.rs` (wraps `SidecarState` plus a `pg_client`)
     - `error.rs` (`ApiError`, `thiserror`, `IntoResponse`)
-  - [ ] Add env `PGVISOR_API_PORT` (default `8081`) and bind the API on a **separate listener** from `/control` (`PGVISOR_CONTROL_PORT`, `8080`). `control/server.rs` is unchanged apart from sharing `SidecarState`. If both ports are set to the same value, startup fails.
-  - [ ] Add `api_port` to `StatusResponse` (`/control/status`) so peers and the members route can build each node's API URL.
-  - [ ] Turn the role into an enum: replace the `String` with a `NodeRole`-style enum (`Leader`, `Standby`, `Fenced`) wherever the API reads it. Don't widen this into the election code beyond the accessor.
-  - [ ] Add `api/superusers.rs`: parse `PGVISOR_SUPERUSER` (comma list, trimmed, deduped). Default is `POSTGRES_USER` (`postgres`).
-  - [ ] Add `api/password_verifier.rs`: verify the password against the SCRAM-SHA-256 verifier in `pg_authid.rolpassword`, read through a local trust connection. Deny login when `rolcanlogin` is false or no verifier exists.
-  - [ ] Add `api/session_token.rs`: a stateless, HMAC-SHA256-signed token (username, issued_at, expires_at), signed with `PGVISOR_CLUSTER_SECRET` so every sidecar accepts it after a leader change. Use the `hmac`, `sha2` and `subtle` crates (already workspace deps).
-  - [ ] Add `api/auth.rs` with the routes and middleware:
+  - [x] Add env `PGVISOR_API_PORT` (default `8081`) and bind the API on a **separate listener** from `/control` (`PGVISOR_CONTROL_PORT`, `8080`). `control/server.rs` is unchanged apart from sharing `SidecarState`. If both ports are set to the same value, startup fails.
+  - [x] Add `api_port` to `StatusResponse` (`/control/status`) so peers and the members route can build each node's API URL.
+  - [x] Turn the role into an enum: replace the `String` with a `NodeRole`-style enum (`Leader`, `Standby`, `Fenced`) wherever the API reads it. Don't widen this into the election code beyond the accessor.
+  - [x] Add `api/superusers.rs`: parse `PGVISOR_SUPERUSER` (comma list, trimmed, deduped). Default is `POSTGRES_USER` (`postgres`).
+  - [x] Add `api/password_verifier.rs`: verify the password against the SCRAM-SHA-256 verifier in `pg_authid.rolpassword`, read through a local trust connection. Deny login when `rolcanlogin` is false or no verifier exists.
+  - [x] Add `api/session_token.rs`: a stateless, HMAC-SHA256-signed token (username, issued_at, expires_at), signed with `PGVISOR_CLUSTER_SECRET` so every sidecar accepts it after a leader change. Use the `hmac`, `sha2` and `subtle` crates (already workspace deps).
+  - [x] Add `api/auth.rs` with the routes and middleware:
     - `POST /api/auth/login`:
       - Check the username against `PGVISOR_SUPERUSER` **before** checking the password.
       - A user not in the list gets `403`, with no token, and the attempt is audit-logged.
@@ -92,8 +92,8 @@ flowchart LR
       - Applies to every `/api` route except login.
       - Accepts a Bearer token or the cookie, then **re-checks `PGVISOR_SUPERUSER` on every request**. A user removed from the list, or a token from a sidecar with a different list, gets `403`.
       - Puts the principal into request extensions.
-  - [ ] Sidecar bootstrap: after `initdb` on the leader, set the `POSTGRES_USER` password from `POSTGRES_PASSWORD` if it is set. Otherwise nobody can log in.
-  - [ ] Tests:
+  - [x] Sidecar bootstrap: after `initdb` on the leader, set the `POSTGRES_USER` password from `POSTGRES_PASSWORD` if it is set. Otherwise nobody can log in.
+  - [x] Tests:
     - SCRAM verify (known vector)
     - token sign/verify/expiry/tamper
     - env parsing

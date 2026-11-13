@@ -6,9 +6,16 @@ use pgvisor_core::backup::BackupManager;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
+use super::sidecar_role::SidecarRole;
 use crate::config::PostgresConfig;
 use crate::supervisor::PostgresSupervisor;
 use crate::system::SystemMetricsCollector;
+
+pub const DEFAULT_API_PORT: u16 = 8081;
+
+fn default_api_port() -> u16 {
+    DEFAULT_API_PORT
+}
 
 /// Auditable event record tracked within local sidecar lifecycle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,6 +41,8 @@ pub struct SidecarState {
     pub cluster_secret: Option<String>,
     /// Cluster-wide backup/restore lock state on the leader with auto-expiry.
     pub backup_lock: Arc<RwLock<Option<BackupLockInfo>>>,
+    /// HTTP port serving the client-facing `/api/*` router.
+    pub api_port: u16,
 }
 
 impl SidecarState {
@@ -60,7 +69,20 @@ impl SidecarState {
             peers,
             cluster_secret,
             backup_lock: Arc::new(RwLock::new(None)),
+            api_port: DEFAULT_API_PORT,
         }
+    }
+
+    /// Sets the sidecar client API port reported in status responses.
+    pub fn with_api_port(mut self, api_port: u16) -> Self {
+        self.api_port = api_port;
+        self
+    }
+
+    /// Returns the typed [`SidecarRole`] of this node.
+    pub async fn current_role(&self) -> SidecarRole {
+        let raw = self.role.read().await;
+        SidecarRole::from_role_str(&raw)
     }
 
     pub async fn record_event(&self, kind: &str, detail: impl Into<String>) {
@@ -137,6 +159,8 @@ pub struct StatusResponse {
     pub memory_total_bytes: u64,
     #[serde(default)]
     pub disk_used_bytes: u64,
+    #[serde(default = "default_api_port")]
+    pub api_port: u16,
 }
 
 #[derive(Deserialize)]
