@@ -2,11 +2,11 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use pgvisor_core::api::SidecarRole;
 use pgvisor_core::backup::BackupManager;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
-use super::sidecar_role::SidecarRole;
 use crate::config::PostgresConfig;
 use crate::supervisor::PostgresSupervisor;
 use crate::system::SystemMetricsCollector;

@@ -103,18 +103,18 @@ flowchart LR
     - `/control/*` not reachable on the API port, and `/api/*` not reachable on the control port
 - Done when: nextest passes, and in compose `curl -X POST :8081/api/auth/login` against a node returns a token for `postgres`, `401` for a wrong password, and `403` for a non-superuser Postgres role.
 
-### Phase 4: `GET /api/cluster/members` [STATUS: TODO]
+### Phase 4: `GET /api/cluster/members` [STATUS: DONE]
 - Goal: A client given any one sidecar URL can find every member and the leader.
 - Tasks:
-  - [ ] Add `api/cluster_member.rs`: `ClusterMember { node_id, api_url, role, health, is_self }`. Put the response types in `pgvisor-core/src/api/` so the CLI can reuse them.
-  - [ ] Add `api/members.rs`:
+  - [x] Add `api/cluster_member.rs`: `ClusterMember { node_id, api_url, role, health, is_self }`. Put the response types in `pgvisor-core/src/api/` so the CLI can reuse them.
+  - [x] Add `api/members.rs`:
     - Fan out to `PGVISOR_PEERS` `/control/status` in parallel, using the cluster secret and a short timeout.
     - Build each `api_url` from the peer's host plus the `api_port` it reports.
     - Mark unreachable peers as `health: Unreachable`. Use local state for self.
     - Return `{ leader_url, members }`. `leader_url` is the leader's API URL.
-  - [ ] Superusers only, enforced by `api_auth_middleware`.
-  - [ ] Add `ApiError::NotLeader { leader_url }` returning 409, plus a `require_leader` guard. The later write phases use it.
-  - [ ] Tests: fan-out with mock peers (axum test servers) covering a healthy peer, an unreachable peer, and the no-leader case.
+  - [x] Superusers only, enforced by `api_auth_middleware`.
+  - [x] Add `ApiError::NotLeader { leader_url }` returning 409, plus a `require_leader` guard. The later write phases use it.
+  - [x] Tests: fan-out with mock peers (axum test servers) covering a healthy peer, an unreachable peer, and the no-leader case.
 - Done when: nextest passes, and in compose the route returns the same leader from all three nodes, then the new leader after `./test.sh` failover.
 
 ### Phase 5: Port read-only API handlers to the sidecar [STATUS: TODO]

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use pgvisor_core::audit::AuditLog;
 
@@ -6,6 +7,8 @@ use super::password_verifier::{PasswordChecker, PostgresPasswordChecker};
 use super::session_token::SessionTokenSigner;
 use super::superusers::SuperuserAllowlist;
 use crate::control::SidecarState;
+
+const DEFAULT_PEER_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Shared application state for the client-facing `/api/*` Axum router.
 #[derive(Clone)]
@@ -17,6 +20,7 @@ pub struct ApiState {
     pub token_signer: Arc<SessionTokenSigner>,
     pub password_checker: Arc<dyn PasswordChecker>,
     pub audit_log: Arc<AuditLog>,
+    pub http_client: reqwest::Client,
 }
 
 impl ApiState {
@@ -35,6 +39,10 @@ impl ApiState {
             pg_addr.clone(),
             pg_superuser.clone(),
         ));
+        let http_client = reqwest::Client::builder()
+            .timeout(DEFAULT_PEER_HTTP_TIMEOUT)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             sidecar,
             pg_addr,
@@ -43,6 +51,7 @@ impl ApiState {
             token_signer,
             password_checker,
             audit_log,
+            http_client,
         }
     }
 

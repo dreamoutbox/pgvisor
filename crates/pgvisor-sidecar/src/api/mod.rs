@@ -4,6 +4,7 @@ mod api_test;
 mod auth;
 mod authenticated_user;
 mod error;
+mod members;
 mod password_verifier;
 mod router;
 mod server;
@@ -14,6 +15,10 @@ pub use api_state::ApiState;
 pub use auth::{api_auth_middleware, extract_token_from_headers, get_me, post_login};
 pub use authenticated_user::AuthenticatedUser;
 pub use error::ApiError;
+pub use members::{
+    build_api_url_from_peer, collect_cluster_members, get_cluster_members, parse_node_id_from_peer,
+    require_leader,
+};
 pub use password_verifier::{
     verify_scram_sha256, PasswordCheckOutcome, PasswordChecker, PostgresPasswordChecker,
 };

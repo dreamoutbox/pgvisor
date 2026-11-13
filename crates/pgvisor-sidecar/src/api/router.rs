@@ -4,6 +4,7 @@ use axum::Router;
 
 use super::api_state::ApiState;
 use super::auth::{api_auth_middleware, get_me, post_login};
+use super::members::get_cluster_members;
 
 /// Constructs the client-facing `/api/*` Axum router (served on `PGVISOR_API_PORT`).
 pub fn build_api_router(state: ApiState) -> Router {
@@ -11,6 +12,7 @@ pub fn build_api_router(state: ApiState) -> Router {
 
     let protected_routes = Router::new()
         .route("/api/auth/me", get(get_me))
+        .route("/api/cluster/members", get(get_cluster_members))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             api_auth_middleware,

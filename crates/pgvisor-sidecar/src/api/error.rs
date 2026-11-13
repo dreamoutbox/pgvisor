@@ -18,6 +18,9 @@ pub enum ApiError {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    #[error("Not cluster leader; forward write requests to the leader")]
+    NotLeader { leader_url: Option<String> },
+
     #[error("Service unavailable: {0}")]
     ServiceUnavailable(String),
 
@@ -35,6 +38,7 @@ impl ApiError {
             Self::Forbidden(_) => (StatusCode::FORBIDDEN, "forbidden"),
             Self::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             Self::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
+            Self::NotLeader { .. } => (StatusCode::CONFLICT, "not_leader"),
             Self::ServiceUnavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "service_unavailable"),
             Self::Internal(_) | Self::PortCollision(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
@@ -46,13 +50,17 @@ impl ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status_code, status_label) = self.status_and_code();
-        (
-            status_code,
-            Json(serde_json::json!({
-                "error": self.to_string(),
-                "status": status_label,
-            })),
-        )
-            .into_response()
+        let message = self.to_string();
+        let mut body = serde_json::json!({
+            "error": message,
+            "status": status_label,
+        });
+        if let Self::NotLeader { leader_url } = self {
+            body["leader_url"] = match leader_url {
+                Some(url) => serde_json::Value::String(url),
+                None => serde_json::Value::Null,
+            };
+        }
+        (status_code, Json(body)).into_response()
     }
 }

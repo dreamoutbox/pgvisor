@@ -10,10 +10,10 @@ pub enum SidecarRole {
 }
 
 impl SidecarRole {
-    /// Parses a role string into [`SidecarRole`], defaulting unknown values to `Standby`.
+    /// Parses a raw role string into [`SidecarRole`], defaulting unknown values to `Standby`.
     ///
     /// # Arguments
-    /// * `raw` - Raw role string stored in legacy control state.
+    /// * `raw` - Role label from control state or status payload.
     pub fn from_role_str(raw: &str) -> Self {
         match raw.trim().to_ascii_lowercase().as_str() {
             "leader" => Self::Leader,

@@ -3,12 +3,17 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use pgvisor_core::api::{LoginResponse, MeResponse};
+use axum::response::IntoResponse;
+use pgvisor_core::api::{
+    ClusterMembersResponse, LoginResponse, MeResponse, MemberHealth, SidecarRole,
+};
 use pgvisor_core::audit::AuditLog;
 use tokio::sync::RwLock;
 use tower::ServiceExt;
 
 use super::api_state::ApiState;
+use super::error::ApiError;
+use super::members::{build_api_url_from_peer, parse_node_id_from_peer, require_leader};
 use super::password_verifier::{verify_scram_sha256, PasswordCheckOutcome, PasswordChecker};
 use super::router::build_api_router;
 use super::server::resolve_sidecar_ports;
@@ -305,4 +310,218 @@ async fn test_api_and_control_routers_are_isolated() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[test]
+fn test_peer_url_helpers() {
+    assert_eq!(
+        build_api_url_from_peer("http://pgvisor-node2:8080/", 8081),
+        Some("http://pgvisor-node2:8081".to_string())
+    );
+    assert_eq!(
+        build_api_url_from_peer("http://127.0.0.1:18080/control", 18081),
+        Some("http://127.0.0.1:18081".to_string())
+    );
+    assert_eq!(parse_node_id_from_peer("http://pgvisor-node2:8080"), Some(2));
+    assert_eq!(
+        parse_node_id_from_peer("http://pgvisor-node10:8080"),
+        Some(10)
+    );
+    assert_eq!(parse_node_id_from_peer("http://127.0.0.1:8080"), None);
+}
+
+async fn spawn_mock_control_peer(
+    node_id: u64,
+    role: &str,
+    api_port: u16,
+    secret: Option<&str>,
+) -> (
+    String,
+    Arc<RwLock<String>>,
+    tokio::task::JoinHandle<()>,
+) {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let supervisor = Arc::new(PostgresSupervisor::new(temp_dir.path()));
+    let role_lock = Arc::new(RwLock::new(role.to_string()));
+    let state = SidecarState::new(
+        supervisor,
+        Arc::new(RwLock::new(PostgresConfig::default())),
+        None,
+        node_id,
+        role_lock.clone(),
+        "18.6".to_string(),
+        Arc::new(Vec::new()),
+        secret.map(ToString::to_string),
+    )
+    .with_api_port(api_port);
+
+    let router = build_control_router(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    (format!("http://127.0.0.1:{}", addr.port()), role_lock, handle)
+}
+
+#[tokio::test]
+async fn test_cluster_members_fanout_healthy_unreachable_and_no_leader() {
+    let secret = "shared-cluster-secret";
+    let (peer2_url, peer2_role, peer2_task) =
+        spawn_mock_control_peer(2, "leader", 18082, Some(secret)).await;
+
+    // Reserve an unused port so the unreachable peer fails connection immediately.
+    let closed_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let unreachable_port = closed_listener.local_addr().unwrap().port();
+    drop(closed_listener);
+    let unreachable_url = format!("http://127.0.0.1:{unreachable_port}");
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let supervisor = Arc::new(PostgresSupervisor::new(temp_dir.path()));
+    let local_role = Arc::new(RwLock::new("standby".to_string()));
+    let sidecar = SidecarState::new(
+        supervisor,
+        Arc::new(RwLock::new(PostgresConfig::default())),
+        None,
+        1,
+        local_role,
+        "18.6".to_string(),
+        Arc::new(vec![peer2_url, unreachable_url]),
+        Some(secret.to_string()),
+    )
+    .with_api_port(18081);
+
+    let api_state = ApiState::new(
+        sidecar,
+        "127.0.0.1:5432",
+        "postgres",
+        Arc::new(SuperuserAllowlist::parse(Some("postgres"), "postgres")),
+        Arc::new(SessionTokenSigner::from_cluster_secret(Some(secret))),
+        Arc::new(AuditLog::new("test-cluster", None, 100)),
+    );
+    let app = build_api_router(api_state.clone());
+    let (token, _) = api_state.token_signer.sign("postgres").unwrap();
+
+    // Case 1: healthy leader peer + local standby + unreachable peer
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/cluster/members")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let members_resp: ClusterMembersResponse = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        members_resp.leader_url.as_deref(),
+        Some("http://127.0.0.1:18082")
+    );
+    assert_eq!(members_resp.members.len(), 3);
+
+    let self_member = members_resp.members.iter().find(|m| m.is_self).unwrap();
+    assert_eq!(self_member.node_id, Some(1));
+    assert_eq!(self_member.role, Some(SidecarRole::Standby));
+    assert_eq!(self_member.health, MemberHealth::Healthy);
+    assert_eq!(self_member.api_url.as_deref(), Some("http://127.0.0.1:18081"));
+
+    let peer2_member = members_resp
+        .members
+        .iter()
+        .find(|m| m.node_id == Some(2))
+        .unwrap();
+    assert!(!peer2_member.is_self);
+    assert_eq!(peer2_member.role, Some(SidecarRole::Leader));
+    assert_eq!(peer2_member.health, MemberHealth::Healthy);
+    assert_eq!(peer2_member.api_url.as_deref(), Some("http://127.0.0.1:18082"));
+
+    let dead_member = members_resp
+        .members
+        .iter()
+        .find(|m| m.health == MemberHealth::Unreachable)
+        .unwrap();
+    assert_eq!(dead_member.role, None);
+    assert_eq!(dead_member.api_url, None);
+    assert!(!dead_member.is_self);
+
+    // Case 2: peer 2 demoted -> no leader in cluster -> leader_url is None
+    *peer2_role.write().await = "standby".to_string();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/cluster/members")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let no_leader_resp: ClusterMembersResponse = serde_json::from_slice(&body).unwrap();
+    assert_eq!(no_leader_resp.leader_url, None);
+
+    peer2_task.abort();
+}
+
+#[tokio::test]
+async fn test_require_leader_and_409_response() {
+    let secret = "shared-cluster-secret";
+    let (peer2_url, _peer2_role, peer2_task) =
+        spawn_mock_control_peer(2, "leader", 18082, Some(secret)).await;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let supervisor = Arc::new(PostgresSupervisor::new(temp_dir.path()));
+    let local_role = Arc::new(RwLock::new("standby".to_string()));
+    let sidecar = SidecarState::new(
+        supervisor,
+        Arc::new(RwLock::new(PostgresConfig::default())),
+        None,
+        1,
+        local_role.clone(),
+        "18.6".to_string(),
+        Arc::new(vec![peer2_url]),
+        Some(secret.to_string()),
+    )
+    .with_api_port(18081);
+
+    let api_state = ApiState::new(
+        sidecar,
+        "127.0.0.1:5432",
+        "postgres",
+        Arc::new(SuperuserAllowlist::parse(Some("postgres"), "postgres")),
+        Arc::new(SessionTokenSigner::from_cluster_secret(Some(secret))),
+        Arc::new(AuditLog::new("test-cluster", None, 100)),
+    );
+
+    let err = require_leader(&api_state).await.unwrap_err();
+    match &err {
+        ApiError::NotLeader { leader_url } => {
+            assert_eq!(leader_url.as_deref(), Some("http://127.0.0.1:18082"));
+        }
+        other => panic!("Expected NotLeader error, got {other:?}"),
+    }
+
+    let resp = err.into_response();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "not_leader");
+    assert_eq!(json["leader_url"], "http://127.0.0.1:18082");
+
+    // Promoted local sidecar passes require_leader
+    *local_role.write().await = "leader".to_string();
+    assert!(require_leader(&api_state).await.is_ok());
+
+    peer2_task.abort();
 }
