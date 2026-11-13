@@ -240,11 +240,23 @@
 
 ---
 
+## pgvisor-dashboard separate from pgvisor-proxy. api move to pgvisor-sidecar
+
+- [ ] move web dashboard to separate standalone module. separate from `pgvisor-proxy`. proxy should just handle SQL connections.
+
+- [ ] move axum api from `pgvisor-dashboard` to `crates/pgvisor-sidecar/src/api`. client (web dashboard and future CLI) should communicate to pgvisor-sidecar directly. use list of pgvisor-sidecar URLs as connection string.
+
+- [ ] axum api. add GET route to get all pgvisor-sidecar members and role in cluster. for client (web dashboard and future CLI) to determine which sidecar is leader and execute actions.
+
+- [ ] axum api. use postgres users as login, add env `PGVISOR_SUPERUSER=postgres,bob` for user that can manage cluster.
+
+---
+
 # Backlog
 
 - [ ] remove `crates/pgvisor-proxy` and use `https://github.com/pgdogdev/pgdog`
 
-- [ ] move web dashboard to separate standalone module. separate from `pgvisor-proxy`. use list of pgvisor-sidecar URLs as connection string. ping all sidecars and find leader.
+- [ ] test on multiple VPSs. use docker swarm.
 
 - [ ] multiple s3 buckets/storages support.
 
@@ -252,9 +264,7 @@
 
 - [ ] make proxy and sidecar export OTEL. to use with prometheus/grafana.
 
-- [ ] web dashboard support multiple users. use postgres users as login
-
-- [ ] manage database and execute backup/restore with cli
+- [ ] manage database and execute backup/restore with CLI
 
 - [ ] redesign when new node join cluster.
       - dynamic node discovery. use env ROLE / PEERS list as starter data.
@@ -262,9 +272,9 @@
       - leader node register new node
       - leader node replicate (send all) cluster data (all nodes data/cluster data/status/etc.) to all nodes. incase the leader failed, so new leader can take over with up to date data.
 
-- [ ] Multi-Availability Zone (Multi-AZ) support
-
 - [ ] add Kubernetes Operator & CRDs. - **Kubernetes Operator**: Custom CRDs and k8s-native controllers.
+
+- [ ] Kubernetes Multi-Availability Zone (Multi-AZ) support
 
 - [ ] make sidecar worker not access the backup storage directly. (remove `S3_ENDPOINT` `S3_BUCKET` `S3_ACCESS_KEY` `S3_SECRET_KEY`). generate presigned url for backup/restore.
 
