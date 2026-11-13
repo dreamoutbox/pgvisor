@@ -4,6 +4,7 @@ mod api_test;
 mod audit;
 mod auth;
 mod authenticated_user;
+pub mod backup;
 mod cluster;
 mod cluster_actions;
 mod error;
@@ -24,6 +25,7 @@ pub use api_state::ApiState;
 pub use audit::{get_audit_logs, AuditQuery};
 pub use auth::{api_auth_middleware, extract_token_from_headers, get_me, post_login};
 pub use authenticated_user::AuthenticatedUser;
+pub use backup::{BackupRetentionConfig, LeaderRestoreExecutor, LocalLeaderRestoreExecutor};
 pub use cluster::{
     collect_cluster_overview, get_node_config, get_node_logs, get_nodes, get_status, LogsQuery,
 };

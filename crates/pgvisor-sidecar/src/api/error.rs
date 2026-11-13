@@ -18,6 +18,12 @@ pub enum ApiError {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
+    #[error("Payload too large: {0}")]
+    PayloadTooLarge(String),
+
     #[error("Not cluster leader; forward write requests to the leader")]
     NotLeader { leader_url: Option<String> },
 
@@ -38,6 +44,8 @@ impl ApiError {
             Self::Forbidden(_) => (StatusCode::FORBIDDEN, "forbidden"),
             Self::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             Self::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
+            Self::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
+            Self::PayloadTooLarge(_) => (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large"),
             Self::NotLeader { .. } => (StatusCode::CONFLICT, "not_leader"),
             Self::ServiceUnavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "service_unavailable"),
             Self::Internal(_) | Self::PortCollision(_) => {

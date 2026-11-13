@@ -1406,6 +1406,7 @@ async fn spawn_recording_control_peer(
                         disk_used_bytes: 0,
                         api_port,
                         activity: None,
+                        restore_epoch: 0,
                     })
                 }
             }),
@@ -1727,4 +1728,444 @@ async fn test_user_writes_and_row_mutations_audit_actor() {
         .await;
     assert_eq!(row_audits.len(), 2);
     assert!(row_audits.iter().all(|e| e.detail.contains("bob")));
+}
+
+fn build_fs_backup_manager(dir: &std::path::Path) -> Arc<pgvisor_core::backup::BackupManager> {
+    let builder = opendal::services::Fs::default().root(&dir.to_string_lossy());
+    let op = opendal::Operator::new(builder).unwrap().finish();
+    Arc::new(pgvisor_core::backup::BackupManager::new("test-cluster", op))
+}
+
+struct StubLeaderRestoreExecutor {
+    fail: bool,
+    recorded_snapshots: Mutex<Vec<String>>,
+}
+
+#[async_trait::async_trait]
+impl crate::api::LeaderRestoreExecutor for StubLeaderRestoreExecutor {
+    async fn execute_restore(
+        &self,
+        sidecar: &crate::control::SidecarState,
+        payload: crate::control::RestorePayload,
+    ) -> Result<(), crate::api::ApiError> {
+        self.recorded_snapshots.lock().await.push(payload.snapshot_id);
+        if self.fail {
+            return Err(crate::api::ApiError::Internal(
+                "simulated leader restore failure".into(),
+            ));
+        }
+        sidecar.bump_restore_epoch();
+        Ok(())
+    }
+
+    fn resync_retry_delay(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(0)
+    }
+}
+
+async fn spawn_restore_mock_peer(
+    node_id: u64,
+    role: &'static str,
+) -> (
+    String,
+    Arc<Mutex<Vec<String>>>,
+    tokio::task::JoinHandle<()>,
+) {
+    let calls: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let c_prep = Arc::clone(&calls);
+    let c_cancel = Arc::clone(&calls);
+    let c_resync = Arc::clone(&calls);
+    let app = axum::Router::new()
+        .route(
+            "/control/status",
+            axum::routing::get(move || async move {
+                Json(crate::control::StatusResponse {
+                    node_id,
+                    role: role.into(),
+                    status: "running".into(),
+                    child_pid: 2000 + node_id as u32,
+                    pg_version: "18.6".into(),
+                    uptime_secs: 60,
+                    cpu_percent: 1.0,
+                    memory_used_bytes: 0,
+                    memory_total_bytes: 0,
+                    disk_used_bytes: 0,
+                    api_port: 18080 + node_id as u16,
+                    activity: None,
+                    restore_epoch: 0,
+                })
+            }),
+        )
+        .route(
+            "/control/prepare-restore",
+            axum::routing::post(move || {
+                let c = Arc::clone(&c_prep);
+                async move {
+                    c.lock().await.push("prepare-restore".into());
+                    Json(serde_json::json!({"status": "ok"}))
+                }
+            }),
+        )
+        .route(
+            "/control/cancel-restore",
+            axum::routing::post(move || {
+                let c = Arc::clone(&c_cancel);
+                async move {
+                    c.lock().await.push("cancel-restore".into());
+                    Json(serde_json::json!({"status": "ok"}))
+                }
+            }),
+        )
+        .route(
+            "/control/resync",
+            axum::routing::post(move |payload: Option<Json<serde_json::Value>>| {
+                let c = Arc::clone(&c_resync);
+                async move {
+                    let conninfo = payload
+                        .and_then(|Json(v)| v.get("primary_conninfo").and_then(|x| x.as_str()).map(String::from))
+                        .unwrap_or_default();
+                    c.lock().await.push(format!("resync:{conninfo}"));
+                    Json(serde_json::json!({"status": "ok"}))
+                }
+            }),
+        );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (format!("http://127.0.0.1:{}", addr.port()), calls, handle)
+}
+
+#[tokio::test]
+async fn test_backup_routes_enforce_auth_and_leader() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let s3_dir = tempfile::tempdir().unwrap();
+    let bm = build_fs_backup_manager(s3_dir.path());
+    let supervisor = Arc::new(PostgresSupervisor::new(data_dir.path()));
+    let sidecar = SidecarState::new(
+        supervisor,
+        Arc::new(RwLock::new(PostgresConfig::default())),
+        Some(bm),
+        2,
+        Arc::new(RwLock::new("standby".into())),
+        "18.6".into(),
+        Arc::new(vec![]),
+        None,
+    );
+    let audit_log = Arc::new(AuditLog::new("test-cluster", None, 100));
+    let state = ApiState::new(
+        sidecar,
+        "127.0.0.1:5432",
+        "postgres",
+        Arc::new(SuperuserAllowlist::parse(Some("postgres,bob"), "postgres")),
+        Arc::new(SessionTokenSigner::from_cluster_secret(None)),
+        audit_log,
+    );
+    let app = build_api_router(state.clone());
+
+    let (alice_token, _) = state.token_signer.sign("alice").unwrap();
+    let (bob_token, _) = state.token_signer.sign("bob").unwrap();
+
+    // Non-superuser gets 403 even on read routes
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/backups")
+                .header("authorization", format!("Bearer {alice_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // Superuser GET passes on standby; mutating backup routes return 409 NotLeader on standby
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/backups")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    for (method, uri, body) in [
+        ("POST", "/api/backups", b"{}".to_vec()),
+        ("DELETE", "/api/backups/snap-1", vec![]),
+        ("POST", "/api/backups/snap-1/restore", b"{}".to_vec()),
+        (
+            "POST",
+            "/api/backups/quick-restore",
+            b"{\"recovery_target_time\":\"2026-09-14 03:00:00\"}".to_vec(),
+        ),
+    ] {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("authorization", format!("Bearer {bob_token}"));
+        if !body.is_empty() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let resp = app
+            .clone()
+            .oneshot(builder.body(Body::from(body)).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::CONFLICT,
+            "{method} {uri} should return 409 on standby"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_backup_crud_upload_pitr_window_and_lock_conflict() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let s3_dir = tempfile::tempdir().unwrap();
+    let bm = build_fs_backup_manager(s3_dir.path());
+    let supervisor = Arc::new(PostgresSupervisor::new(data_dir.path()));
+    let sidecar = SidecarState::new(
+        supervisor,
+        Arc::new(RwLock::new(PostgresConfig::default())),
+        Some(Arc::clone(&bm)),
+        1,
+        Arc::new(RwLock::new("leader".into())),
+        "18.6".into(),
+        Arc::new(vec![]),
+        None,
+    );
+    let audit_log = Arc::new(AuditLog::new("test-cluster", None, 100));
+    let state = ApiState::new(
+        sidecar,
+        "127.0.0.1:5432",
+        "postgres",
+        Arc::new(SuperuserAllowlist::parse(Some("postgres,bob"), "postgres")),
+        Arc::new(SessionTokenSigner::from_cluster_secret(None)),
+        audit_log.clone(),
+    );
+    let app = build_api_router(state.clone());
+    let (bob_token, _) = state.token_signer.sign("bob").unwrap();
+
+    // 1. Create backup on leader (falls back to simulated archive when pg_basebackup unavailable)
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/backups")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"backup_type":"full","label":"phase7-test"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let created: pgvisor_core::backup::BasebackupMeta =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap())
+            .unwrap();
+    assert_eq!(created.label.as_deref(), Some("phase7-test"));
+
+    // 2. List, best, pitr-window, download
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/backups/{}/pitr-window", created.snapshot_id))
+                .header("authorization", format!("Bearer {bob_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let target_ok = (chrono::Utc::now() + chrono::Duration::seconds(2))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/backups/best?target_time={target_ok}"))
+                .header("authorization", format!("Bearer {bob_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/backups/{}/download", created.snapshot_id))
+                .header("authorization", format!("Bearer {bob_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let archive_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    assert!(!archive_bytes.is_empty());
+
+    // 3. Active backup lock triggers 409 Conflict
+    let lock = crate::control::acquire_backup_lock_local(&state.sidecar)
+        .await
+        .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/backups/{}", created.snapshot_id))
+                .header("authorization", format!("Bearer {bob_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    crate::control::release_backup_lock_local(&state.sidecar, &lock.lock_token).await;
+
+    // 4. Delete succeeds once lock is released
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/backups/{}", created.snapshot_id))
+                .header("authorization", format!("Bearer {bob_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(bm.list_basebackups().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_restore_orchestration_against_mock_peers_and_rollback() {
+    let (peer2_url, peer2_calls, peer2_task) = spawn_restore_mock_peer(2, "standby").await;
+    let (peer3_url, peer3_calls, peer3_task) = spawn_restore_mock_peer(3, "standby").await;
+
+    let data_dir = tempfile::tempdir().unwrap();
+    let s3_dir = tempfile::tempdir().unwrap();
+    let bm = build_fs_backup_manager(s3_dir.path());
+    let mut snap_meta = pgvisor_core::backup::BasebackupMeta::new(
+        "snap-restore-test",
+        chrono::Utc::now() - chrono::Duration::minutes(10),
+        pgvisor_core::backup::BackupType::Full,
+        "000000010000000000000001",
+        0,
+    );
+    let tar = pgvisor_core::backup::create_simulated_basebackup(&mut snap_meta).unwrap();
+    snap_meta.total_bytes = tar.len() as u64;
+    bm.save_basebackup(&snap_meta, tar).await.unwrap();
+
+    let supervisor = Arc::new(PostgresSupervisor::new(data_dir.path()));
+    let sidecar = SidecarState::new(
+        supervisor,
+        Arc::new(RwLock::new(PostgresConfig::default())),
+        Some(bm),
+        1,
+        Arc::new(RwLock::new("leader".into())),
+        "18.6".into(),
+        Arc::new(vec![peer2_url, peer3_url]),
+        None,
+    );
+    let stub_ok = Arc::new(StubLeaderRestoreExecutor {
+        fail: false,
+        recorded_snapshots: Mutex::new(Vec::new()),
+    });
+    let audit_log = Arc::new(AuditLog::new("test-cluster", None, 100));
+    let state = ApiState::new(
+        sidecar,
+        "127.0.0.1:5432",
+        "postgres",
+        Arc::new(SuperuserAllowlist::parse(Some("postgres,bob"), "postgres")),
+        Arc::new(SessionTokenSigner::from_cluster_secret(None)),
+        audit_log.clone(),
+    )
+    .with_leader_restore_executor(stub_ok.clone());
+
+    let app = build_api_router(state.clone());
+    let (bob_token, _) = state.token_signer.sign("bob").unwrap();
+
+    // 1. Successful restore prepares standbys, executes leader restore, bumps restore_epoch, and resyncs standbys
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/backups/snap-restore-test/restore")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(state.sidecar.restore_epoch(), 1);
+    assert_eq!(
+        &*stub_ok.recorded_snapshots.lock().await,
+        &vec!["snap-restore-test".to_string()]
+    );
+
+    for calls in [&peer2_calls, &peer3_calls] {
+        let log = calls.lock().await;
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0], "prepare-restore");
+        assert!(log[1].starts_with("resync:host=127.0.0.1 port=5432 user=postgres"));
+    }
+
+    let (audits, _) = audit_log
+        .list(10, 0, Some(AuditEventKind::BackupRestored), None)
+        .await;
+    assert_eq!(audits.len(), 1);
+    assert!(audits[0].detail.contains("bob"));
+
+    // 2. Failing leader restore cancels Restoring state on standbys and releases the lock
+    peer2_calls.lock().await.clear();
+    peer3_calls.lock().await.clear();
+    let stub_fail = Arc::new(StubLeaderRestoreExecutor {
+        fail: true,
+        recorded_snapshots: Mutex::new(Vec::new()),
+    });
+    let fail_state = state.with_leader_restore_executor(stub_fail);
+    let fail_app = build_api_router(fail_state.clone());
+    let resp = fail_app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/backups/snap-restore-test/restore")
+                .header("authorization", format!("Bearer {bob_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    for calls in [&peer2_calls, &peer3_calls] {
+        let log = calls.lock().await;
+        assert_eq!(*log, vec!["prepare-restore", "cancel-restore"]);
+    }
+    assert!(fail_state.sidecar.backup_lock.read().await.is_none());
+
+    peer2_task.abort();
+    peer3_task.abort();
 }

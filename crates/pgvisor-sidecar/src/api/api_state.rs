@@ -4,6 +4,7 @@ use std::time::Duration;
 use pgvisor_core::audit::AuditLog;
 use pgvisor_core::sql_guard::SqlSecurityGuard;
 
+use super::backup::{BackupRetentionConfig, LeaderRestoreExecutor, LocalLeaderRestoreExecutor};
 use super::metrics::MetricsRing;
 use super::password_verifier::{PasswordChecker, PostgresPasswordChecker};
 use super::session_token::SessionTokenSigner;
@@ -24,8 +25,10 @@ pub struct ApiState {
     pub token_signer: Arc<SessionTokenSigner>,
     pub password_checker: Arc<dyn PasswordChecker>,
     pub sql_runner: Arc<dyn ApiSqlRunner>,
+    pub leader_restore_executor: Arc<dyn LeaderRestoreExecutor>,
     pub security_guard: Arc<SqlSecurityGuard>,
     pub metrics_ring: Arc<MetricsRing>,
+    pub backup_retention: BackupRetentionConfig,
     pub audit_log: Arc<AuditLog>,
     pub http_client: reqwest::Client,
 }
@@ -60,8 +63,10 @@ impl ApiState {
             token_signer,
             password_checker,
             sql_runner,
+            leader_restore_executor: Arc::new(LocalLeaderRestoreExecutor),
             security_guard: Arc::new(SqlSecurityGuard::default()),
             metrics_ring: Arc::new(MetricsRing::new()),
+            backup_retention: BackupRetentionConfig::default(),
             audit_log,
             http_client,
         }
@@ -70,6 +75,21 @@ impl ApiState {
     /// Sets the cluster identifier displayed by `/api/status`.
     pub fn with_cluster_id(mut self, cluster_id: impl Into<String>) -> Self {
         self.cluster_id = cluster_id.into();
+        self
+    }
+
+    /// Sets backup retention and storage metadata reported/pruned by `/api/backups`.
+    pub fn with_backup_retention(mut self, retention: BackupRetentionConfig) -> Self {
+        self.backup_retention = retention;
+        self
+    }
+
+    /// Overrides the local leader restore executor (for unit tests).
+    pub fn with_leader_restore_executor(
+        mut self,
+        executor: Arc<dyn LeaderRestoreExecutor>,
+    ) -> Self {
+        self.leader_restore_executor = executor;
         self
     }
 

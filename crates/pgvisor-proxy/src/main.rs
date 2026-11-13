@@ -3,6 +3,7 @@ pub mod cluster;
 pub mod executor;
 pub mod metrics;
 pub mod pool;
+pub mod restore_epoch_tracker;
 pub mod scheduler;
 pub mod session;
 pub mod tls;
@@ -25,6 +26,7 @@ use pgvisor_core::backup::{BackupManager, BackupScheduleConfig};
 use pgvisor_dashboard::create_router;
 use pgvisor_dashboard::handlers::{DashboardState, SqlExecutor};
 use pool::ConnectionPool;
+use restore_epoch_tracker::RestoreEpochTracker;
 use session::ClientSession;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
@@ -146,6 +148,8 @@ async fn main() -> Result<()> {
         memory_used_bytes: Option<u64>,
         memory_total_bytes: Option<u64>,
         disk_used_bytes: Option<u64>,
+        #[serde(default)]
+        restore_epoch: u64,
     }
 
     let metrics_store = Arc::new(ProxyMetricsStore::new());
@@ -354,9 +358,11 @@ async fn main() -> Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
         let mut prev_health_states: HashMap<String, NodeHealthState> = HashMap::new();
         let mut last_seen_event_ids: HashMap<String, u64> = HashMap::new();
+        let mut restore_epoch_tracker = RestoreEpochTracker::new();
 
         loop {
             interval.tick().await;
+            let mut discovered_leader_restore_epoch: Option<u64> = None;
 
             let mut replica_lags: HashMap<String, u64> = HashMap::new();
 
@@ -452,6 +458,10 @@ async fn main() -> Result<()> {
                                 if is_healthy || st.status == "restoring" {
                                     discovered_leader = Some(target.pg_addr.clone());
                                 }
+                                discovered_leader_restore_epoch = Some(
+                                    discovered_leader_restore_epoch
+                                        .map_or(st.restore_epoch, |prev| prev.max(st.restore_epoch)),
+                                );
                                 NodeRole::Leader
                             } else {
                                 if is_healthy {
@@ -788,6 +798,11 @@ async fn main() -> Result<()> {
                     .update_topology(discovered_leader.clone(), discovered_standbys.clone())
                     .await;
             }
+
+            // Drain idle connections if the sidecar leader bumped its restore_epoch.
+            restore_epoch_tracker
+                .observe_and_drain(&pool_for_monitor, discovered_leader_restore_epoch)
+                .await;
 
             // Update dashboard overview
             if let Some(dash) = dash_state_for_monitor.as_ref() {

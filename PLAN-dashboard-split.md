@@ -155,14 +155,14 @@ flowchart LR
   - [x] Tests: 403 for a non-superuser token, 409 on a standby, and switchover orchestration against mock peers.
 - Done when: nextest passes, and in compose a switchover through the sidecar API succeeds and the proxy follows the new leader.
 
-### Phase 7: Port backup/restore and the restore signal for the proxy [STATUS: TODO]
+### Phase 7: Port backup/restore and the restore signal for the proxy [STATUS: DONE]
 - Goal: Backups, PITR and restore are orchestrated by the leader sidecar, and the proxy still drains its pool after a restore.
 - Tasks:
-  - [ ] Move the `ProxyBackupService` logic (`pgvisor-proxy/src/backup.rs`) into `api/backup/`, split by concern. It uses `BackupManager`, the backup lock and peer `/control/restore` / `/control/resync`.
-  - [ ] Port every `/api/backups/*` route: list, create, delete, download, upload, restore, quick-restore, best, pitr-window. All are superuser-only. Mutating routes (create, delete, upload, restore, quick-restore) are also leader-only.
-  - [ ] Add `restore_epoch: u64` to `StatusResponse`. The leader bumps it after a restore completes. The proxy monitor loop in `pgvisor-proxy/src/main.rs` calls `pool.drain_all()` when the epoch changes, which replaces the direct call.
-  - [ ] Move `BackupScheduler` to the sidecar, gated to run only while the node is leader. Keep it **disabled** (env `PGVISOR_SIDECAR_BACKUP_CRON=false`) until Phase 9 so it doesn't double-schedule with the proxy.
-  - [ ] Tests: restore orchestration against mock peers, and epoch-triggered drain in the proxy monitor.
+  - [x] Move the `ProxyBackupService` logic (`pgvisor-proxy/src/backup.rs`) into `api/backup/`, split by concern. It uses `BackupManager`, the backup lock and peer `/control/restore` / `/control/resync`.
+  - [x] Port every `/api/backups/*` route: list, create, delete, download, upload, restore, quick-restore, best, pitr-window. All are superuser-only. Mutating routes (create, delete, upload, restore, quick-restore) are also leader-only.
+  - [x] Add `restore_epoch: u64` to `StatusResponse`. The leader bumps it after a restore completes. The proxy monitor loop in `pgvisor-proxy/src/main.rs` calls `pool.drain_all()` when the epoch changes, which replaces the direct call.
+  - [x] Move `BackupScheduler` to the sidecar, gated to run only while the node is leader. Keep it **disabled** (env `PGVISOR_SIDECAR_BACKUP_CRON=false`) until Phase 9 so it doesn't double-schedule with the proxy.
+  - [x] Tests: restore orchestration against mock peers, and epoch-triggered drain in the proxy monitor.
 - Done when: nextest passes, and `./test.sh` backup-restore/pitr scenarios pass when driven through the sidecar API.
 
 ### Phase 8: Standalone dashboard client (side by side with the old one) [STATUS: TODO]

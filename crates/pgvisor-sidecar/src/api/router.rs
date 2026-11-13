@@ -1,3 +1,4 @@
+use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{get, post, put};
 use axum::Router;
@@ -5,6 +6,10 @@ use axum::Router;
 use super::api_state::ApiState;
 use super::audit::get_audit_logs;
 use super::auth::{api_auth_middleware, get_me, post_login};
+use super::backup::{
+    create_backup, delete_backup, download_backup, find_best_backup, list_backups,
+    max_upload_bytes, pitr_window, quick_restore, restore_backup, upload_backup,
+};
 use super::cluster::{get_node_config, get_node_logs, get_nodes, get_status};
 use super::cluster_actions::{
     post_node_action, post_repoint_node, post_restart_node, post_start_node, post_stop_node,
@@ -67,6 +72,22 @@ pub fn build_api_router(state: ApiState) -> Router {
             "/api/users/:role/privileges",
             get(get_user_privileges).post(set_user_privilege),
         )
+        .route("/api/backups", get(list_backups).post(create_backup))
+        .route("/api/backups/best", get(find_best_backup))
+        .route("/api/backups/quick-restore", post(quick_restore))
+        .route(
+            "/api/backups/upload",
+            post(upload_backup).layer(DefaultBodyLimit::max(
+                max_upload_bytes().saturating_add(10 * 1024 * 1024),
+            )),
+        )
+        .route(
+            "/api/backups/:snapshot_id",
+            axum::routing::delete(delete_backup),
+        )
+        .route("/api/backups/:snapshot_id/download", get(download_backup))
+        .route("/api/backups/:snapshot_id/restore", post(restore_backup))
+        .route("/api/backups/:snapshot_id/pitr-window", get(pitr_window))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             api_auth_middleware,

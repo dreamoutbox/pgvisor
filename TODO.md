@@ -254,6 +254,8 @@
 
 # Backlog
 
+- [ ] add checkup test api route and function. test read-write on leader node. test read-only on follower node. if follower node can write then it is error.
+
 - [ ] remove `crates/pgvisor-proxy` and use `https://github.com/pgdogdev/pgdog`
 
 - [ ] test on multiple VPSs. use docker swarm.

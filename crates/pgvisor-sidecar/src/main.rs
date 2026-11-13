@@ -3,6 +3,7 @@ pub mod config;
 pub mod control;
 pub mod election;
 pub mod logging;
+pub mod scheduler;
 pub mod supervisor;
 pub mod system;
 pub mod version;
@@ -16,8 +17,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use api::{
-    build_api_router, resolve_sidecar_ports, spawn_api_server, ApiState, SessionTokenSigner,
-    SuperuserAllowlist,
+    build_api_router, resolve_sidecar_ports, spawn_api_server, ApiState, BackupRetentionConfig,
+    SessionTokenSigner, SuperuserAllowlist,
 };
 use config::{LogStatement, PostgresConfig};
 use control::{build_control_router, spawn_control_server, SidecarState};
@@ -228,18 +229,11 @@ async fn main() -> Result<()> {
     info!(%pg_version, "Detected PostgreSQL server version");
 
     // Initialize OpenDAL storage operator for backup management if configured
-    let s3_endpoint = env::var("S3_ENDPOINT").unwrap_or_else(|_| "http://minio:9000".to_string());
-    let s3_bucket = env::var("S3_BUCKET").unwrap_or_else(|_| "pgvisor-backups".to_string());
-    let s3_access_key = env::var("S3_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".to_string());
-    let s3_secret_key = env::var("S3_SECRET_KEY").unwrap_or_else(|_| "minioadmin".to_string());
-
-    let backup_config = BackupScheduleConfig {
-        minio_endpoint: s3_endpoint,
-        minio_bucket: s3_bucket,
-        access_key: s3_access_key,
-        secret_key: s3_secret_key,
-        ..Default::default()
-    };
+    let mut backup_config = BackupScheduleConfig::from_env();
+    if env::var("S3_ENDPOINT").is_err() && env::var("PGVISOR_S3_ENDPOINT").is_err() {
+        backup_config.minio_endpoint = "http://minio:9000".to_string();
+    }
+    let backup_retention = BackupRetentionConfig::from_schedule_config(&backup_config);
 
     let s3_operator = backup_config.build_operator().ok();
     let backup_manager = s3_operator
@@ -321,7 +315,8 @@ async fn main() -> Result<()> {
         token_signer,
         audit_log,
     )
-    .with_cluster_id(&cluster_id);
+    .with_cluster_id(&cluster_id)
+    .with_backup_retention(backup_retention);
     if env::var("PGVISOR_DASHBOARD_ALLOW_MUTATIONS")
         .map(|v| v.eq_ignore_ascii_case("false") || v == "0")
         .unwrap_or(false)
@@ -334,6 +329,11 @@ async fn main() -> Result<()> {
         ));
     }
     api::spawn_metrics_sampler(api_state.clone());
+    Arc::new(scheduler::BackupScheduler::new(
+        api_state.clone(),
+        backup_config,
+    ))
+    .start();
     let api_addr = SocketAddr::from(([0, 0, 0, 0], api_port));
     let api_app = build_api_router(api_state);
     spawn_api_server(api_addr, api_app);

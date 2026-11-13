@@ -48,6 +48,8 @@ pub struct SidecarState {
     /// Local PostgreSQL port and bootstrap superuser role for status telemetry queries.
     pub pg_port: u16,
     pub pg_superuser: String,
+    /// Monotonically incremented each time this leader completes a cluster restore.
+    pub restore_epoch: Arc<AtomicU64>,
 }
 
 impl SidecarState {
@@ -77,6 +79,7 @@ impl SidecarState {
             api_port: DEFAULT_API_PORT,
             pg_port: DEFAULT_PG_PORT,
             pg_superuser: "postgres".to_string(),
+            restore_epoch: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -97,6 +100,16 @@ impl SidecarState {
     pub async fn current_role(&self) -> SidecarRole {
         let raw = self.role.read().await;
         SidecarRole::from_role_str(&raw)
+    }
+
+    /// Returns the current monotonic restore epoch for this sidecar node.
+    pub fn restore_epoch(&self) -> u64 {
+        self.restore_epoch.load(Ordering::SeqCst)
+    }
+
+    /// Increments the restore epoch after a snapshot restore completes and returns the new value.
+    pub fn bump_restore_epoch(&self) -> u64 {
+        self.restore_epoch.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     pub async fn record_event(&self, kind: &str, detail: impl Into<String>) {
@@ -177,6 +190,8 @@ pub struct StatusResponse {
     pub api_port: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<PgNodeActivity>,
+    #[serde(default)]
+    pub restore_epoch: u64,
 }
 
 #[derive(Deserialize)]
