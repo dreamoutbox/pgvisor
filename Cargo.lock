@@ -1552,7 +1552,6 @@ version = "0.4.0"
 dependencies = [
  "anyhow",
  "askama",
- "async-trait",
  "axum",
  "chrono",
  "pgvisor-core",
@@ -1560,7 +1559,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
- "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tower",
@@ -1573,14 +1571,9 @@ name = "pgvisor-proxy"
 version = "0.4.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "axum",
  "bytes",
- "chrono",
- "croner",
- "opendal",
  "pgvisor-core",
- "pgvisor-dashboard",
  "pgwire",
  "reqwest",
  "rustls",

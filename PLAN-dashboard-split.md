@@ -178,25 +178,25 @@ flowchart LR
   - [x] Tests: `sidecar_client` failover and leader re-discovery against mock axum servers, and login/cookie flow.
 - Done when: nextest passes, and the `pgvisor-dashboard` binary pointed at the compose sidecars can log in, show nodes, run SQL and trigger a switchover.
 
-### Phase 9: Cutover: the proxy only handles SQL [STATUS: TODO]
+### Phase 9: Cutover: the proxy only handles SQL [STATUS: DONE]
 - Goal: Remove the dashboard from the proxy. The dashboard is its own service.
 - Tasks:
-  - [ ] In `pgvisor-proxy`:
+  - [x] In `pgvisor-proxy`:
     - Drop the `pgvisor-dashboard` dependency, `PGVISOR_DASHBOARD_LISTEN`, `PGVISOR_ADMIN_TOKEN` and the audit log.
     - Delete `backup.rs`, `cluster.rs`, `executor.rs`, `scheduler.rs` and `metrics.rs` (`ProxyMetricsStore`, `ProxyMetricsService`, `NodeTelemetry`), plus the `record_read`/`record_write` calls in `session.rs`. The sidecar's `pg_stat_database` sampling replaces them.
     - Keep the topology monitor.
-  - [ ] In `pgvisor-dashboard`:
+  - [x] In `pgvisor-dashboard`:
     - Delete the old `handlers/*` service traits, the `Standalone*` mocks, `DashboardState`, `security.rs` admin-token code and the old `create_router`.
     - `main.rs` uses `create_client_router`.
-  - [ ] Enable the sidecar backup scheduler by default.
-  - [ ] Update compose and deployment config:
+  - [x] Enable the sidecar backup scheduler by default.
+  - [x] Update compose and deployment config:
     - `docker-compose.yml`, `docker-compose.with-tls.yml`, `composes/*.yml`, `stacks/*.yml`:
       - Add a `pgvisor-dashboard` service (`command: ["pgvisor-dashboard"]`, `PGVISOR_SIDECAR_URLS=http://pgvisor-node{1,2,3}:8081`, host port `8080`).
       - Remove the proxy's `8080`.
       - Add `POSTGRES_PASSWORD` and `PGVISOR_SUPERUSER`.
       - Keep node control port `8080` internal. Publish API port `8081` only where a test or CLI needs it.
     - `Dockerfile`: unchanged, it already ships all three binaries.
-  - [ ] E2E tests:
+  - [x] E2E tests:
     - Add an `api_login` helper to `tests/lib/helper.sh` and `swarm-helper.sh`. Replace the `ADMIN_TOKEN` / `AUTH_HEADER` blocks in `tests/*.sh`.
     - Point `wait_for_proxy_ready` at the dashboard (or a sidecar).
     - Update `test-cluster-auth.sh`:

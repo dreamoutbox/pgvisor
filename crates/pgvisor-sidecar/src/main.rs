@@ -213,14 +213,58 @@ async fn main() -> Result<()> {
         ..Default::default()
     };
 
-    supervisor.start(&config).await?;
+    let peers_str = env::var("PGVISOR_PEERS").unwrap_or_default();
+    let peers: Arc<Vec<String>> = Arc::new(
+        peers_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+    );
+
+    let cluster_secret = pgvisor_core::auth::cluster_secret_from_env();
+    if cluster_secret.is_none() {
+        warn!("PGVISOR_CLUSTER_SECRET is not configured; sidecar control API is running in UNAUTHENTICATED mode");
+    } else {
+        info!("Cluster authentication enabled for sidecar control API");
+    }
+
+    let mut role = role;
+    let should_start_postgres =
+        if role == "leader" && init_outcome == InitOutcome::AlreadyInitialized && !peers.is_empty() {
+            if let Some(active_leader_id) =
+                detect_active_peer_leader(&peers, node_id, cluster_secret.as_deref()).await
+            {
+                warn!(
+                    node_id,
+                    active_leader_id,
+                    "Detected an active cluster leader on restart; starting fenced to prevent split-brain"
+                );
+                role = "fenced".to_string();
+                // Mark supervisor status Fenced and ensure no stale Postgres instance runs.
+                let _ = supervisor.fence().await;
+                false
+            } else {
+                true
+            }
+        } else {
+            true
+        };
 
     let pg_addr = format!("127.0.0.1:{port}");
-    if role == "leader" {
-        if let Ok(pg_password) = env::var("POSTGRES_PASSWORD") {
-            if !pg_password.is_empty() {
-                bootstrap_superuser_password(&pg_addr, &superuser, &pg_password, init_outcome)
-                    .await;
+    if should_start_postgres {
+        supervisor.start(&config).await?;
+
+        if role == "leader" {
+            if let Ok(pg_password) = env::var("POSTGRES_PASSWORD") {
+                if !pg_password.is_empty() {
+                    if let Err(e) = supervisor.wait_ready(port, 60).await {
+                        warn!(?e, "PostgreSQL did not become ready before superuser password bootstrap");
+                    } else {
+                        bootstrap_superuser_password(&pg_addr, &superuser, &pg_password, init_outcome)
+                            .await;
+                    }
+                }
             }
         }
     }
@@ -253,21 +297,6 @@ async fn main() -> Result<()> {
     });
 
     let role_ref = Arc::new(RwLock::new(role.clone()));
-    let peers_str = env::var("PGVISOR_PEERS").unwrap_or_default();
-    let peers: Arc<Vec<String>> = Arc::new(
-        peers_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect(),
-    );
-
-    let cluster_secret = pgvisor_core::auth::cluster_secret_from_env();
-    if cluster_secret.is_none() {
-        warn!("PGVISOR_CLUSTER_SECRET is not configured; sidecar control API is running in UNAUTHENTICATED mode");
-    } else {
-        info!("Cluster authentication enabled for sidecar control API");
-    }
 
     let control_state = SidecarState::new(
         supervisor.clone(),
@@ -290,6 +319,22 @@ async fn main() -> Result<()> {
                 format!("Node {} initialized as cluster leader", node_id),
             )
             .await;
+        audit_log
+            .append(
+                pgvisor_core::audit::AuditEventKind::ElectionResult,
+                Some(node_id),
+                Some(&pg_addr),
+                format!("Node {node_id} initialized as cluster leader"),
+                None,
+            )
+            .await;
+    } else if role == "fenced" {
+        control_state
+            .record_event(
+                "election_result",
+                format!("Node {} started fenced due to active cluster leader", node_id),
+            )
+            .await;
     } else {
         control_state
             .record_event(
@@ -299,13 +344,13 @@ async fn main() -> Result<()> {
             .await;
     }
 
-    let control_addr = SocketAddr::from(([0, 0, 0, 0], control_port));
-    let control_app = build_control_router(control_state.clone());
-    spawn_control_server(control_addr, control_app);
-
     let superusers = Arc::new(SuperuserAllowlist::from_env(&superuser));
+    let api_session_secret = env::var("PGVISOR_API_SESSION_SECRET")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| cluster_secret.clone());
     let token_signer = Arc::new(SessionTokenSigner::from_cluster_secret(
-        cluster_secret.as_deref(),
+        api_session_secret.as_deref(),
     ));
     let mut api_state = ApiState::new(
         control_state.clone(),
@@ -328,6 +373,14 @@ async fn main() -> Result<()> {
             ),
         ));
     }
+
+    let control_addr = SocketAddr::from(([0, 0, 0, 0], control_port));
+    let control_app = build_control_router(control_state.clone());
+    spawn_control_server(control_addr, control_app);
+
+    // Launch election monitor immediately alongside control server so startup roles cannot race.
+    spawn_election_monitor(control_state, peers);
+
     api::spawn_metrics_sampler(api_state.clone());
     Arc::new(scheduler::BackupScheduler::new(
         api_state.clone(),
@@ -337,9 +390,6 @@ async fn main() -> Result<()> {
     let api_addr = SocketAddr::from(([0, 0, 0, 0], api_port));
     let api_app = build_api_router(api_state);
     spawn_api_server(api_addr, api_app);
-
-    // Background heartbeat & auto-failover election monitor
-    spawn_election_monitor(control_state, peers);
 
     // Setup container PID 1 signal listeners
     let mut sigterm = signal(SignalKind::terminate())?;
@@ -363,6 +413,49 @@ async fn main() -> Result<()> {
 
     info!("pgvisor-sidecar stopped cleanly");
     Ok(())
+}
+
+/// Checks configured `PGVISOR_PEERS` for an active, running cluster leader.
+///
+/// # Arguments
+/// * `peers` - Peer control base URLs from `PGVISOR_PEERS`.
+/// * `self_node_id` - Local sidecar node ID to exclude from peer probing.
+/// * `cluster_secret` - Optional shared secret for `/control/status` auth.
+///
+/// # Example
+/// `let active = detect_active_peer_leader(&peers, 1, None).await;`
+async fn detect_active_peer_leader(
+    peers: &[String],
+    self_node_id: u64,
+    cluster_secret: Option<&str>,
+) -> Option<u64> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(800))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    let self_tag = format!("node{self_node_id}");
+    let mut join_set = tokio::task::JoinSet::new();
+    for peer in peers {
+        if peer.contains(&self_tag) {
+            continue;
+        }
+        let client_cloned = client.clone();
+        let peer_url = peer.clone();
+        let secret = cluster_secret.map(str::to_string);
+        join_set.spawn(async move {
+            api::fetch_peer_status(&client_cloned, &peer_url, secret.as_deref()).await
+        });
+    }
+
+    while let Some(joined) = join_set.join_next().await {
+        if let Ok(Some(st)) = joined {
+            if st.node_id != self_node_id && st.role == "leader" && st.status == "running" {
+                return Some(st.node_id);
+            }
+        }
+    }
+    None
 }
 
 /// Sets the PostgreSQL superuser password from `POSTGRES_PASSWORD` after `initdb`

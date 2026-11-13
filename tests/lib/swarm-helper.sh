@@ -11,6 +11,7 @@
 #   swarm_init_s3_bucket            STACK_NAME [NETWORK_NAME]
 #   swarm_wait_for_healthy          TIMEOUT_SECS SERVICE_NAME [SERVICE_NAME...]
 #   swarm_wait_for_proxy_ready      DASHBOARD_URL [TIMEOUT_SECS] [AUTH_HEADER...]
+#   swarm_api_login                 DASHBOARD_URL [USERNAME] [PASSWORD]
 #   swarm_run_proxy_sql             QUERY [MAX_ATTEMPTS] [PORT] [HOST]
 #   swarm_run_node_sql              SERVICE_NAME QUERY
 #   swarm_get_sidecar_status        SERVICE_NAME
@@ -317,17 +318,24 @@ swarm_wait_for_proxy_ready() {
     echo "Waiting up to ${timeout}s for PgVisor proxy dashboard at ${dashboard_url}..."
     while [ "${elapsed}" -lt "${timeout}" ]; do
         local http_code
-        http_code=$(curl -s -o /dev/null -w "%{http_code}" "${auth_header[@]}" "${dashboard_url}/api/status" 2>/dev/null || echo "000")
+        http_code=$(curl -s -o /dev/null -w "%{http_code}" ${auth_header[@]+"${auth_header[@]}"} "${dashboard_url}/api/status" 2>/dev/null || echo "000")
         if [ "${http_code}" = "200" ] || [ "${http_code}" = "401" ] || [ "${http_code}" = "303" ]; then
-            echo "+ PgVisor proxy dashboard is responsive (HTTP ${http_code})."
+            echo "+ PgVisor dashboard is responsive (HTTP ${http_code})."
             return 0
         fi
         sleep 1
         elapsed=$((elapsed + 1))
     done
 
-    echo "ERROR: Timed out waiting for PgVisor proxy dashboard at ${dashboard_url}" >&2
+    echo "ERROR: Timed out waiting for PgVisor dashboard at ${dashboard_url}" >&2
     return 1
+}
+
+# swarm_api_login DASHBOARD_URL [USERNAME] [PASSWORD]
+#
+# Authenticates against the dashboard/sidecar /api/auth/login endpoint and sets AUTH_HEADER.
+swarm_api_login() {
+    api_login "$@"
 }
 
 # swarm_run_proxy_sql QUERY [MAX_ATTEMPTS] [PORT] [HOST]

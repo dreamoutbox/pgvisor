@@ -310,7 +310,10 @@ pub async fn execute_sql(
     .await;
 
     match exec_res {
-        Ok(Ok(result)) => Json(result).into_response(),
+        Ok(Ok(result)) => {
+            audit_executed_sql(&state, &user.username, target_db, &safe_sql).await;
+            Json(result).into_response()
+        }
         Ok(Err(err)) => {
             error!(?err, "Database error executing console SQL");
             sql_error_response(
@@ -327,6 +330,73 @@ pub async fn execute_sql(
                 format!("Query execution exceeded statement timeout of {timeout:?}"),
             )
         }
+    }
+}
+
+async fn audit_executed_sql(
+    state: &ApiState,
+    actor: &str,
+    target_db: Option<&str>,
+    sql: &str,
+) {
+    let upper = sql.trim().to_ascii_uppercase();
+    let is_drop = upper.starts_with("DROP TABLE")
+        || upper.starts_with("DROP DATABASE")
+        || upper.starts_with("DROP SCHEMA");
+    let is_truncate = upper.starts_with("TRUNCATE");
+    let is_delete = if upper.starts_with("DELETE") {
+        if std::env::var("PGVISOR_AUDIT_DELETE").is_ok() {
+            true
+        } else {
+            !upper.contains("WHERE")
+        }
+    } else {
+        false
+    };
+
+    let db = target_db.unwrap_or("default");
+    let snippet = if sql.len() > 300 {
+        format!("{}...", &sql[..300])
+    } else {
+        sql.to_string()
+    };
+
+    if is_drop || is_truncate || is_delete {
+        let pitr_candidate = (chrono::Utc::now() - chrono::Duration::seconds(1))
+            .format("%Y-%m-%d %H:%M:%S UTC")
+            .to_string();
+        state
+            .audit_log
+            .append(
+                AuditEventKind::DangerousSql,
+                Some(state.sidecar.node_id),
+                Some(&state.pg_addr),
+                format!("Dangerous SQL executed by '{actor}' on '{db}': {snippet}"),
+                Some(pitr_candidate),
+            )
+            .await;
+    }
+
+    let is_user_permission = upper.starts_with("CREATE ROLE")
+        || upper.starts_with("CREATE USER")
+        || upper.starts_with("DROP ROLE")
+        || upper.starts_with("DROP USER")
+        || upper.starts_with("ALTER ROLE")
+        || upper.starts_with("ALTER USER")
+        || upper.starts_with("GRANT ")
+        || upper.starts_with("REVOKE ");
+
+    if is_user_permission {
+        state
+            .audit_log
+            .append(
+                AuditEventKind::UserPermission,
+                Some(state.sidecar.node_id),
+                Some(&state.pg_addr),
+                format!("User/permission SQL executed by '{actor}' on '{db}': {snippet}"),
+                None,
+            )
+            .await;
     }
 }
 

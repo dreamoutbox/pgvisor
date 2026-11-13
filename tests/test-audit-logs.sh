@@ -32,11 +32,7 @@ readonly COMPOSE_FILE="${REPO_ROOT}/composes/docker-compose.audit-logs.yml"
 PROXY_HOST="${PGVISOR_HOST:-localhost}"
 PROXY_PORT="${PGVISOR_PORT:-${TEST_PROXY_PORT}}"
 DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://localhost:${TEST_DASHBOARD_PORT}}"
-ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
 AUTH_HEADER=()
-if [ -n "${ADMIN_TOKEN}" ]; then
-    AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
-fi
 
 NODE1_CONTAINER="pgvisor-audit-logs-node1"
 NODE2_CONTAINER="pgvisor-audit-logs-node2"
@@ -56,7 +52,9 @@ cluster_up   "${PROJECT_NAME}" "${COMPOSE_FILE}"
 
 echo "Waiting for cluster containers to report healthy..."
 wait_for_healthy 120 "${PROJECT_NAME}-minio" "${NODE1_CONTAINER}" "${NODE2_CONTAINER}" "${NODE3_CONTAINER}"
-wait_for_proxy_ready "${DASHBOARD_URL}" 60 "${AUTH_HEADER[@]}"
+wait_for_proxy_ready "${DASHBOARD_URL}" 60
+api_login "${DASHBOARD_URL}"
+run_proxy_sql "SELECT 1;" 15 "${PROXY_PORT}" "${PROXY_HOST}" > /dev/null
 
 exec_sql() {
     local sql="$1"
@@ -65,6 +63,14 @@ exec_sql() {
     else
         docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" exec -T pgvisor-proxy psql -h localhost -p 5432 -U postgres -d postgres -c "${sql}"
     fi
+}
+
+exec_api_sql() {
+    local sql="$1"
+    curl -s -f -X POST "${AUTH_HEADER[@]}" \
+        -H "Content-Type: application/json" \
+        -d "{\"query\": \"${sql}\"}" \
+        "${DASHBOARD_URL}/api/sql" > /dev/null
 }
 
 echo ""
@@ -94,7 +100,7 @@ echo ""
 echo "[2/9] Testing dangerous SQL: DROP TABLE..."
 exec_sql "CREATE TABLE t_audit_drop (id INT, note TEXT);"
 exec_sql "INSERT INTO t_audit_drop VALUES (1, 'sensitive data');"
-exec_sql "DROP TABLE t_audit_drop;"
+exec_api_sql "DROP TABLE t_audit_drop;"
 
 # Verify audit log captures DROP TABLE with PITR recommendation
 ATTEMPTS=0
@@ -120,7 +126,7 @@ echo ""
 echo "[3/9] Testing dangerous SQL: TRUNCATE..."
 exec_sql "CREATE TABLE t_audit_trunc (id INT);"
 exec_sql "INSERT INTO t_audit_trunc VALUES (1), (2);"
-exec_sql "TRUNCATE t_audit_trunc;"
+exec_api_sql "TRUNCATE t_audit_trunc;"
 
 ATTEMPTS=0
 FOUND_TRUNC=false
@@ -146,7 +152,7 @@ exec_sql "CREATE TABLE t_audit_del (id INT, val TEXT);"
 exec_sql "INSERT INTO t_audit_del VALUES (1, 'row1'), (2, 'row2'), (3, 'row3');"
 
 # 1. DELETE with WHERE should NOT be audited when PGVISOR_AUDIT_DELETE is unset
-exec_sql "DELETE FROM t_audit_del WHERE id = 1;"
+exec_api_sql "DELETE FROM t_audit_del WHERE id = 1;"
 sleep 2
 RESPONSE_WHERE=$(curl -s "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/audit-logs?kind=dangerous_sql" || true)
 if echo "${RESPONSE_WHERE}" | grep -q "WHERE id = 1"; then
@@ -157,7 +163,7 @@ else
 fi
 
 # 2. DELETE without WHERE (table-wide wipeout) MUST be audited as dangerous SQL
-exec_sql "DELETE FROM t_audit_del;"
+exec_api_sql "DELETE FROM t_audit_del;"
 ATTEMPTS=0
 FOUND_DEL=false
 while [ $ATTEMPTS -lt 15 ]; do
@@ -273,9 +279,9 @@ fi
 
 echo ""
 echo "[7/9] Testing user and permission management auditing..."
-exec_sql "CREATE ROLE audit_tester WITH LOGIN;"
+exec_api_sql "CREATE ROLE audit_tester WITH LOGIN;"
 sleep 1
-exec_sql "DROP ROLE audit_tester;"
+exec_api_sql "DROP ROLE audit_tester;"
 
 ATTEMPTS=0
 FOUND_USER=false

@@ -25,11 +25,7 @@ readonly COMPOSE_FILE="${REPO_ROOT}/composes/docker-compose.backup-restore.yml"
 PROXY_HOST="${PGVISOR_HOST:-localhost}"
 PROXY_PORT="${PGVISOR_PORT:-${TEST_PROXY_PORT}}"
 DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://localhost:${TEST_DASHBOARD_PORT}}"
-ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
 AUTH_HEADER=()
-if [ -n "${ADMIN_TOKEN}" ]; then
-    AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
-fi
 NODE_CONTAINER="${PGVISOR_NODE_CONTAINER:-pgvisor-backup-restore-node1}"
 PGDATA_DIR="/var/lib/postgresql/data/pgdata"
 
@@ -53,7 +49,8 @@ cluster_up   "${PROJECT_NAME}" "${COMPOSE_FILE}"
 
 echo "Waiting for cluster containers to report healthy..."
 wait_for_healthy 120 "${PROJECT_NAME}-minio" "pgvisor-backup-restore-node1" "pgvisor-backup-restore-node2" "pgvisor-backup-restore-node3"
-wait_for_proxy_ready "${DASHBOARD_URL}" 60 "${AUTH_HEADER[@]}"
+wait_for_proxy_ready "${DASHBOARD_URL}" 60
+api_login "${DASHBOARD_URL}"
 
 
 
@@ -331,7 +328,7 @@ echo "  Dashboard Restore API response: ${RESTORE_RESP}"
 echo "✓ Cluster leader restored and standbys re-synchronized automatically via API."
 
 # Verify restore was performed on primary node
-AUDIT_LOGS=$(curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/audit?event=backup_restored" || echo "")
+AUDIT_LOGS=$(curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/audit-logs?kind=backup_restored" || echo "")
 if echo "${AUDIT_LOGS}" | grep -q "pgvisor-backup-restore-node1"; then
     echo "✓ Verified cluster restore was targeted and executed on primary leader (node1)."
 fi

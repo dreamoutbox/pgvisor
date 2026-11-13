@@ -28,11 +28,7 @@ readonly TABLE_NAME="t_swarm_scale"
 PROXY_HOST="${PGVISOR_HOST:-localhost}"
 PROXY_PORT="${PGVISOR_PORT:-${TEST_PROXY_PORT}}"
 DASHBOARD_URL="http://localhost:${TEST_DASHBOARD_PORT}"
-ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
 AUTH_HEADER=()
-if [ -n "${ADMIN_TOKEN}" ]; then
-    AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
-fi
 
 trap swarm_cleanup EXIT
 
@@ -55,7 +51,8 @@ swarm_init_s3_bucket "${STACK_NAME}"
 
 echo "Waiting for baseline PostgreSQL cluster nodes to report healthy..."
 swarm_wait_for_healthy 120 pgvisor-node1 pgvisor-node2 pgvisor-node3
-swarm_wait_for_proxy_ready "${DASHBOARD_URL}" 60 "${AUTH_HEADER[@]}"
+swarm_wait_for_proxy_ready "${DASHBOARD_URL}" 60
+swarm_api_login "${DASHBOARD_URL}"
 
 echo ""
 echo "[3/8] Verifying baseline cluster connectivity and replication topology..."

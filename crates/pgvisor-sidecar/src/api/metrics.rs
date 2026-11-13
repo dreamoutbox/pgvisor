@@ -6,6 +6,7 @@ use axum::Json;
 use pgvisor_core::api::{
     BackupMetrics, ClusterMetricsSnapshot, NodeMetricRole, NodeMetrics, SidecarRole,
 };
+use pgvisor_core::audit::AuditEventKind;
 use pgvisor_core::pg_client::PgConnection;
 use tokio::sync::{Mutex, RwLock};
 use tracing::debug;
@@ -154,6 +155,13 @@ async fn map_probe_to_node_metrics(
 /// # Arguments
 /// * `state` - Shared API state.
 pub async fn build_metrics_snapshot(state: &ApiState) -> ClusterMetricsSnapshot {
+    let (snapshot, _) = build_metrics_snapshot_with_probes(state).await;
+    snapshot
+}
+
+async fn build_metrics_snapshot_with_probes(
+    state: &ApiState,
+) -> (ClusterMetricsSnapshot, Vec<PeerProbe>) {
     let timestamp_ms = chrono::Utc::now().timestamp_millis() as u64;
     let probes = probe_all_peers(state).await;
 
@@ -175,12 +183,15 @@ pub async fn build_metrics_snapshot(state: &ApiState) -> ClusterMetricsSnapshot 
     let activity = sum_cluster_activity(&nodes);
     let backups = collect_backup_metrics(state).await;
 
-    ClusterMetricsSnapshot {
-        timestamp_ms,
-        nodes,
-        activity,
-        backups,
-    }
+    (
+        ClusterMetricsSnapshot {
+            timestamp_ms,
+            nodes,
+            activity,
+            backups,
+        },
+        probes,
+    )
 }
 
 async fn collect_backup_metrics(state: &ApiState) -> BackupMetrics {
@@ -207,14 +218,88 @@ async fn collect_backup_metrics(state: &ApiState) -> BackupMetrics {
     }
 }
 
+fn probe_is_healthy(probe: &PeerProbe) -> bool {
+    probe
+        .status
+        .as_ref()
+        .is_some_and(|s| s.status == "running" && s.role != "fenced")
+}
+
+async fn record_node_health_transitions(
+    state: &ApiState,
+    prev_healthy: &mut HashMap<String, bool>,
+    probes: &[PeerProbe],
+) {
+    if state.sidecar.current_role().await != SidecarRole::Leader {
+        for probe in probes {
+            prev_healthy.insert(probe.pg_address.clone(), probe_is_healthy(probe));
+        }
+        return;
+    }
+
+    for probe in probes {
+        let healthy = probe_is_healthy(probe);
+        let node_id = probe
+            .status
+            .as_ref()
+            .map(|s| s.node_id)
+            .or(probe.node_id);
+        let label = node_id
+            .map(|id| format!("Node #{id} ({})", probe.pg_address))
+            .unwrap_or_else(|| format!("Node ({})", probe.pg_address));
+        let prev = prev_healthy.insert(probe.pg_address.clone(), healthy);
+        match prev {
+            Some(true) if !healthy => {
+                state
+                    .audit_log
+                    .append(
+                        AuditEventKind::NodeDown,
+                        node_id,
+                        Some(&probe.pg_address),
+                        format!("{label} became offline or unreachable"),
+                        None,
+                    )
+                    .await;
+            }
+            Some(false) if healthy => {
+                state
+                    .audit_log
+                    .append(
+                        AuditEventKind::NodeUp,
+                        node_id,
+                        Some(&probe.pg_address),
+                        format!("{label} is online and healthy"),
+                        None,
+                    )
+                    .await;
+            }
+            None if healthy => {
+                state
+                    .audit_log
+                    .append(
+                        AuditEventKind::NodeUp,
+                        node_id,
+                        Some(&probe.pg_address),
+                        format!("{label} registered online and healthy"),
+                        None,
+                    )
+                    .await;
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Spawns the 5-second background sampler pushing snapshots into `state.metrics_ring`.
 pub fn spawn_metrics_sampler(state: ApiState) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(METRICS_SAMPLE_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut prev_healthy = HashMap::new();
         loop {
             interval.tick().await;
-            let snapshot = build_metrics_snapshot(&state).await;
+            let (snapshot, probes) = build_metrics_snapshot_with_probes(&state).await;
+            record_node_health_transitions(&state, &mut prev_healthy, &probes).await;
             debug!(
                 nodes = snapshot.nodes.len(),
                 reads_total = snapshot.activity.reads_total,

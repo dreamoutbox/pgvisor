@@ -1,36 +1,52 @@
-pub mod backup;
-pub mod cluster;
-pub mod executor;
-pub mod metrics;
+pub mod node_target;
 pub mod pool;
 pub mod restore_epoch_tracker;
-pub mod scheduler;
 pub mod session;
 pub mod tls;
 
-use metrics::{NodeTelemetry, ProxyMetricsService, ProxyMetricsStore};
-use scheduler::BackupScheduler;
-
-use std::collections::HashMap;
 use std::env;
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Result;
-use backup::ProxyBackupService;
-use cluster::{NodeTarget, ProxyClusterService};
-use executor::ProxySqlExecutor;
-use pgvisor_core::api::{NodeHealthState, NodeRole, NodeSummary};
-use pgvisor_core::audit::{AuditEventKind, AuditLog};
-use pgvisor_core::backup::{BackupManager, BackupScheduleConfig};
-use pgvisor_dashboard::create_router;
-use pgvisor_dashboard::handlers::{DashboardState, SqlExecutor};
-use pool::ConnectionPool;
+use node_target::NodeTarget;
+use pgvisor_core::pg_client::execute_simple_query_on_stream;
+use pool::{BackendRole, ConnectionPool, FailoverConfig};
 use restore_epoch_tracker::RestoreEpochTracker;
 use session::ClientSession;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
+
+const REPLICATION_DISCOVERY_SQL: &str =
+    "SELECT client_addr::text, application_name FROM pg_stat_replication;";
+
+#[derive(serde::Deserialize, Debug)]
+struct ControlStatus {
+    role: String,
+    status: String,
+    #[serde(default)]
+    restore_epoch: u64,
+}
+
+/// Queries the active leader for connected streaming-replication replicas.
+async fn query_replication_peers(
+    pool: &ConnectionPool,
+    failover_config: &FailoverConfig,
+) -> Option<Vec<Vec<String>>> {
+    let mut backend = pool
+        .acquire_with_retry(BackendRole::Leader, failover_config, None, None)
+        .await
+        .ok()?;
+    let result =
+        execute_simple_query_on_stream(&mut backend.stream, REPLICATION_DISCOVERY_SQL, 50).await;
+    match result {
+        Ok(query_result) => {
+            pool.release(backend).await;
+            Some(query_result.rows)
+        }
+        Err(_) => None,
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -112,7 +128,6 @@ async fn main() -> Result<()> {
         .and_then(|p| p.parse().ok())
         .unwrap_or(8080);
 
-    // Build cluster targets for dynamic topology monitoring
     let mut all_pg_addrs = Vec::new();
     if let Some(l) = leader_addr.as_ref() {
         all_pg_addrs.push(l.clone());
@@ -137,27 +152,6 @@ async fn main() -> Result<()> {
             .collect::<Vec<_>>(),
     ));
 
-    #[derive(serde::Deserialize, Debug)]
-    struct ControlStatus {
-        node_id: u64,
-        role: String,
-        status: String,
-        pg_version: Option<String>,
-        uptime_secs: Option<u64>,
-        cpu_percent: Option<f32>,
-        memory_used_bytes: Option<u64>,
-        memory_total_bytes: Option<u64>,
-        disk_used_bytes: Option<u64>,
-        #[serde(default)]
-        restore_epoch: u64,
-    }
-
-    let metrics_store = Arc::new(ProxyMetricsStore::new());
-    let node_telemetry = Arc::new(RwLock::new(HashMap::<u64, NodeTelemetry>::new()));
-
-    let cluster_id =
-        env::var("PGVISOR_CLUSTER_ID").unwrap_or_else(|_| "pgvisor-cluster".to_string());
-    let admin_token = env::var("PGVISOR_ADMIN_TOKEN").ok();
     let cluster_secret = pgvisor_core::auth::cluster_secret_from_env();
     if cluster_secret.is_none() {
         warn!("PGVISOR_CLUSTER_SECRET is not configured; proxy-to-sidecar communication is unauthenticated");
@@ -165,177 +159,11 @@ async fn main() -> Result<()> {
         info!("Cluster authentication enabled for proxy-to-sidecar communication");
     }
 
-    // S3 and backup configuration for physical snapshots, automated CRON, and audit logs
-    let backup_config = BackupScheduleConfig::from_env();
-    let s3_endpoint = backup_config.minio_endpoint.clone();
-    let s3_bucket = backup_config.minio_bucket.clone();
-
-    let s3_operator = backup_config.build_operator().ok();
-    let audit_log = Arc::new(AuditLog::new(&cluster_id, s3_operator.clone(), 2000));
-
-    // Restore historical audit events from S3 storage in the background
-    let audit_loader = audit_log.clone();
-    tokio::spawn(async move {
-        match audit_loader.load_from_storage().await {
-            Ok(count) => {
-                info!(
-                    count,
-                    "Restored historical audit log events from S3 storage"
-                );
-            }
-            Err(e) => {
-                warn!(?e, "Could not restore audit logs from S3");
-            }
-        }
-    });
-
-    let mut dash_state_opt: Option<Arc<DashboardState>> = None;
-
-    // Spawn embedded dashboard on PGVISOR_DASHBOARD_LISTEN (default 0.0.0.0:8080)
-    let dashboard_listen =
-        env::var("PGVISOR_DASHBOARD_LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
-    if let Ok(dash_addr) = dashboard_listen.parse::<SocketAddr>() {
-        let mut dash_state_inner = DashboardState::new(&cluster_id, admin_token);
-        dash_state_inner.audit_log = audit_log.clone();
-        dash_state_inner.sql_executor = Arc::new(ProxySqlExecutor::new(pool.clone()));
-
-        let backup_service: Arc<dyn pgvisor_dashboard::handlers::BackupService> =
-            if let Some(op) = s3_operator {
-                let bm = Arc::new(BackupManager::new(&cluster_id, op));
-                Arc::new(
-                    ProxyBackupService::new(
-                        bm,
-                        leader_ref.clone(),
-                        leader_addr.clone(),
-                        standby_ref.clone(),
-                        standby_addrs.clone(),
-                        Some(pool.clone()),
-                        s3_endpoint,
-                        s3_bucket,
-                        backup_config.retention_days,
-                        backup_config.keep_count,
-                        control_port,
-                    )
-                    .with_cluster_secret(cluster_secret.clone())
-                    .with_audit_log(audit_log.clone()),
-                )
-            } else {
-                warn!("Failed to initialize OpenDAL S3 operator, using fallback");
-                Arc::new(pgvisor_dashboard::handlers::StandaloneBackupService::new())
-            };
-        // Clone Arc handle to share BackupService with ProxyMetricsService
-        dash_state_inner.backup_service = backup_service.clone();
-
-        // Start automated background backup scheduler if enabled
-        if backup_config.cron_enabled {
-            let scheduler = Arc::new(BackupScheduler::new(
-                backup_service.clone(),
-                backup_config.clone(),
-            ));
-            scheduler.start();
-        }
-
-        let cluster_service = Arc::new(
-            ProxyClusterService::new(
-                targets.clone(),
-                leader_ref.clone(),
-                standby_ref.clone(),
-                pool.clone(),
-            )
-            .with_cluster_secret(cluster_secret.clone())
-            .with_audit_log(audit_log.clone()),
-        );
-        dash_state_inner.cluster_service = cluster_service;
-        dash_state_inner.user_service = Arc::new(pgvisor_dashboard::handlers::SqlUserService::new(
-            dash_state_inner.sql_executor.clone(),
-        ));
-
-        let proxy_metrics_service = Arc::new(ProxyMetricsService::new(
-            metrics_store.clone(),
-            dash_state_inner.overview.clone(),
-            node_telemetry.clone(),
-            backup_service.clone(),
-            60,
-        ));
-        dash_state_inner.metrics_service = proxy_metrics_service.clone();
-
-        let metrics_ticker = proxy_metrics_service.clone();
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
-            loop {
-                ticker.tick().await;
-                metrics_ticker.record_tick().await;
-            }
-        });
-
-        let dash_state = Arc::new(dash_state_inner);
-        dash_state_opt = Some(dash_state.clone());
-
-        // Populate initial dashboard node topology from configured addresses
-        {
-            let mut overview = dash_state.overview.write().await;
-            let mut nodes = Vec::new();
-            let mut node_id = 1u64;
-
-            if let Some(l_addr) = leader_addr.as_ref() {
-                nodes.push(NodeSummary {
-                    node_id,
-                    address: l_addr.clone(),
-                    role: NodeRole::Leader,
-                    state: NodeHealthState::Healthy,
-                    pg_version: "18.6".into(),
-                    replication_lag_bytes: 0,
-                    uptime_secs: 100,
-                    is_local: false,
-                    cpu_percent: 0.0,
-                    memory_used_bytes: 0,
-                    memory_total_bytes: 0,
-                    disk_used_bytes: 0,
-                });
-                node_id += 1;
-            }
-
-            for s_addr in &standby_addrs {
-                nodes.push(NodeSummary {
-                    node_id,
-                    address: s_addr.clone(),
-                    role: NodeRole::Standby,
-                    state: NodeHealthState::Healthy,
-                    pg_version: "18.6".into(),
-                    replication_lag_bytes: 64,
-                    uptime_secs: 100,
-                    is_local: false,
-                    cpu_percent: 0.0,
-                    memory_used_bytes: 0,
-                    memory_total_bytes: 0,
-                    disk_used_bytes: 0,
-                });
-                node_id += 1;
-            }
-
-            overview.total_nodes = nodes.len();
-            overview.healthy_nodes = nodes.len();
-            overview.leader_address = leader_addr.clone();
-            overview.nodes = nodes;
-        }
-
-        let dash_app = create_router(dash_state);
-        tokio::spawn(async move {
-            if let Ok(listener) = tokio::net::TcpListener::bind(dash_addr).await {
-                info!(addr = %dash_addr, "PgVisor embedded dashboard listening");
-                let _ = axum::serve(listener, dash_app).await;
-            }
-        });
-    }
-
     // Background dynamic topology discovery loop
     let pool_for_monitor = pool.clone();
     let leader_ref_monitor = leader_ref.clone();
     let standby_ref_monitor = standby_ref.clone();
-    let dash_state_for_monitor = dash_state_opt.clone();
     let targets_monitor = targets.clone();
-    let audit_monitor = audit_log.clone();
-    let node_telemetry_monitor = node_telemetry.clone();
     let cluster_secret_monitor = cluster_secret.clone();
 
     tokio::spawn(async move {
@@ -354,31 +182,23 @@ async fn main() -> Result<()> {
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
-        let executor_for_discovery = ProxySqlExecutor::new(pool_for_monitor.clone());
+        let discovery_failover = FailoverConfig {
+            failover_timeout: std::time::Duration::from_millis(500),
+            retry_interval: std::time::Duration::from_millis(100),
+        };
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
-        let mut prev_health_states: HashMap<String, NodeHealthState> = HashMap::new();
-        let mut last_seen_event_ids: HashMap<String, u64> = HashMap::new();
         let mut restore_epoch_tracker = RestoreEpochTracker::new();
 
         loop {
             interval.tick().await;
             let mut discovered_leader_restore_epoch: Option<u64> = None;
 
-            let mut replica_lags: HashMap<String, u64> = HashMap::new();
-
-            // 1. Query active leader's pg_stat_replication to discover dynamic replicas and replication lag
-            if let Ok(result) = executor_for_discovery
-                .execute(
-                    "SELECT client_addr::text, application_name, CASE WHEN NOT pg_is_in_recovery() THEN COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn), 0)::text ELSE '0' END FROM pg_stat_replication;",
-                    50,
-                )
-                .await
-            {
-                for row in result.rows {
+            // Query active leader's pg_stat_replication to discover dynamic replicas
+            if let Some(rows) = query_replication_peers(&pool_for_monitor, &discovery_failover).await {
+                for row in rows {
                     if row.len() >= 2 {
                         let client_addr = &row[0];
                         let app_name = &row[1];
-                        let lag_bytes = row.get(2).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
                         let host = if app_name.starts_with("pgvisor-node") {
                             app_name.clone()
                         } else if !client_addr.is_empty() && client_addr != "NULL" {
@@ -387,11 +207,8 @@ async fn main() -> Result<()> {
                             continue;
                         };
 
-                        replica_lags.insert(format!("{}:5432", host), lag_bytes);
-                        replica_lags.insert(host.clone(), lag_bytes);
-
-                        let pg_addr = format!("{}:5432", host);
-                        let control_url = format!("http://{}:{}", host, control_port);
+                        let pg_addr = format!("{host}:5432");
+                        let control_url = format!("http://{host}:{control_port}");
 
                         let mut t_lock = targets_monitor.write().await;
                         if !t_lock
@@ -400,23 +217,11 @@ async fn main() -> Result<()> {
                         {
                             info!(%pg_addr, %control_url, "Dynamically discovered new cluster replica from leader");
                             t_lock.push(NodeTarget {
-                                pg_addr: pg_addr.clone(),
+                                pg_addr,
                                 control_url,
                                 is_dynamic: true,
                                 consecutive_failures: 0,
                             });
-                            audit_monitor
-                                .append(
-                                    AuditEventKind::NodeJoined,
-                                    None,
-                                    Some(&pg_addr),
-                                    format!(
-                                        "Dynamic standby node {} joined streaming replication",
-                                        pg_addr
-                                    ),
-                                    None,
-                                )
-                                .await;
                         }
                     }
                 }
@@ -424,8 +229,6 @@ async fn main() -> Result<()> {
 
             let mut discovered_leader: Option<String> = None;
             let mut discovered_standbys: Vec<String> = Vec::new();
-            let mut node_summaries = Vec::new();
-            let mut healthy_count = 0;
 
             let targets_to_poll = {
                 let r = targets_monitor.read().await;
@@ -437,320 +240,47 @@ async fn main() -> Result<()> {
                     "{}/control/status",
                     target.control_url.trim_end_matches('/')
                 );
-                match client.get(&url).send().await {
-                    Ok(resp) => {
-                        if let Ok(st) = resp.json::<ControlStatus>().await {
-                            let is_healthy = st.status == "running";
-                            let state = match st.status.as_str() {
-                                "running" => {
-                                    healthy_count += 1;
-                                    NodeHealthState::Healthy
-                                }
-                                "restoring" => NodeHealthState::Degraded,
-                                "fenced" => NodeHealthState::Fenced,
-                                "stopped" => NodeHealthState::Stopped,
-                                _ => NodeHealthState::Offline,
-                            };
+                let mut healthy_poll = false;
+                if let Ok(resp) = client.get(&url).send().await {
+                    if let Ok(st) = resp.json::<ControlStatus>().await {
+                        healthy_poll = true;
+                        let is_healthy = st.status == "running";
 
-                            let pg_ver = st.pg_version.unwrap_or_else(|| "18.6".to_string());
-
-                            let role = if st.role == "leader" {
-                                if is_healthy || st.status == "restoring" {
-                                    discovered_leader = Some(target.pg_addr.clone());
-                                }
-                                discovered_leader_restore_epoch = Some(
-                                    discovered_leader_restore_epoch
-                                        .map_or(st.restore_epoch, |prev| prev.max(st.restore_epoch)),
-                                );
-                                NodeRole::Leader
-                            } else {
-                                if is_healthy {
-                                    discovered_standbys.push(target.pg_addr.clone());
-                                }
-                                NodeRole::Standby
-                            };
-
-                            let lag_bytes = if role == NodeRole::Leader {
-                                0
-                            } else {
-                                replica_lags
-                                    .get(&target.pg_addr)
-                                    .or_else(|| {
-                                        let host = target
-                                            .pg_addr
-                                            .split(':')
-                                            .next()
-                                            .unwrap_or(&target.pg_addr);
-                                        replica_lags.get(host)
-                                    })
-                                    .copied()
-                                    .unwrap_or(0)
-                            };
-
-                            let uptime = st.uptime_secs.unwrap_or(100);
-                            let cpu = st.cpu_percent.unwrap_or(0.0);
-                            let mem_used = st.memory_used_bytes.unwrap_or(0);
-                            let mem_total = st.memory_total_bytes.unwrap_or(0);
-                            let disk = st.disk_used_bytes.unwrap_or(0);
-
-                            node_telemetry_monitor.write().await.insert(
-                                st.node_id,
-                                NodeTelemetry {
-                                    cpu_percent: cpu,
-                                    memory_used_bytes: mem_used,
-                                    memory_total_bytes: mem_total,
-                                    disk_used_bytes: disk,
-                                    replication_lag_bytes: lag_bytes,
-                                    uptime_secs: uptime,
-                                },
+                        if st.role == "leader" {
+                            if is_healthy || st.status == "restoring" {
+                                discovered_leader = Some(target.pg_addr.clone());
+                            }
+                            discovered_leader_restore_epoch = Some(
+                                discovered_leader_restore_epoch
+                                    .map_or(st.restore_epoch, |prev| prev.max(st.restore_epoch)),
                             );
-
-                            node_summaries.push(NodeSummary {
-                                node_id: st.node_id,
-                                address: target.pg_addr.clone(),
-                                role,
-                                state,
-                                pg_version: pg_ver,
-                                replication_lag_bytes: lag_bytes,
-                                uptime_secs: uptime,
-                                is_local: false,
-                                cpu_percent: cpu,
-                                memory_used_bytes: mem_used,
-                                memory_total_bytes: mem_total,
-                                disk_used_bytes: disk,
-                            });
-
-                            if target.is_dynamic {
-                                let mut t_lock = targets_monitor.write().await;
-                                if let Some(t) =
-                                    t_lock.iter_mut().find(|t| t.pg_addr == target.pg_addr)
-                                {
-                                    t.consecutive_failures = 0;
-                                }
-                            }
-
-                            // Track node health state transition
-                            let prev = prev_health_states.get(&target.pg_addr).copied();
-                            prev_health_states.insert(target.pg_addr.clone(), state);
-
-                            if let Some(p) = prev {
-                                if p != NodeHealthState::Healthy
-                                    && state == NodeHealthState::Healthy
-                                {
-                                    audit_monitor
-                                        .append(
-                                            AuditEventKind::NodeUp,
-                                            Some(st.node_id),
-                                            Some(&target.pg_addr),
-                                            format!(
-                                                "Node #{} ({}) is online and healthy",
-                                                st.node_id, target.pg_addr
-                                            ),
-                                            None,
-                                        )
-                                        .await;
-                                } else if p == NodeHealthState::Healthy
-                                    && state == NodeHealthState::Offline
-                                {
-                                    audit_monitor
-                                        .append(
-                                            AuditEventKind::NodeDown,
-                                            Some(st.node_id),
-                                            Some(&target.pg_addr),
-                                            format!(
-                                                "Node #{} ({}) became offline or unreachable",
-                                                st.node_id, target.pg_addr
-                                            ),
-                                            None,
-                                        )
-                                        .await;
-                                } else if p == NodeHealthState::Healthy
-                                    && state == NodeHealthState::Fenced
-                                {
-                                    audit_monitor
-                                        .append(
-                                            AuditEventKind::NodeDown,
-                                            Some(st.node_id),
-                                            Some(&target.pg_addr),
-                                            format!(
-                                                "Node #{} ({}) was fenced (quorum lost)",
-                                                st.node_id, target.pg_addr
-                                            ),
-                                            None,
-                                        )
-                                        .await;
-                                }
-                            } else if state == NodeHealthState::Healthy {
-                                audit_monitor
-                                    .append(
-                                        AuditEventKind::NodeUp,
-                                        Some(st.node_id),
-                                        Some(&target.pg_addr),
-                                        format!(
-                                            "Node #{} ({}) registered online and healthy",
-                                            st.node_id, target.pg_addr
-                                        ),
-                                        None,
-                                    )
-                                    .await;
-                            }
-
-                            // Poll recent lifecycle and consensus events from sidecar
-                            #[derive(serde::Deserialize)]
-                            struct SidecarEventRecord {
-                                id: u64,
-                                kind: String,
-                                detail: String,
-                            }
-
-                            let last_id = last_seen_event_ids
-                                .get(&target.control_url)
-                                .copied()
-                                .unwrap_or(0);
-                            let events_url = format!(
-                                "{}/control/events?since_id={}",
-                                target.control_url.trim_end_matches('/'),
-                                last_id
-                            );
-                            if let Ok(ev_resp) = client.get(&events_url).send().await {
-                                if let Ok(records) = ev_resp.json::<Vec<SidecarEventRecord>>().await
-                                {
-                                    let mut max_id = last_id;
-                                    for rec in records {
-                                        if rec.id > max_id {
-                                            max_id = rec.id;
-                                        }
-                                        let audit_kind = match rec.kind.as_str() {
-                                            "election_result" => AuditEventKind::ElectionResult,
-                                            "node_joined" => AuditEventKind::NodeJoined,
-                                            "node_left" => AuditEventKind::NodeLeft,
-                                            _ => AuditEventKind::ElectionResult,
-                                        };
-                                        audit_monitor
-                                            .append(
-                                                audit_kind,
-                                                Some(st.node_id),
-                                                Some(&target.pg_addr),
-                                                rec.detail,
-                                                None,
-                                            )
-                                            .await;
-                                    }
-                                    last_seen_event_ids.insert(target.control_url.clone(), max_id);
-                                }
-                            }
-                        } else {
-                            node_summaries.push(NodeSummary {
-                                node_id: 0,
-                                address: target.pg_addr.clone(),
-                                role: NodeRole::Standby,
-                                state: NodeHealthState::Offline,
-                                pg_version: "18.6".into(),
-                                replication_lag_bytes: 0,
-                                uptime_secs: 0,
-                                is_local: false,
-                                cpu_percent: 0.0,
-                                memory_used_bytes: 0,
-                                memory_total_bytes: 0,
-                                disk_used_bytes: 0,
-                            });
-                            if target.is_dynamic {
-                                let mut t_lock = targets_monitor.write().await;
-                                if let Some(t) =
-                                    t_lock.iter_mut().find(|t| t.pg_addr == target.pg_addr)
-                                {
-                                    t.consecutive_failures += 1;
-                                }
-                            }
-
-                            let prev = prev_health_states.get(&target.pg_addr).copied();
-                            prev_health_states
-                                .insert(target.pg_addr.clone(), NodeHealthState::Offline);
-                            if let Some(NodeHealthState::Healthy) = prev {
-                                audit_monitor
-                                    .append(
-                                        AuditEventKind::NodeDown,
-                                        None,
-                                        Some(&target.pg_addr),
-                                        format!(
-                                            "Node ({}) became offline or unreachable",
-                                            target.pg_addr
-                                        ),
-                                        None,
-                                    )
-                                    .await;
-                            }
+                        } else if is_healthy {
+                            discovered_standbys.push(target.pg_addr.clone());
                         }
-                    }
-                    Err(_) => {
-                        node_summaries.push(NodeSummary {
-                            node_id: 0,
-                            address: target.pg_addr.clone(),
-                            role: NodeRole::Standby,
-                            state: NodeHealthState::Offline,
-                            pg_version: "18.6".into(),
-                            replication_lag_bytes: 0,
-                            uptime_secs: 0,
-                            is_local: false,
-                            cpu_percent: 0.0,
-                            memory_used_bytes: 0,
-                            memory_total_bytes: 0,
-                            disk_used_bytes: 0,
-                        });
+
                         if target.is_dynamic {
                             let mut t_lock = targets_monitor.write().await;
                             if let Some(t) = t_lock.iter_mut().find(|t| t.pg_addr == target.pg_addr)
                             {
-                                t.consecutive_failures += 1;
+                                t.consecutive_failures = 0;
                             }
                         }
-
-                        let prev = prev_health_states.get(&target.pg_addr).copied();
-                        prev_health_states.insert(target.pg_addr.clone(), NodeHealthState::Offline);
-                        if let Some(NodeHealthState::Healthy) = prev {
-                            audit_monitor
-                                .append(
-                                    AuditEventKind::NodeDown,
-                                    None,
-                                    Some(&target.pg_addr),
-                                    format!(
-                                        "Node ({}) became offline or unreachable",
-                                        target.pg_addr
-                                    ),
-                                    None,
-                                )
-                                .await;
-                        }
+                    }
+                }
+                if !healthy_poll && target.is_dynamic {
+                    let mut t_lock = targets_monitor.write().await;
+                    if let Some(t) = t_lock.iter_mut().find(|t| t.pg_addr == target.pg_addr) {
+                        t.consecutive_failures += 1;
                     }
                 }
             }
 
             // Prune dynamic targets with consecutive failures >= 10
             {
-                let mut pruned = Vec::new();
                 let mut t_lock = targets_monitor.write().await;
-                t_lock.retain(|t| {
-                    if t.is_dynamic && t.consecutive_failures >= 10 {
-                        pruned.push(t.pg_addr.clone());
-                        false
-                    } else {
-                        true
-                    }
-                });
-                for addr in pruned {
-                    audit_monitor
-                        .append(
-                            AuditEventKind::NodeLeft,
-                            None,
-                            Some(&addr),
-                            format!("Dynamic node {} left cluster after consecutive connection failures", addr),
-                            None,
-                        )
-                        .await;
-                }
+                t_lock.retain(|t| !(t.is_dynamic && t.consecutive_failures >= 10));
             }
 
-            // Check if leader or standbys changed
             let current_leader = {
                 let r = leader_ref_monitor.read().await;
                 r.clone()
@@ -795,7 +325,7 @@ async fn main() -> Result<()> {
                 }
 
                 pool_for_monitor
-                    .update_topology(discovered_leader.clone(), discovered_standbys.clone())
+                    .update_topology(discovered_leader, discovered_standbys)
                     .await;
             }
 
@@ -803,15 +333,6 @@ async fn main() -> Result<()> {
             restore_epoch_tracker
                 .observe_and_drain(&pool_for_monitor, discovered_leader_restore_epoch)
                 .await;
-
-            // Update dashboard overview
-            if let Some(dash) = dash_state_for_monitor.as_ref() {
-                let mut overview = dash.overview.write().await;
-                overview.total_nodes = node_summaries.len();
-                overview.healthy_nodes = healthy_count;
-                overview.leader_address = discovered_leader;
-                overview.nodes = node_summaries;
-            }
         }
     });
 
@@ -824,13 +345,9 @@ async fn main() -> Result<()> {
         info!(%peer_addr, "Accepted incoming PostgreSQL client connection");
 
         let pool_clone = pool.clone();
-        let session_audit = audit_log.clone();
-        let session_metrics = metrics_store.clone();
         let acceptor_clone = session_tls_acceptor.clone();
         tokio::spawn(async move {
-            let mut session = ClientSession::new(socket, pool_clone)
-                .with_audit_log(session_audit)
-                .with_metrics(session_metrics);
+            let mut session = ClientSession::new(socket, pool_clone);
             if let Some(acceptor) = acceptor_clone {
                 session = session.with_tls_acceptor(acceptor);
             }

@@ -179,7 +179,7 @@ wait_for_healthy() {
 
 # wait_for_proxy_ready DASHBOARD_URL [TIMEOUT_SECS] [AUTH_HEADER...]
 #
-# Waits until the proxy's dashboard responds (HTTP 200 or 401 if unauthenticated).
+# Waits until the dashboard (backed by a sidecar /api/status) responds (HTTP 200, 303, or 401).
 wait_for_proxy_ready() {
     local dashboard_url="$1"
     local timeout_secs="${2:-30}"
@@ -189,13 +189,13 @@ wait_for_proxy_ready() {
     local deadline=$(( $(date +%s) + timeout_secs ))
     local code="000"
     while [ "$(date +%s)" -lt "${deadline}" ]; do
-        code=$(curl -s -o /dev/null -w "%{http_code}" "${auth_header[@]}" "${dashboard_url}/api/status" 2>/dev/null || echo "000")
-        if [ "${code}" = "200" ] || [ "${code}" = "401" ]; then
+        code=$(curl -s -o /dev/null -w "%{http_code}" ${auth_header[@]+"${auth_header[@]}"} "${dashboard_url}/api/status" 2>/dev/null || echo "000")
+        if [ "${code}" = "200" ] || [ "${code}" = "303" ] || [ "${code}" = "401" ]; then
             return 0
         fi
         sleep 1
     done
 
-    echo "FAIL: Proxy dashboard at ${dashboard_url} failed to respond within ${timeout_secs}s (last HTTP code: ${code})" >&2
+    echo "FAIL: Dashboard at ${dashboard_url} failed to respond within ${timeout_secs}s (last HTTP code: ${code})" >&2
     return 1
 }

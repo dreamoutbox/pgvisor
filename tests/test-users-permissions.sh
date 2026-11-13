@@ -32,11 +32,7 @@ DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://localhost:${TEST_DASHBOARD_PORT}}
 TEST_USER="test_app_user"
 TEST_TABLE="t_perm_demo"
 
-ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
 AUTH_HEADER=()
-if [ -n "${ADMIN_TOKEN}" ]; then
-    AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
-fi
 
 NODE1_CONTAINER="pgvisor-users-permissions-node1"
 NODE2_CONTAINER="pgvisor-users-permissions-node2"
@@ -58,7 +54,8 @@ echo "Waiting for cluster containers to report healthy..."
 wait_for_healthy 120 "${PROJECT_NAME}-minio" "${NODE1_CONTAINER}" "${NODE2_CONTAINER}" "${NODE3_CONTAINER}"
 
 echo "Waiting for proxy to become ready..."
-wait_for_proxy_ready "${DASHBOARD_URL}" 60 "${AUTH_HEADER[@]}"
+wait_for_proxy_ready "${DASHBOARD_URL}" 60
+api_login "${DASHBOARD_URL}"
 
 echo "Creating baseline test table ${TEST_TABLE}..."
 run_sql "CREATE TABLE IF NOT EXISTS ${TEST_TABLE} (id int, val text); INSERT INTO ${TEST_TABLE} VALUES (1, 'initial');"

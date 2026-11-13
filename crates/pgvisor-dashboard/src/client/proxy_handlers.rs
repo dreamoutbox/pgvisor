@@ -25,7 +25,9 @@ pub async fn proxy_api_request(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Some(token) = extract_client_token(&headers) else {
+    let path = uri.path();
+    let token = extract_client_token(&headers);
+    if path != "/api/auth/login" && token.is_none() {
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({
@@ -34,18 +36,20 @@ pub async fn proxy_api_request(
             })),
         )
             .into_response();
-    };
+    }
 
     let Some(req_method) = to_reqwest_method(&method) else {
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
     };
 
-    let path = uri.path();
     let path_and_query = uri
         .path_and_query()
         .map(|pq| pq.as_str())
         .unwrap_or(path);
-    let is_write = method != Method::GET && method != Method::HEAD && path != "/api/sql";
+    let is_write = method != Method::GET
+        && method != Method::HEAD
+        && path != "/api/sql"
+        && path != "/api/auth/login";
 
     let content_type = headers
         .get(header::CONTENT_TYPE)
@@ -57,7 +61,7 @@ pub async fn proxy_api_request(
             is_write,
             req_method,
             path_and_query,
-            Some(&token),
+            token.as_deref(),
             content_type,
             body,
         )
@@ -77,14 +81,21 @@ pub async fn proxy_api_request(
             }
             resp
         }
-        Err(SidecarClientError::Unauthorized) => (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({
-                "status": "unauthorized",
-                "error": "Invalid or expired session token",
-            })),
-        )
-            .into_response(),
+        Err(SidecarClientError::Unauthorized) => {
+            let msg = if path == "/api/auth/login" {
+                "Invalid PostgreSQL username or password"
+            } else {
+                "Invalid or expired session token"
+            };
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "status": "unauthorized",
+                    "error": msg,
+                })),
+            )
+                .into_response()
+        }
         Err(SidecarClientError::Forbidden(msg)) => (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({

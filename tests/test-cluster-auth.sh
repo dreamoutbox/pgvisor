@@ -41,11 +41,7 @@ export PGVISOR_CLUSTER_SECRET="${CLUSTER_SECRET}"
 PROXY_HOST="${PGVISOR_HOST:-localhost}"
 PROXY_PORT="${PGVISOR_PORT:-${TEST_PROXY_PORT}}"
 DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://localhost:${TEST_DASHBOARD_PORT}}"
-ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
 AUTH_HEADER=()
-if [ -n "${ADMIN_TOKEN}" ]; then
-    AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
-fi
 
 NODE1_CONTAINER="${PROJECT_NAME}-node1"
 NODE2_CONTAINER="${PROJECT_NAME}-node2"
@@ -87,7 +83,7 @@ cluster_up   "${PROJECT_NAME}" "${COMPOSE_FILE}"
 
 echo "Waiting for cluster containers to report healthy..."
 wait_for_healthy 120 "${PROJECT_NAME}-minio" "${NODE1_CONTAINER}" "${NODE2_CONTAINER}" "${NODE3_CONTAINER}"
-wait_for_proxy_ready "${DASHBOARD_URL}" 60 "${AUTH_HEADER[@]}"
+wait_for_proxy_ready "${DASHBOARD_URL}" 60
 
 echo ""
 echo "[1/4] Running Security Tests: Proxy -> Sidecar Communication"
@@ -246,15 +242,66 @@ else
 fi
 
 echo ""
-echo "[3/4] Verifying Legitimate Proxy Cluster Monitoring"
+echo "[3/4] Verifying User API Auth & Port Separation (8080 /control vs 8081 /api)"
 echo "-------------------------------------------------------------"
 
-echo -n "Checking proxy dashboard node topology status -> "
-DASH_NODES=$(curl -s ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} "${DASHBOARD_URL}/api/status" 2>/dev/null || true)
-if [ -n "${DASH_NODES}" ]; then
-    echo "PASS (Dashboard accessible and responding)"
+echo -n "Test 3.1: Wrong password at /api/auth/login -> "
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+    -H "Content-Type: application/json" \
+    -d '{"username":"postgres","password":"wrong-password"}' \
+    "${DASHBOARD_URL}/api/auth/login")
+if [ "${CODE}" = "401" ]; then
+    echo "PASS (HTTP 401 Unauthorized correctly returned)"
 else
-    echo "FAIL (Dashboard not responding at ${DASHBOARD_URL}/api/status)" >&2
+    echo "FAIL (Expected HTTP 401, got ${CODE})" >&2
+    exit 1
+fi
+
+echo -n "Test 3.2: Postgres user not in PGVISOR_SUPERUSER at /api/auth/login -> "
+run_node_sql "${NODE1_CONTAINER}" "CREATE ROLE regular_bob WITH LOGIN PASSWORD 'bobsecret';" > /dev/null
+NON_SUPER_RESP=$(curl -s -w "\n%{http_code}" -X POST \
+    -H "Content-Type: application/json" \
+    -d '{"username":"regular_bob","password":"bobsecret"}' \
+    "${DASHBOARD_URL}/api/auth/login")
+NON_SUPER_CODE=$(printf '%s\n' "${NON_SUPER_RESP}" | tail -n1)
+NON_SUPER_BODY=$(printf '%s\n' "${NON_SUPER_RESP}" | sed '$d')
+run_node_sql "${NODE1_CONTAINER}" "DROP ROLE IF EXISTS regular_bob;" > /dev/null
+if [ "${NON_SUPER_CODE}" = "403" ] && echo "${NON_SUPER_BODY}" | grep -qi "superuser"; then
+    echo "PASS (HTTP 403 Forbidden returned for non-superuser)"
+else
+    echo "FAIL (Expected HTTP 403 superuser rejection, got ${NON_SUPER_CODE}: ${NON_SUPER_BODY})" >&2
+    exit 1
+fi
+
+echo -n "Test 3.3: Valid PGVISOR_SUPERUSER login & authenticated /api/status -> "
+api_login "${DASHBOARD_URL}" "postgres" "postgres"
+STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/status")
+if [ "${STATUS_CODE}" = "200" ]; then
+    echo "PASS (Logged in and accessed /api/status with HTTP 200)"
+else
+    echo "FAIL (Expected HTTP 200 for /api/status, got ${STATUS_CODE})" >&2
+    exit 1
+fi
+
+echo -n "Test 3.4: /api refused on control port 8080 -> "
+CTRL_API_CODE=$(docker exec -i "${PROXY_CONTAINER}" curl -s -o /dev/null -w "%{http_code}" \
+    -H "Authorization: Bearer ${VALID_TOKEN}" \
+    "http://${NODE1_CONTAINER}:8080/api/cluster/members")
+if [ "${CTRL_API_CODE}" = "404" ]; then
+    echo "PASS (HTTP 404 on port 8080 /api)"
+else
+    echo "FAIL (Expected HTTP 404 on control port 8080 /api, got ${CTRL_API_CODE})" >&2
+    exit 1
+fi
+
+echo -n "Test 3.5: /control refused on API port 8081 -> "
+API_CTRL_CODE=$(docker exec -i "${PROXY_CONTAINER}" curl -s -o /dev/null -w "%{http_code}" \
+    "${AUTH_HEADER[@]}" \
+    "http://${NODE1_CONTAINER}:8081/control/status")
+if [ "${API_CTRL_CODE}" = "404" ]; then
+    echo "PASS (HTTP 404 on port 8081 /control)"
+else
+    echo "FAIL (Expected HTTP 404 on API port 8081 /control, got ${API_CTRL_CODE})" >&2
     exit 1
 fi
 
@@ -263,5 +310,5 @@ echo "[4/4] Summary"
 echo "========================================================="
 echo "  All Cluster Communication Security Tests PASSED!       "
 echo "  Docker Compose profile ${PROJECT_NAME} verified.       "
-echo "  Proxy->Sidecar & Sidecar->Sidecar strictly secured.    "
+echo "  Control (8080), API (8081), & Superuser auth verified. "
 echo "========================================================="

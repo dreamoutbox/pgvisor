@@ -106,10 +106,13 @@ services:
     restart: "no"
     environment:
       POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      PGVISOR_SUPERUSER: ${PGVISOR_SUPERUSER:-postgres}
       PGPORT: 5432
       PGDATA: /var/lib/postgresql/data/pgdata
       PRIMARY_CONNINFO: ${PRIMARY_CONNINFO:-host=pgvisor-node1 port=5432 user=postgres}
       PGVISOR_CLUSTER_ID: pgvisor-cluster
+      PGVISOR_API_SESSION_SECRET: ${PGVISOR_API_SESSION_SECRET:-pgvisor-dev-api-session-secret}
       PGVISOR_NODE_ID: 4
       PGVISOR_ROLE: standby
       PGVISOR_PEERS: http://pgvisor-node1:8080,http://pgvisor-node2:8080,http://pgvisor-node3:8080
@@ -144,19 +147,11 @@ services:
     mem_limit: 1g
     ports:
       - "6833:5432"
-      - "9481:8080"
     environment:
       PGVISOR_PROXY_LISTEN: 0.0.0.0:5432
-      PGVISOR_DASHBOARD_LISTEN: 0.0.0.0:8080
       PGVISOR_LEADER_ADDR: pgvisor-node1:5432
       PGVISOR_STANDBY_ADDRS: pgvisor-node2:5432,pgvisor-node3:5432
-      PGVISOR_CLUSTER_ID: pgvisor-cluster
-      S3_ENDPOINT: http://minio:9000
-      S3_BUCKET: pgvisor-backups
-      S3_ACCESS_KEY: minioadmin
-      S3_SECRET_KEY: minioadmin
       RUST_LOG: info
-      PGVISOR_ADMIN_TOKEN: postgres
     volumes:
       - ../scripts:/scripts:ro
     depends_on:

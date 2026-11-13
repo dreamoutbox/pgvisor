@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use pgvisor_core::api::{MemberHealth, SidecarRole};
 use pgvisor_core::auth::make_auth_header_value;
+use pgvisor_core::pg_client::PgConnection;
 use reqwest::Url;
 use tokio::task::JoinSet;
 use tracing::debug;
@@ -165,6 +166,60 @@ pub async fn probe_all_peers(state: &ApiState) -> Vec<PeerProbe> {
         });
     }
 
+    // Discover dynamically scaled standbys connected to the active leader via pg_stat_replication.
+    let leader_pg_addr = probes
+        .iter()
+        .find(|p| {
+            p.status
+                .as_ref()
+                .is_some_and(|s| s.role == "leader" && s.status == "running")
+        })
+        .map(|p| p.pg_address.as_str())
+        .unwrap_or(state.pg_addr.as_str());
+
+    let dynamic_hosts = discover_replication_hosts(leader_pg_addr, &state.pg_superuser).await;
+    if !dynamic_hosts.is_empty() {
+        let control_port = infer_control_port(&state.sidecar.peers);
+        let mut dyn_join_set: JoinSet<(String, String, Option<StatusResponse>)> = JoinSet::new();
+        for host in dynamic_hosts {
+            let pg_address = format!("{host}:{self_pg_port}");
+            let control_url = format!("http://{host}:{control_port}");
+            let already_known = probes.iter().any(|p| {
+                p.pg_address == pg_address
+                    || p.peer_url.trim().trim_end_matches('/') == control_url
+            });
+            if already_known {
+                continue;
+            }
+            let client = state.http_client.clone();
+            let secret = state.sidecar.cluster_secret.clone();
+            dyn_join_set.spawn(async move {
+                let status = fetch_peer_status(&client, &control_url, secret.as_deref()).await;
+                (control_url, pg_address, status)
+            });
+        }
+
+        while let Some(joined) = dyn_join_set.join_next().await {
+            let Ok((peer_url, pg_address, Some(status))) = joined else {
+                continue;
+            };
+            if status.node_id == self_node_id
+                || probes.iter().any(|p| p.node_id == Some(status.node_id))
+            {
+                continue;
+            }
+            let api_url = build_api_url_from_peer(&peer_url, status.api_port);
+            probes.push(PeerProbe {
+                peer_url,
+                is_self: false,
+                node_id: Some(status.node_id),
+                pg_address,
+                api_url,
+                status: Some(status),
+            });
+        }
+    }
+
     probes.sort_by(|a, b| {
         a.node_id
             .unwrap_or(u64::MAX)
@@ -174,4 +229,56 @@ pub async fn probe_all_peers(state: &ApiState) -> Vec<PeerProbe> {
     });
 
     probes
+}
+
+/// Infers the cluster sidecar control port from `PGVISOR_PEERS`, falling back to `8080`.
+///
+/// # Arguments
+/// * `peers` - Configured peer control URLs.
+///
+/// # Example
+/// `let port = infer_control_port(&["http://pgvisor-node1:8080".to_string()]);`
+fn infer_control_port(peers: &[String]) -> u16 {
+    peers
+        .iter()
+        .find_map(|raw| Url::parse(raw.trim()).ok().and_then(|u| u.port()))
+        .unwrap_or(8080)
+}
+
+/// Queries the active leader's `pg_stat_replication` view to discover standby peer hostnames/IPs.
+///
+/// # Arguments
+/// * `leader_pg_addr` - Leader Postgres host:port endpoint.
+/// * `pg_superuser` - PostgreSQL superuser account name.
+///
+/// # Example
+/// `let hosts = discover_replication_hosts("pgvisor-node1:5432", "postgres").await;`
+async fn discover_replication_hosts(leader_pg_addr: &str, pg_superuser: &str) -> Vec<String> {
+    let sql = "SELECT client_addr::text, application_name FROM pg_stat_replication;";
+    let Ok(res) = PgConnection::query_simple(
+        leader_pg_addr,
+        Some(pg_superuser),
+        Some("postgres"),
+        sql,
+        64,
+    )
+    .await
+    else {
+        return Vec::new();
+    };
+
+    res.rows
+        .into_iter()
+        .filter_map(|row| {
+            let client_addr = row.first().map(|s| s.trim()).unwrap_or("");
+            let app_name = row.get(1).map(|s| s.trim()).unwrap_or("");
+            if app_name.starts_with("pgvisor-node") {
+                Some(app_name.to_string())
+            } else if !client_addr.is_empty() && client_addr != "NULL" {
+                Some(client_addr.to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
 }

@@ -1,5 +1,4 @@
 use bytes::BytesMut;
-use pgvisor_core::audit::{AuditEventKind, AuditLog};
 use pgvisor_core::protocol::message::{
     BackendMessage, FrontendMessage, InitialClientMessage, StartupMessage, TransactionStatus,
 };
@@ -34,8 +33,6 @@ pub struct ClientSession {
     active_backend: Option<PooledConnection>,
     startup_params: Option<StartupMessage>,
     failover_config: FailoverConfig,
-    audit_log: Option<Arc<AuditLog>>,
-    metrics: Option<Arc<crate::metrics::ProxyMetricsStore>>,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
     tls_required: bool,
 }
@@ -49,8 +46,6 @@ impl ClientSession {
             active_backend: None,
             startup_params: None,
             failover_config: FailoverConfig::default(),
-            audit_log: None,
-            metrics: None,
             tls_acceptor: None,
             tls_required: false,
         }
@@ -65,18 +60,6 @@ impl ClientSession {
     /// Enforces TLS requirement, rejecting unencrypted client connections.
     pub fn with_tls_required(mut self, required: bool) -> Self {
         self.tls_required = required;
-        self
-    }
-
-    /// Sets the proxy metrics store for tracking query routing counts.
-    pub fn with_metrics(mut self, metrics: Arc<crate::metrics::ProxyMetricsStore>) -> Self {
-        self.metrics = Some(metrics);
-        self
-    }
-
-    /// Sets the central audit log store for recording client operations.
-    pub fn with_audit_log(mut self, audit_log: Arc<AuditLog>) -> Self {
-        self.audit_log = Some(audit_log);
         self
     }
 
@@ -271,14 +254,8 @@ impl ClientSession {
     async fn handle_query(&mut self, sql: &str) -> Result<(), SessionError> {
         let requires_leader = self.tracker.requires_leader(sql);
         let role = if requires_leader {
-            if let Some(m) = self.metrics.as_ref() {
-                m.record_write();
-            }
             BackendRole::Leader
         } else {
-            if let Some(m) = self.metrics.as_ref() {
-                m.record_read();
-            }
             BackendRole::Standby
         };
 
@@ -292,82 +269,6 @@ impl ClientSession {
             .and_then(|s| s.database().map(String::from));
         let user_ref = user.as_deref();
         let db_ref = database.as_deref();
-
-        // Audit dangerous SQL statements (DROP TABLE, TRUNCATE, and DELETE)
-        if let Some(audit) = self.audit_log.as_ref() {
-            let clean = sql
-                .lines()
-                .map(|l| l.trim())
-                .filter(|l| !l.starts_with("--") && !l.starts_with("/*"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let upper = clean.trim().to_uppercase();
-
-            let is_drop = upper.starts_with("DROP TABLE")
-                || upper.starts_with("DROP DATABASE")
-                || upper.starts_with("DROP SCHEMA");
-            let is_truncate = upper.starts_with("TRUNCATE");
-            let is_delete = if upper.starts_with("DELETE") {
-                if std::env::var("PGVISOR_AUDIT_DELETE").is_ok() {
-                    true
-                } else {
-                    !upper.contains("WHERE")
-                }
-            } else {
-                false
-            };
-
-            if is_drop || is_truncate || is_delete {
-                let now = chrono::Utc::now();
-                let pitr_candidate = (now - chrono::Duration::seconds(1))
-                    .format("%Y-%m-%d %H:%M:%S UTC")
-                    .to_string();
-                let u = user_ref.unwrap_or("unknown");
-                let db = db_ref.unwrap_or("unknown");
-                let snippet = if sql.len() > 300 {
-                    format!("{}...", &sql[..300])
-                } else {
-                    sql.to_string()
-                };
-                let detail = format!("Dangerous SQL executed by '{}' on '{}': {}", u, db, snippet);
-
-                audit
-                    .append(
-                        AuditEventKind::DangerousSql,
-                        None,
-                        None,
-                        detail,
-                        Some(pitr_candidate),
-                    )
-                    .await;
-            }
-
-            let is_user_permission = upper.starts_with("CREATE ROLE")
-                || upper.starts_with("CREATE USER")
-                || upper.starts_with("DROP ROLE")
-                || upper.starts_with("DROP USER")
-                || upper.starts_with("ALTER ROLE")
-                || upper.starts_with("ALTER USER")
-                || upper.starts_with("GRANT ")
-                || upper.starts_with("REVOKE ");
-
-            if is_user_permission {
-                let u = user_ref.unwrap_or("unknown");
-                let db = db_ref.unwrap_or("unknown");
-                let snippet = if sql.len() > 300 {
-                    format!("{}...", &sql[..300])
-                } else {
-                    sql.to_string()
-                };
-                let detail = format!(
-                    "User/permission SQL executed by '{}' on '{}': {}",
-                    u, db, snippet
-                );
-                audit
-                    .append(AuditEventKind::UserPermission, None, None, detail, None)
-                    .await;
-            }
-        }
 
         // If no backend is held, acquire one from pool with failover buffering
         if self.active_backend.is_none() {

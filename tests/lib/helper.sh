@@ -10,7 +10,8 @@
 #   run_proxy_sql QUERY [MAX_ATTEMPTS] [PORT] [HOST] [CONTAINER]
 #   run_sql       QUERY [MAX_ATTEMPTS] [PORT] [HOST] [CONTAINER]
 #   get_sidecar_status CONTAINER
-#   json_extract  FIELD
+#   json_extract       FIELD
+#   api_login          DASHBOARD_URL [USERNAME] [PASSWORD]
 # ==============================================================================
 
 # run_node_sql CONTAINER QUERY
@@ -86,4 +87,31 @@ json_extract() {
     else
         grep -o "\"${field}\":\"[^\"]*\"" | cut -d':' -f2 | tr -d '"'
     fi
+}
+
+# api_login DASHBOARD_URL [USERNAME] [PASSWORD]
+#
+# Authenticates against POST /api/auth/login and sets global AUTH_HEADER and API_TOKEN.
+api_login() {
+    local url="$1"
+    local username="${2:-${PGVISOR_TEST_USER:-postgres}}"
+    local password="${3:-${PGVISOR_TEST_PASSWORD:-postgres}}"
+
+    local attempt resp token
+    for attempt in $(seq 1 15); do
+        resp=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"${username}\",\"password\":\"${password}\"}" \
+            "${url}/api/auth/login" 2>/dev/null || true)
+        token=$(printf '%s' "${resp}" | json_extract token)
+        if [ -n "${token}" ]; then
+            API_TOKEN="${token}"
+            AUTH_HEADER=(-H "Authorization: Bearer ${token}")
+            return 0
+        fi
+        sleep 1
+    done
+
+    echo "ERROR: api_login failed for user '${username}' at ${url}/api/auth/login: ${resp}" >&2
+    return 1
 }

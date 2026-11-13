@@ -31,11 +31,7 @@ readonly COMPOSE_FILE="${REPO_ROOT}/composes/docker-compose.tables-nodes.yml"
 PROXY_HOST="${PGVISOR_HOST:-localhost}"
 PROXY_PORT="${PGVISOR_PORT:-${TEST_PROXY_PORT}}"
 DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://localhost:${TEST_DASHBOARD_PORT}}"
-ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
 AUTH_HEADER=()
-if [ -n "${ADMIN_TOKEN}" ]; then
-    AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
-fi
 
 NODE1_CONTAINER="pgvisor-tables-nodes-node1"
 NODE2_CONTAINER="pgvisor-tables-nodes-node2"
@@ -55,7 +51,9 @@ cluster_up   "${PROJECT_NAME}" "${COMPOSE_FILE}"
 
 echo "Waiting for cluster containers to report healthy..."
 wait_for_healthy 120 "${PROJECT_NAME}-minio" "${NODE1_CONTAINER}" "${NODE2_CONTAINER}" "${NODE3_CONTAINER}"
-wait_for_proxy_ready "${DASHBOARD_URL}" 60 "${AUTH_HEADER[@]}"
+wait_for_proxy_ready "${DASHBOARD_URL}" 60
+api_login "${DASHBOARD_URL}"
+run_proxy_sql "SELECT 1;" 15 "${PROXY_PORT}" "${PROXY_HOST}" > /dev/null
 
 exec_sql_db() {
     local db="$1"

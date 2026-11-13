@@ -46,6 +46,7 @@ pub use password_verifier::{
     verify_scram_sha256, PasswordCheckOutcome, PasswordChecker, PostgresPasswordChecker,
 };
 pub use peer_probe::{pg_address_from_peer_url, probe_all_peers, PeerProbe};
+pub(crate) use peer_probe::fetch_peer_status;
 pub use pg_activity::{
     sample_local_activity, sum_cluster_activity, sum_pg_stat_database_rows, ActivityTracker,
     PG_STAT_DATABASE_SQL,

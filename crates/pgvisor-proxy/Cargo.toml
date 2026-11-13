@@ -16,18 +16,15 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 bytes = { workspace = true }
 tokio-util = { workspace = true }
-pgvisor-dashboard = { path = "../pgvisor-dashboard" }
-axum = { workspace = true }
-async-trait = { workspace = true }
-chrono = { workspace = true }
-tempfile = "3.12"
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 pgwire = { workspace = true }
-croner = { workspace = true }
-opendal = { workspace = true }
 rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
 rustls-pemfile = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+tempfile = "3.12"

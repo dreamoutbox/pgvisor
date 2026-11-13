@@ -17,12 +17,18 @@ const CRON_COMPUTE_RETRY_SECS: u64 = 60;
 
 /// Returns whether the sidecar backup scheduler should actively spawn cron workers.
 ///
-/// Defaults to disabled (`false`) until Phase 9 cutover removes the legacy proxy scheduler.
+/// Defaults to enabled when `config_cron_enabled` is true unless `PGVISOR_SIDECAR_BACKUP_CRON`
+/// is explicitly set to `"false"`, `"0"`, or `"no"`.
 pub fn is_sidecar_cron_enabled(raw_env: Option<&str>, config_cron_enabled: bool) -> bool {
     if !config_cron_enabled {
         return false;
     }
-    raw_env.is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
+    raw_env.is_none_or(|v| {
+        !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "false" | "0" | "no"
+        )
+    })
 }
 
 /// Leader-gated background scheduler driving automated full and incremental backups on the sidecar.
@@ -155,8 +161,10 @@ mod tests {
 
     #[test]
     fn test_sidecar_cron_gate_and_parsing() {
-        assert!(!is_sidecar_cron_enabled(None, true));
+        assert!(is_sidecar_cron_enabled(None, true));
         assert!(!is_sidecar_cron_enabled(Some("false"), true));
+        assert!(!is_sidecar_cron_enabled(Some("0"), true));
+        assert!(!is_sidecar_cron_enabled(Some("no"), true));
         assert!(!is_sidecar_cron_enabled(Some("true"), false));
         assert!(is_sidecar_cron_enabled(Some("true"), true));
         assert!(is_sidecar_cron_enabled(Some("1"), true));

@@ -30,14 +30,9 @@ readonly COMPOSE_PROXY2="${REPO_ROOT}/composes/docker-compose.proxy-failover-pro
 PROXY1_PORT="${PGVISOR_PROXY1_PORT:-${TEST_PROXY1_PORT}}"
 PROXY2_PORT="${PGVISOR_PROXY2_PORT:-${TEST_PROXY2_PORT}}"
 DASHBOARD1_URL="http://localhost:${TEST_DASHBOARD1_PORT}"
-DASHBOARD2_URL="http://localhost:${TEST_DASHBOARD2_PORT}"
 TABLE_NAME="t_proxy_failover"
 
-ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
 AUTH_HEADER=()
-if [ -n "${ADMIN_TOKEN}" ]; then
-    AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
-fi
 
 NODE1_CONTAINER="pgvisor-proxy-failover-node1"
 NODE2_CONTAINER="pgvisor-proxy-failover-node2"
@@ -70,9 +65,9 @@ echo "Waiting for cluster containers to report healthy..."
 wait_for_healthy 120 "${MINIO_CONTAINER}" "${NODE1_CONTAINER}" "${NODE2_CONTAINER}" "${NODE3_CONTAINER}"
 echo "+ Database nodes and storage are healthy."
 
-echo "Waiting for proxy1 and proxy2 dashboards to be ready..."
-wait_for_proxy_ready "${DASHBOARD1_URL}" 60 "${AUTH_HEADER[@]}"
-wait_for_proxy_ready "${DASHBOARD2_URL}" 60 "${AUTH_HEADER[@]}"
+echo "Waiting for dashboard and proxies to be ready..."
+wait_for_proxy_ready "${DASHBOARD1_URL}" 60
+api_login "${DASHBOARD1_URL}"
 echo "+ Both proxy1 and proxy2 are ready and serving traffic."
 
 run_proxy1_sql() {
@@ -145,24 +140,24 @@ echo ""
 echo "[3/6] Stopping proxy1 container (${PROXY1_CONTAINER})..."
 stop_node "${PROXY1_CONTAINER}"
 
-# Verify proxy1 is down: dashboard and SQL must fail
-PROXY1_DOWN=false
-if ! curl -s -m 2 "${DASHBOARD1_URL}/api/status" > /dev/null 2>&1; then
-    PROXY1_DOWN=true
-fi
-
-if [[ "${PROXY1_DOWN}" != "true" ]]; then
-    echo "ERROR: proxy1 dashboard still reachable after stopping ${PROXY1_CONTAINER}"
+# Verify proxy1 SQL container is stopped while standalone dashboard remains up
+PROXY1_STATE=$(docker inspect -f '{{.State.Status}}' "${PROXY1_CONTAINER}" 2>/dev/null || echo "missing")
+if [[ "${PROXY1_STATE}" != "exited" && "${PROXY1_STATE}" != "stopped" ]]; then
+    echo "ERROR: Expected ${PROXY1_CONTAINER} to be stopped, got state: ${PROXY1_STATE}"
     exit 1
 fi
 
-if command -v psql &> /dev/null; then
-    if PGPASSWORD="" PGCONNECT_TIMEOUT=2 timeout 3 psql -h localhost -p "${PROXY1_PORT}" -U postgres -d postgres -t -A -c "SELECT 1;" > /dev/null 2>&1; then
-        echo "ERROR: proxy1 SQL listener unexpectedly responded after container stopped!"
-        exit 1
-    fi
+if run_proxy1_sql "SELECT 1;" > /dev/null 2>&1; then
+    echo "ERROR: proxy1 SQL listener unexpectedly responded after container stopped!"
+    exit 1
 fi
-echo "+ Confirmed proxy1 (${PROXY1_CONTAINER}) is completely stopped."
+
+DASH_CODE=$(curl -s -m 3 -o /dev/null -w "%{http_code}" "${AUTH_HEADER[@]}" "${DASHBOARD1_URL}/api/status" 2>/dev/null || echo "000")
+if [[ "${DASH_CODE}" != "200" ]]; then
+    echo "ERROR: Standalone dashboard unexpectedly unavailable when proxy1 stopped (HTTP ${DASH_CODE})"
+    exit 1
+fi
+echo "+ Confirmed proxy1 (${PROXY1_CONTAINER}) is stopped while standalone dashboard remains reachable."
 
 echo ""
 echo "[4/6] Asserting full database access via proxy2 while proxy1 is stopped..."
@@ -211,8 +206,19 @@ echo ""
 echo "[5/6] Restarting proxy1 and verifying multi-proxy cluster recovery..."
 start_node "${PROXY1_CONTAINER}" "${PROJECT_NAME}" "${COMPOSE_BASE}" pgvisor-proxy
 
-echo "Waiting for restarted proxy1 dashboard to be ready..."
-wait_for_proxy_ready "${DASHBOARD1_URL}" 60 "${AUTH_HEADER[@]}"
+echo "Waiting for restarted proxy1 to accept SQL connections..."
+PROXY1_RECOVERED=false
+for attempt in $(seq 1 15); do
+    if run_proxy1_sql "SELECT 1;" > /dev/null 2>&1; then
+        PROXY1_RECOVERED=true
+        break
+    fi
+    sleep 1
+done
+if [[ "${PROXY1_RECOVERED}" != "true" ]]; then
+    echo "ERROR: Restarted proxy1 did not become ready in time"
+    exit 1
+fi
 echo "+ Proxy1 is back online."
 
 # Verify proxy1 sees existing data

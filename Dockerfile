@@ -49,6 +49,6 @@ COPY --from=builder /app/target/release/pgvisor-dashboard /usr/local/bin/
 USER postgres
 ENV PGDATA=/var/lib/postgresql/data/pgdata
 
-EXPOSE 5432 8080
+EXPOSE 5432 8080 8081
 
 ENTRYPOINT ["pgvisor-sidecar"]

@@ -29,11 +29,7 @@ readonly COMPOSE_FILE="${REPO_ROOT}/composes/docker-compose.tls.yml"
 PROXY_HOST="${PGVISOR_HOST:-localhost}"
 PROXY_PORT="${PGVISOR_PORT:-${TEST_PROXY_PORT}}"
 DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://localhost:${TEST_DASHBOARD_PORT}}"
-ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
 AUTH_HEADER=()
-if [ -n "${ADMIN_TOKEN}" ]; then
-    AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
-fi
 
 NODE1_CONTAINER="${PROJECT_NAME}-node1"
 NODE2_CONTAINER="${PROJECT_NAME}-node2"
@@ -58,7 +54,8 @@ cluster_up "${PROJECT_NAME}" "${COMPOSE_FILE}"
 
 echo "Waiting for containers to report healthy..."
 wait_for_healthy 60 "${NODE1_CONTAINER}" "${NODE2_CONTAINER}" "${NODE3_CONTAINER}" "${PROXY_CONTAINER}"
-wait_for_proxy_ready "${DASHBOARD_URL}" 30 "${AUTH_HEADER[@]}"
+wait_for_proxy_ready "${DASHBOARD_URL}" 30
+api_login "${DASHBOARD_URL}"
 echo "All containers healthy and proxy dashboard ready."
 
 # 2. Verify auto-generated certificates on PostgreSQL nodes

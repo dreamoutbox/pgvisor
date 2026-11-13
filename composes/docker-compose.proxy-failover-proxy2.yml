@@ -10,19 +10,11 @@ services:
     mem_limit: 1g
     ports:
       - "6833:5432"
-      - "9481:8080"
     environment:
       PGVISOR_PROXY_LISTEN: 0.0.0.0:5432
-      PGVISOR_DASHBOARD_LISTEN: 0.0.0.0:8080
       PGVISOR_LEADER_ADDR: pgvisor-node1:5432
       PGVISOR_STANDBY_ADDRS: pgvisor-node2:5432,pgvisor-node3:5432
-      PGVISOR_CLUSTER_ID: pgvisor-cluster
-      S3_ENDPOINT: http://minio:9000
-      S3_BUCKET: pgvisor-backups
-      S3_ACCESS_KEY: minioadmin
-      S3_SECRET_KEY: minioadmin
       RUST_LOG: info
-      PGVISOR_ADMIN_TOKEN: postgres
     volumes:
       - ../scripts:/scripts:ro
     depends_on:

@@ -24,12 +24,9 @@ readonly COMPOSE_FILE="${REPO_ROOT}/composes/docker-compose.rejoin-fenced.yml"
 
 PROXY_HOST="${PGVISOR_HOST:-localhost}"
 PROXY_PORT="${PGVISOR_PORT:-${TEST_PROXY_PORT}}"
+DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://localhost:${TEST_DASHBOARD_PORT}}"
 TABLE_NAME="t_rejoin_test"
-ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
 AUTH_HEADER=()
-if [ -n "${ADMIN_TOKEN}" ]; then
-    AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
-fi
 
 NODE1_CONTAINER="pgvisor-rejoin-fenced-node1"
 NODE2_CONTAINER="pgvisor-rejoin-fenced-node2"
@@ -49,7 +46,8 @@ cluster_up   "${PROJECT_NAME}" "${COMPOSE_FILE}"
 
 echo "Waiting for cluster containers to report healthy..."
 wait_for_healthy 120 "${PROJECT_NAME}-minio" "${NODE1_CONTAINER}" "${NODE2_CONTAINER}" "${NODE3_CONTAINER}"
-wait_for_proxy_ready "http://localhost:${TEST_DASHBOARD_PORT}" 60 "${AUTH_HEADER[@]}"
+wait_for_proxy_ready "${DASHBOARD_URL}" 60
+api_login "${DASHBOARD_URL}"
 
 
 echo ""
@@ -175,7 +173,7 @@ fi
 
 echo ""
 echo "[10/10] Checking Web Dashboard display for node1..."
-DASHBOARD_NODE_STATUS=$(docker exec -i "${PROXY_CONTAINER}" curl -s ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} http://localhost:8080/nodes 2>/dev/null || true)
+DASHBOARD_NODE_STATUS=$(curl -s ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} "${DASHBOARD_URL}/nodes" 2>/dev/null || true)
 if echo "${DASHBOARD_NODE_STATUS}" | grep -q "Fenced (Quorum Lost)"; then
     echo "+ CONFIRMED: Dashboard renders node1 as 'Fenced (Quorum Lost)'."
 fi

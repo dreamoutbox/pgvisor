@@ -33,11 +33,7 @@ readonly COMPOSE_FILE="${REPO_ROOT}/composes/docker-compose.metrics.yml"
 PROXY_HOST="${PGVISOR_HOST:-localhost}"
 PROXY_PORT="${PGVISOR_PORT:-${TEST_PROXY_PORT}}"
 DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://localhost:${TEST_DASHBOARD_PORT}}"
-ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
 AUTH_HEADER=()
-if [ -n "${ADMIN_TOKEN}" ]; then
-    AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
-fi
 
 NODE1_CONTAINER="pgvisor-metrics-node1"
 NODE2_CONTAINER="pgvisor-metrics-node2"
@@ -57,7 +53,9 @@ cluster_up   "${PROJECT_NAME}" "${COMPOSE_FILE}"
 
 echo "Waiting for cluster containers to report healthy..."
 wait_for_healthy 120 "${PROJECT_NAME}-minio" "${NODE1_CONTAINER}" "${NODE2_CONTAINER}" "${NODE3_CONTAINER}"
-wait_for_proxy_ready "${DASHBOARD_URL}" 60 "${AUTH_HEADER[@]}"
+wait_for_proxy_ready "${DASHBOARD_URL}" 60
+api_login "${DASHBOARD_URL}"
+run_proxy_sql "SELECT 1;" 15 "${PROXY_PORT}" "${PROXY_HOST}" > /dev/null
 
 exec_sql() {
     local sql="$1"
@@ -120,8 +118,8 @@ echo "${SNAPSHOT_JSON}" | grep -q "nodes" || {
     echo "FAILED: snapshot missing nodes array"
     exit 1
 }
-echo "${SNAPSHOT_JSON}" | grep -q "proxy" || {
-    echo "FAILED: snapshot missing proxy object"
+echo "${SNAPSHOT_JSON}" | grep -q "activity" || {
+    echo "FAILED: snapshot missing activity object"
     exit 1
 }
 echo "${SNAPSHOT_JSON}" | grep -q "backups" || {
@@ -172,20 +170,28 @@ fi
 exec_sql "SELECT * FROM t_metrics_test;"
 exec_sql "SELECT count(*) FROM t_metrics_test;"
 
-NEW_WRITES=$(curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/metrics/snapshot" | grep -o '"writes_total":[0-9]*' | cut -d: -f2)
-NEW_READS=$(curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/metrics/snapshot" | grep -o '"reads_total":[0-9]*' | cut -d: -f2)
+NEW_WRITES=0
+NEW_READS=0
+for attempt in $(seq 1 10); do
+    SNAPSHOT_POLL=$(curl -s -f "${AUTH_HEADER[@]}" "${DASHBOARD_URL}/api/metrics/snapshot")
+    NEW_WRITES=$(echo "${SNAPSHOT_POLL}" | grep -o '"writes_total":[0-9]*' | cut -d: -f2)
+    NEW_READS=$(echo "${SNAPSHOT_POLL}" | grep -o '"reads_total":[0-9]*' | cut -d: -f2)
+    NEW_WRITES="${NEW_WRITES:-0}"
+    NEW_READS="${NEW_READS:-0}"
+    if [ "${NEW_WRITES}" -gt "${INITIAL_WRITES}" ] && [ "${NEW_READS}" -gt "${INITIAL_READS}" ]; then
+        break
+    fi
+    sleep 1
+done
 
-NEW_WRITES="${NEW_WRITES:-0}"
-NEW_READS="${NEW_READS:-0}"
-
-echo "New proxy writes: ${NEW_WRITES}, reads: ${NEW_READS}"
+echo "New cluster writes: ${NEW_WRITES}, reads: ${NEW_READS}"
 
 if [ "${NEW_WRITES}" -le "${INITIAL_WRITES}" ]; then
-    echo "FAILED: proxy writes_total did not increase after INSERT/CREATE"
+    echo "FAILED: cluster writes_total did not increase after INSERT/CREATE"
     exit 1
 fi
 if [ "${NEW_READS}" -le "${INITIAL_READS}" ]; then
-    echo "FAILED: proxy reads_total did not increase after SELECT"
+    echo "FAILED: cluster reads_total did not increase after SELECT"
     exit 1
 fi
 echo "PASSED: Proxy read and write counters successfully incremented."

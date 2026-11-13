@@ -13,10 +13,18 @@ use super::page_handlers::{
     client_get_overview, client_get_sql_console, client_get_tables, client_get_users,
 };
 use super::proxy_handlers::proxy_api_request;
-use crate::handlers::max_upload_bytes;
 
 pub const DEFAULT_DASHBOARD_LISTEN: &str = "0.0.0.0:8080";
 pub const DASHBOARD_LISTEN_ENV: &str = "PGVISOR_DASHBOARD_LISTEN";
+
+/// Returns the maximum allowed backup upload size in bytes (defaults to 1 GiB).
+fn max_upload_bytes() -> usize {
+    std::env::var("PGVISOR_BACKUP_MAX_UPLOAD_BYTES")
+        .or_else(|_| std::env::var("BACKUP_MAX_UPLOAD_BYTES"))
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(1024 * 1024 * 1024)
+}
 
 /// Resolves the HTTP listen socket address from `PGVISOR_DASHBOARD_LISTEN` (default `0.0.0.0:8080`).
 pub fn resolve_listen_addr() -> Result<SocketAddr, std::net::AddrParseError> {

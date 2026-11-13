@@ -305,6 +305,16 @@ async fn test_client_router_login_cookie_and_403_superuser_message() {
 async fn test_client_router_ssr_pages_reverse_proxy_and_401_403_redirect() {
     let sidecar_app = Router::new()
         .route(
+            "/api/auth/login",
+            post(|| async {
+                Json(serde_json::json!({
+                    "token": "api-login-tok",
+                    "username": "postgres",
+                    "expires_at": "2099-01-01T00:00:00Z"
+                }))
+            }),
+        )
+        .route(
             "/api/nodes",
             get(|headers: axum::http::HeaderMap| async move {
                 let auth = headers
@@ -459,7 +469,21 @@ async fn test_client_router_ssr_pages_reverse_proxy_and_401_403_redirect() {
             .contains("Max-Age=0"));
     }
 
-    // 3. Reverse proxy preserves non-NotLeader 409 conflict responses
+    // 3. Reverse proxy allows unauthenticated POST /api/auth/login and preserves 409 conflict
+    let login_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"username":"postgres","password":"postgres"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(login_resp.status(), StatusCode::OK);
+
     let resp = app
         .oneshot(
             Request::builder()
