@@ -72,13 +72,13 @@ Existing repo context:
   - [x] Update the `release` job in `.github/workflows/ci.yml` (`needs: [test, docker, build-cli]`) to download all CLI artifacts, generate a consolidated `SHA256SUMS` file, and upload `dist/*.tar.gz` and `dist/SHA256SUMS` with `softprops/action-gh-release@v2`.
 - Done when: `scripts/build-cli-release.sh` produces a working tarball and valid checksum locally, and `.github/workflows/ci.yml` passes workflow syntax validation.
 
-### Phase 7: Documentation, legacy script note, and path-lookup cache [STATUS: TODO]
+### Phase 7: Documentation, legacy script note, and path-lookup cache [STATUS: DONE]
 - Goal: Document server installation and usage of `pgvisor`, and index the new crate for future agents.
 - Tasks:
-  - [ ] Update `README.md` and `docs/src/content/docs/quick-start.mdx` with GitHub Release download + checksum verification instructions and `pgvisor setup` / `pgvisor up` server quickstart.
-  - [ ] Update `DEVELOPMENT.md` with `crates/pgvisor-cli` architecture and build/test commands.
-  - [ ] Add a deprecation/pointer comment in `examples/pgvisorctl.sh` pointing to the native `pgvisor` CLI without breaking `demo-launcher-entrypoint.sh` or `examples/run-demo-app.sh`.
-  - [ ] Create `.agents/path-lookup/cli.md` and update `.agents/path-lookup/misc.md` (repo-relative paths only), and tick off the CLI item in `TODO.md`.
+  - [x] Update `README.md` and `docs/src/content/docs/quick-start.mdx` with GitHub Release download + checksum verification instructions and `pgvisor setup` / `pgvisor up` server quickstart.
+  - [x] Update `DEVELOPMENT.md` with `crates/pgvisor-cli` architecture and build/test commands.
+  - [x] Add a deprecation/pointer comment in `examples/pgvisorctl.sh` pointing to the native `pgvisor` CLI without breaking `demo-launcher-entrypoint.sh` or `examples/run-demo-app.sh`.
+  - [x] Create `.agents/path-lookup/cli.md` and update `.agents/path-lookup/misc.md` (repo-relative paths only), and tick off the CLI item in `TODO.md`.
 - Done when: all doc links/commands match the implemented CLI flags, path-lookup entries verify cleanly, and `cargo check --workspace` + `cargo nextest run --test-threads 1 --fail-fast` pass.
 
 ## Confirmed decisions & assumptions

@@ -56,9 +56,32 @@ PgVisor provides a PostgreSQL 18 High-Availability (HA) cluster with a SQL-only 
 
 ---
 
-### Quick Start (Bootstrap in One Command)
+### Quick Start (Native `pgvisor` CLI — Recommended for Servers)
 
-To bootstrap a complete 3-node HA PostgreSQL cluster with S3 backup storage and L7 proxy:
+Download the pre-built `pgvisor` binary from [GitHub Releases](https://github.com/dreamoutbox/pgvisor/releases) (no git clone required):
+
+```bash
+# Linux x86_64 (static musl) — or aarch64-unknown-linux-musl / aarch64-apple-darwin / x86_64-apple-darwin
+VERSION="0.4.0"
+TARGET="x86_64-unknown-linux-musl"
+curl -fsSLO "https://github.com/dreamoutbox/pgvisor/releases/download/v${VERSION}/pgvisor-${VERSION}-${TARGET}.tar.gz"
+curl -fsSLO "https://github.com/dreamoutbox/pgvisor/releases/download/v${VERSION}/SHA256SUMS"
+grep "pgvisor-${VERSION}-${TARGET}.tar.gz" SHA256SUMS | sha256sum -c -
+tar -xzf "pgvisor-${VERSION}-${TARGET}.tar.gz"
+sudo mv pgvisor /usr/local/bin/pgvisor
+
+# Provision standalone docker-compose.yml, .env (0600), and random secrets
+mkdir -p /opt/pgvisor && pgvisor -C /opt/pgvisor setup
+
+# Start the 3-node HA cluster and wait for healthchecks
+pgvisor -C /opt/pgvisor up
+```
+
+By default, `pgvisor setup` binds `pgvisor-dashboard` to `127.0.0.1:8080` for server safety. Access it securely via SSH tunnel (`ssh -L 8080:127.0.0.1:8080 <user>@<server>`), or pass `--dashboard-bind 0.0.0.0`.
+
+### Quick Start (From Repo Examples)
+
+To bootstrap from a local repository clone:
 
 ```bash
 cd examples/

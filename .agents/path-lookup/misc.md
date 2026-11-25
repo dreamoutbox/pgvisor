@@ -14,7 +14,9 @@
 
 ### If you want to modify GitHub Actions CI/CD workflows, automated testing, or Docker Hub publishing, then check:
 
-- `.github/workflows/ci.yml` = GitHub Actions workflow executing cargo check/test, test.sh integration suite, Docker build/publish to Docker Hub, and GitHub Release creation.
+- `.github/workflows/ci.yml` = GitHub Actions workflow executing cargo check/test, test.sh integration suite, Docker build/publish to Docker Hub, cross-platform `pgvisor-cli` builds, and GitHub Release creation.
+- `scripts/build-cli-release.sh` = Cross-platform CLI release packager (`tar.gz` + `.sha256`).
+- `scripts/generate-cli-checksums.sh` = Consolidated `SHA256SUMS` generator for CLI release archives.
 - `release.sh` = Interactive release automation helper using `cargo-release` to bump crate versions, format commit messages, and create git tags without pushing or publishing.
 - `Cargo.toml` = Workspace manifest configuring crate metadata, workspace dependencies, and `[workspace.metadata.release]` commit message/tag templates.
 - `docker-compose.yml` = Canonical Docker Compose template configuring local Postgres cluster, RustFS S3 storage, and pgvisor-proxy.
