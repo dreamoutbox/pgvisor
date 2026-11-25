@@ -64,12 +64,12 @@ Existing repo context:
   - [ ] Verify `Dockerfile` still builds cleanly with the new workspace member present.
 - Done when: `tests/test-cli-setup.sh` passes end-to-end and `cargo nextest run --test-threads 1 --fail-fast` passes.
 
-### Phase 6: GitHub CI release binary workflow [STATUS: TODO]
+### Phase 6: GitHub CI release binary workflow [STATUS: DONE]
 - Goal: Automatically compile, archive, checksum, and attach `pgvisor` CLI binaries to GitHub Releases on `v*` tags.
 - Tasks:
-  - [ ] Add executable script `scripts/build-cli-release.sh` (`chmod +x`) taking `<target>` and `<version>`, compiling `cargo build --release -p pgvisor-cli --target <target>`, verifying the binary, and packaging `dist/pgvisor-<version>-<target>.tar.gz` plus its `.sha256` file.
-  - [ ] Update `.github/workflows/ci.yml` to add a `build-cli` matrix job (`needs: [test]`, triggered on `refs/tags/v*` and `workflow_dispatch`) building portable static Linux (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`) and macOS (`aarch64-apple-darwin`, `x86_64-apple-darwin`) binaries via `scripts/build-cli-release.sh` and uploading `dist/` artifacts.
-  - [ ] Update the `release` job in `.github/workflows/ci.yml` (`needs: [test, docker, build-cli]`) to download all CLI artifacts, generate a consolidated `SHA256SUMS` file, and upload `dist/*.tar.gz` and `dist/SHA256SUMS` with `softprops/action-gh-release@v2`.
+  - [x] Add executable script `scripts/build-cli-release.sh` (`chmod +x`) taking `<target>` and `<version>`, compiling `cargo build --release -p pgvisor-cli --target <target>`, verifying the binary, and packaging `dist/pgvisor-<version>-<target>.tar.gz` plus its `.sha256` file.
+  - [x] Update `.github/workflows/ci.yml` to add a `build-cli` matrix job (`needs: [test]`, triggered on `refs/tags/v*` and `workflow_dispatch`) building portable static Linux (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`) and macOS (`aarch64-apple-darwin`, `x86_64-apple-darwin`) binaries via `scripts/build-cli-release.sh` and uploading `dist/` artifacts.
+  - [x] Update the `release` job in `.github/workflows/ci.yml` (`needs: [test, docker, build-cli]`) to download all CLI artifacts, generate a consolidated `SHA256SUMS` file, and upload `dist/*.tar.gz` and `dist/SHA256SUMS` with `softprops/action-gh-release@v2`.
 - Done when: `scripts/build-cli-release.sh` produces a working tarball and valid checksum locally, and `.github/workflows/ci.yml` passes workflow syntax validation.
 
 ### Phase 7: Documentation, legacy script note, and path-lookup cache [STATUS: TODO]
