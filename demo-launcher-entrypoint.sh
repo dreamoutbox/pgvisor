@@ -336,7 +336,8 @@ run_mock_data_seed() {
         --host="127.0.0.1" \
         --port="5432" \
         --dashboard-url="http://127.0.0.1:8080" \
-        --token="postgres" \
+        --user="postgres" \
+        --password="postgres" \
         --container="pgvisor-node1"; then
         log_info "dev-mock-data.sh completed successfully."
     else
@@ -364,7 +365,7 @@ generate_demo_showcase_summary() {
 ================================================================================
   Droplet Public IP       : ${public_ip}
   Web Dashboard UI        : http://${public_ip}:8080
-  Admin Bearer Token      : postgres
+  Dashboard Login         : postgres / postgres
   PostgreSQL Proxy (L7)   : ${public_ip}:5432
   S3 / RustFS Console     : http://${public_ip}:9001
   S3 Root Credentials     : minioadmin / minioadmin
