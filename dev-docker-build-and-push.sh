@@ -22,7 +22,7 @@ fi
 
 echo "$DOCKER_PAT" | docker login -u "$DOCKER_USER" --password-stdin
 
-"${SCRIPT_DIR}/dev-build-image.sh" -t "${IMAGE}:${TAG}"
+"${SCRIPT_DIR}/dev-docker-build-image.sh" -t "${IMAGE}:${TAG}"
 docker push "${IMAGE}:${TAG}"
 
 docker logout

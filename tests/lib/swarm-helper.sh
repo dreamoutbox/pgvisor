@@ -68,7 +68,7 @@ ensure_swarm_image_cache() {
 
     if [ -z "${current_node_id}" ]; then
         echo "Building PgVisor image first..."
-        "${SWARM_REPO_ROOT}/dev-build-image.sh" >/dev/null
+        "${SWARM_REPO_ROOT}/dev-docker-build-image.sh" >/dev/null
         current_node_id=$(docker image inspect -f '{{.Id}}' dreamoutbox/pgvisor:latest)
     fi
 

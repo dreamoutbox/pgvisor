@@ -82,7 +82,7 @@ done
 
 if [[ "${BUILD_IMAGES}" == "true" ]]; then
     echo "Building PgVisor Docker image (dreamoutbox/pgvisor:latest)..."
-    "${REPO_ROOT}/dev-build-image.sh"
+    "${REPO_ROOT}/dev-docker-build-image.sh"
 fi
 
 # Ensure compose profiles are up to date
