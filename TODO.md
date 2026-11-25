@@ -242,13 +242,13 @@
 
 ## pgvisor-dashboard separate from pgvisor-proxy. api move to pgvisor-sidecar
 
-- [ ] move web dashboard to separate standalone module. separate from `pgvisor-proxy`. proxy should just handle SQL connections.
+- [x] move web dashboard to separate standalone module. separate from `pgvisor-proxy`. proxy should just handle SQL connections.
 
-- [ ] move axum api from `pgvisor-dashboard` to `crates/pgvisor-sidecar/src/api`. client (web dashboard and future CLI) should communicate to pgvisor-sidecar directly. use list of pgvisor-sidecar URLs as connection string.
+- [x] move axum api from `pgvisor-dashboard` to `crates/pgvisor-sidecar/src/api`. client (web dashboard and future CLI) should communicate to pgvisor-sidecar directly. use list of pgvisor-sidecar URLs as connection string.
 
-- [ ] axum api. add GET route to get all pgvisor-sidecar members and role in cluster. for client (web dashboard and future CLI) to determine which sidecar is leader and execute actions.
+- [x] axum api. add GET route to get all pgvisor-sidecar members and role in cluster. for client (web dashboard and future CLI) to determine which sidecar is leader and execute actions.
 
-- [ ] axum api. use postgres users as login, add env `PGVISOR_SUPERUSER=postgres,bob` for user that can manage cluster.
+- [x] axum api. use postgres users as login, add env `PGVISOR_SUPERUSER=postgres,bob` for user that can manage cluster.
 
 ---
 
