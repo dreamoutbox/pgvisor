@@ -250,6 +250,9 @@
 
 - [x] axum api. use postgres users as login, add env `PGVISOR_SUPERUSER=postgres,bob` for user that can manage cluster.
 
+- [x] fix scripts and tests
+
+
 ---
 
 # Backlog
