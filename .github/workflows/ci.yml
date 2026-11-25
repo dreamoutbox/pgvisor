@@ -119,9 +119,67 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  build-cli:
+    name: Build CLI (${{ matrix.target }})
+    needs: [test]
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            musl_deps: true
+            linker: ""
+            rustflags: ""
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            musl_deps: false
+            linker: rust-lld
+            rustflags: "-C target-feature=+crt-static"
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            musl_deps: false
+            linker: ""
+            rustflags: ""
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            musl_deps: false
+            linker: ""
+            rustflags: ""
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust dependency cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install musl tools
+        if: matrix.musl_deps
+        run: ./scripts/install-musl-tools.sh
+
+      - name: Build and package pgvisor CLI
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: ${{ matrix.linker }}
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: ./scripts/build-cli-release.sh ${{ matrix.target }}
+
+      - name: Upload CLI release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: dist/pgvisor-*.tar.gz*
+
   release:
     name: Create GitHub Release
-    needs: [test, docker]
+    needs: [test, docker, build-cli]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -131,8 +189,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Download CLI release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate consolidated SHA256SUMS
+        run: ./scripts/generate-cli-checksums.sh dist
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
           generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
