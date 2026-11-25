@@ -47,14 +47,14 @@ Existing repo context:
   - [x] Add unit tests in `crates/pgvisor-cli/tests/setup_command_test.rs` (using `tempfile`) asserting `Bundled` vs `External` compose output, random secret generation, `.env` `0600` mode, `init-s3-bucket.sh` `0755` mode, and `--force` overwrite protection.
 - Done when: `cargo nextest run --test-threads 1 --fail-fast -p pgvisor-cli` passes and `pgvisor setup --dir <tmp> --non-interactive` produces a compose file accepted by `docker compose -f <tmp>/docker-compose.yml config`.
 
-### Phase 4: Cluster lifecycle commands (`up`, `down`, `restart`, `status`, `logs`, `clean`) [STATUS: TODO]
+### Phase 4: Cluster lifecycle commands (`up`, `down`, `restart`, `status`, `logs`, `clean`) [STATUS: DONE]
 - Goal: Reach full operational parity with `examples/pgvisorctl.sh` using the generated or existing cluster directory.
 - Tasks:
-  - [ ] Add `src/config/env_file.rs` to parse key-value pairs from `<dir>/.env` safely without invoking a shell, plus compose service discovery to determine which containers require health checks (e.g., excluding bundled S3 when configured externally).
-  - [ ] Implement `src/commands/up_command.rs`: verify `<dir>/docker-compose.yml` exists (guiding the user to run `pgvisor setup` if not), run preflight checks, pull missing images (or `--build` only when explicitly requested with a local `Dockerfile`), run `docker compose up -d`, wait via `HealthWaiter`, and print connection details (proxy URI, dashboard URL / SSH tunnel hint, `PGVISOR_SUPERUSER` login note, management commands).
-  - [ ] Implement `src/commands/down_command.rs` (handling `down` and `stop` alias), `src/commands/restart_command.rs` (restart + health wait), `src/commands/status_command.rs` (`docker compose ps`), and `src/commands/logs_command.rs` (streaming `docker compose logs -f` with `--no-follow`, `--tail`, and optional service filters).
-  - [ ] Implement `src/commands/clean_command.rs` requiring interactive confirmation unless `-y`/`--yes` is set, then running `docker compose down -v --remove-orphans`.
-  - [ ] Add unit tests in `crates/pgvisor-cli/tests/lifecycle_commands_test.rs` testing `.env` parsing, missing-setup guidance, `clean` confirmation guard, and command argument forwarding.
+  - [x] Add `src/config/env_file.rs` to parse key-value pairs from `<dir>/.env` safely without invoking a shell, plus compose service discovery to determine which containers require health checks (e.g., excluding bundled S3 when configured externally).
+  - [x] Implement `src/commands/up_command.rs`: verify `<dir>/docker-compose.yml` exists (guiding the user to run `pgvisor setup` if not), run preflight checks, pull missing images (or `--build` only when explicitly requested with a local `Dockerfile`), run `docker compose up -d`, wait via `HealthWaiter`, and print connection details (proxy URI, dashboard URL / SSH tunnel hint, `PGVISOR_SUPERUSER` login note, management commands).
+  - [x] Implement `src/commands/down_command.rs` (handling `down` and `stop` alias), `src/commands/restart_command.rs` (restart + health wait), `src/commands/status_command.rs` (`docker compose ps`), and `src/commands/logs_command.rs` (streaming `docker compose logs -f` with `--no-follow`, `--tail`, and optional service filters).
+  - [x] Implement `src/commands/clean_command.rs` requiring interactive confirmation unless `-y`/`--yes` is set, then running `docker compose down -v --remove-orphans`.
+  - [x] Add unit tests in `crates/pgvisor-cli/tests/lifecycle_commands_test.rs` testing `.env` parsing, missing-setup guidance, `clean` confirmation guard, and command argument forwarding.
 - Done when: `cargo check --workspace` and `cargo nextest run --test-threads 1 --fail-fast -p pgvisor-cli` pass.
 
 ### Phase 5: End-to-end integration test for `pgvisor` CLI [STATUS: TODO]

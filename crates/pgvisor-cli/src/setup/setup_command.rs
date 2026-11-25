@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use crate::cli::{S3Mode, SetupArgs};
+use crate::cli::{S3Mode, SetupArgs, UpArgs};
+use crate::commands::UpCommand;
 use crate::docker::{CommandExecutor, PreflightChecker};
 use crate::error::CliError;
 use crate::setup::env_template::EnvTemplate;
@@ -54,7 +55,11 @@ impl<'a> SetupCommand<'a> {
         }
 
         if options.start {
-            return Err(CliError::NotImplemented("setup --start"));
+            let up_args = UpArgs {
+                build: false,
+                timeout: 90,
+            };
+            UpCommand::new(self.executor).execute(dir, &up_args, silent)?;
         }
 
         Ok(options)

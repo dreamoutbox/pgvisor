@@ -1,4 +1,6 @@
 pub mod cli;
+pub mod commands;
+pub mod config;
 pub mod docker;
 pub mod error;
 pub mod setup;
@@ -8,6 +10,9 @@ pub use cli::{
 };
 pub use error::CliError;
 
+use commands::{
+    CleanCommand, DownCommand, LogsCommand, RestartCommand, StatusCommand, UpCommand,
+};
 use docker::SystemCommandExecutor;
 use setup::SetupCommand;
 
@@ -19,11 +24,16 @@ pub fn run(args: CliArgs) -> Result<(), CliError> {
             SetupCommand::new(&executor).execute(&args.dir, &setup_args, args.silent)?;
             Ok(())
         }
-        CliCommand::Up(_) => Err(CliError::NotImplemented("up")),
-        CliCommand::Down => Err(CliError::NotImplemented("down")),
-        CliCommand::Restart(_) => Err(CliError::NotImplemented("restart")),
-        CliCommand::Status => Err(CliError::NotImplemented("status")),
-        CliCommand::Logs(_) => Err(CliError::NotImplemented("logs")),
-        CliCommand::Clean(_) => Err(CliError::NotImplemented("clean")),
+        CliCommand::Up(up_args) => UpCommand::new(&executor).execute(&args.dir, &up_args, args.silent),
+        CliCommand::Down => DownCommand::new(&executor).execute(&args.dir, args.silent),
+        CliCommand::Restart(restart_args) => {
+            RestartCommand::new(&executor).execute(&args.dir, &restart_args, args.silent)
+        }
+        CliCommand::Status => StatusCommand::new(&executor).execute(&args.dir),
+        CliCommand::Logs(logs_args) => LogsCommand::new(&executor).execute(&args.dir, &logs_args),
+        CliCommand::Clean(clean_args) => {
+            CleanCommand::new(&executor).execute(&args.dir, &clean_args, args.silent)?;
+            Ok(())
+        }
     }
 }
