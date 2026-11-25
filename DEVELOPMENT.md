@@ -33,6 +33,7 @@ This document covers local development, testing, crate architecture, technology 
 | `crates/pgvisor-proxy` | SQL-only L7 transaction connection pooler, read/write splitter, failover buffering, `restore_epoch` pool draining |
 | `crates/pgvisor-sidecar` | Container PID 1 supervisor, internal `/control/*` (`8080`), authenticated `/api/*` (`8081`), `pg_stat_database` metrics sampler, backup CRON worker |
 | `crates/pgvisor-dashboard` | Standalone Axum + Askama web UI (`8080`) connecting directly to `pgvisor-sidecar` `/api/*` via `PGVISOR_SIDECAR_URLS` |
+| `crates/pgvisor-cli` | Native Rust `pgvisor` CLI binary for server-first `setup` (random secrets, standalone compose) and Docker Compose lifecycle (`up`, `down`, `restart`, `status`, `logs`, `clean`) |
 
 ---
 
@@ -117,6 +118,9 @@ cargo check --workspace
 
 # Run Rust unit tests
 cargo nextest run --test-threads 1 --fail-fast
+
+# Build & package pgvisor-cli release archive locally
+./scripts/build-cli-release.sh x86_64-unknown-linux-musl 0.4.0
 
 # Run specific binary locally
 cargo run -p pgvisor-sidecar

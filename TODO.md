@@ -258,7 +258,7 @@
 
 - [x] add dev test script. test read-write on leader node. test read-only on follower node. if follower node can write then it is error.
 
-- [ ] add pgvisor CLI. like examples/pgvisorctl.sh. but native rust cli binary. add github ci release binary workflow.
+- [x] add pgvisor CLI. like examples/pgvisorctl.sh. but native rust cli binary. add github ci release binary workflow.
 
 - [ ] run `pgvisor setup` CLI on server. not local.
 

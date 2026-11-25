@@ -2,7 +2,11 @@
 set -euo pipefail
 
 # ==============================================================================
-# PgVisor Cluster Bootstrap & Management Script
+# PgVisor Cluster Bootstrap & Management Script (Legacy Example Helper)
+#
+# Note: For server deployments, prefer the native `pgvisor` Rust CLI
+# (`crates/pgvisor-cli`, `pgvisor setup` / `pgvisor up`). This script is kept
+# for `demo-launcher-entrypoint.sh` and `examples/run-demo-app.sh`.
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

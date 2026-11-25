@@ -23,7 +23,29 @@ Before starting, ensure your system has:
 
 ---
 
-## One-Command Cluster Bootstrap
+## Server Quick Start (`pgvisor` CLI)
+
+Install the standalone `pgvisor` binary from [GitHub Releases](https://github.com/dreamoutbox/pgvisor/releases) without cloning the repository:
+
+```bash
+VERSION="0.4.0"
+TARGET="x86_64-unknown-linux-musl" # or aarch64-unknown-linux-musl, aarch64-apple-darwin, x86_64-apple-darwin
+curl -fsSLO "https://github.com/dreamoutbox/pgvisor/releases/download/v${VERSION}/pgvisor-${VERSION}-${TARGET}.tar.gz"
+curl -fsSLO "https://github.com/dreamoutbox/pgvisor/releases/download/v${VERSION}/SHA256SUMS"
+grep "pgvisor-${VERSION}-${TARGET}.tar.gz" SHA256SUMS | sha256sum -c -
+tar -xzf "pgvisor-${VERSION}-${TARGET}.tar.gz"
+sudo mv pgvisor /usr/local/bin/pgvisor
+
+mkdir -p /opt/pgvisor
+pgvisor -C /opt/pgvisor setup
+pgvisor -C /opt/pgvisor up
+```
+
+`pgvisor setup` provisions cryptographically random secrets in `.env` (`0600`) and binds `pgvisor-dashboard` to `127.0.0.1:8080` by default (use `ssh -L 8080:127.0.0.1:8080 <user>@<server>` or `--dashboard-bind 0.0.0.0`).
+
+---
+
+## One-Command Cluster Bootstrap (From Repo)
 
 PgVisor includes a bootstrap script that orchestrates the entire cluster setup:
 
