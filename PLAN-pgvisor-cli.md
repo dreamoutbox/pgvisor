@@ -26,14 +26,14 @@ Existing repo context:
   - [x] Add argument parsing unit tests in `crates/pgvisor-cli/tests/cli_args_test.rs` covering subcommands, aliases, defaults, and invalid options.
 - Done when: `cargo check --workspace` passes, `cargo nextest run --test-threads 1 --fail-fast -p pgvisor-cli` passes, and `cargo run -p pgvisor-cli -- --help` lists all subcommands cleanly.
 
-### Phase 2: Server preflight checks & Docker Compose runner abstraction [STATUS: TODO]
+### Phase 2: Server preflight checks & Docker Compose runner abstraction [STATUS: DONE]
 - Goal: Encapsulate Docker/Compose invocation, server prerequisite checks, and container health polling behind testable Rust abstractions.
 - Tasks:
-  - [ ] Add `src/docker/command_executor.rs` trait + `SystemCommandExecutor` implementation to allow deterministic unit testing without a live Docker daemon.
-  - [ ] Add `src/docker/preflight.rs` checking `docker` in `PATH`, `docker compose version` (v2+), Docker daemon availability (`docker info`), and TCP port availability checks for server setup.
-  - [ ] Add `src/docker/compose_runner.rs` wrapping `docker compose -f <dir>/docker-compose.yml --env-file <dir>/.env` for `up -d`, `down`, `down -v --remove-orphans`, `restart`, `ps`, `logs`, `pull`, `build`, and `config` validation.
-  - [ ] Add `src/docker/container_status.rs` (`ContainerState` and `ContainerHealth` enums) and `src/docker/health_waiter.rs` polling `docker inspect` with timeout, failing fast with the last 30 container log lines if any required container transitions to `exited` or `dead`.
-  - [ ] Add unit tests in `crates/pgvisor-cli/tests/docker_runner_test.rs` exercising preflight failures, healthy convergence, fail-fast on dead container, and timeout diagnostics.
+  - [x] Add `src/docker/command_executor.rs` trait + `SystemCommandExecutor` implementation to allow deterministic unit testing without a live Docker daemon.
+  - [x] Add `src/docker/preflight.rs` checking `docker` in `PATH`, `docker compose version` (v2+), Docker daemon availability (`docker info`), and TCP port availability checks for server setup.
+  - [x] Add `src/docker/compose_runner.rs` wrapping `docker compose -f <dir>/docker-compose.yml --env-file <dir>/.env` for `up -d`, `down`, `down -v --remove-orphans`, `restart`, `ps`, `logs`, `pull`, `build`, and `config` validation.
+  - [x] Add `src/docker/container_status.rs` (`ContainerState` and `ContainerHealth` enums) and `src/docker/health_waiter.rs` polling `docker inspect` with timeout, failing fast with the last 30 container log lines if any required container transitions to `exited` or `dead`.
+  - [x] Add unit tests in `crates/pgvisor-cli/tests/docker_runner_test.rs` exercising preflight failures, healthy convergence, fail-fast on dead container, and timeout diagnostics.
 - Done when: `cargo check --workspace` and `cargo nextest run --test-threads 1 --fail-fast -p pgvisor-cli` pass.
 
 ### Phase 3: Server-first `pgvisor setup` config generator & secret provisioning [STATUS: TODO]

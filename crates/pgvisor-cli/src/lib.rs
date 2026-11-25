@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod docker;
 pub mod error;
 
 pub use cli::{
