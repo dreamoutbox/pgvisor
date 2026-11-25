@@ -100,3 +100,8 @@
 
 - `test.sh` = master test suite runner supporting `--ci` and `--fail-fast` flags, failure delimiter printing, and `$GITHUB_STEP_SUMMARY` markdown output.
 - `.github/workflows/ci.yml` = CI workflow executing `./test.sh -j 2 --ci` and uploading test log artifacts.
+
+### If you want to change the developer leader read-write and follower read-only check script, then check:
+
+- `dev-test-node-rw.sh` = discovers leader/follower roles via sidecar `/control/status` and `pg_is_in_recovery()`, verifies leader read-write (CREATE/INSERT/SELECT/UPDATE/DELETE), and asserts followers replicate reads while rejecting all writes with read-only transaction errors
+- `tests/lib/helper.sh` = shared `get_sidecar_status` and `json_extract` helpers sourced by `dev-test-node-rw.sh`

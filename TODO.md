@@ -252,14 +252,23 @@
 
 - [x] fix scripts and tests
 
+---
+
+## 11/26/2026
+
+- [x] add dev test script. test read-write on leader node. test read-only on follower node. if follower node can write then it is error.
+
+- [ ] add pgvisor CLI. like examples/pgvisorctl.sh. but native rust cli binary. add github ci release binary workflow.
+
+- [ ] run `pgvisor setup` CLI on server. not local.
+
+- [ ] assert transaction test
 
 ---
 
 # Backlog
 
-- [ ] add checkup test api route and function. test read-write on leader node. test read-only on follower node. if follower node can write then it is error.
-
-- [ ] remove `crates/pgvisor-proxy` and use `https://github.com/pgdogdev/pgdog`
+- [ ] remove `crates/pgvisor-proxy` and use `https://github.com/pgdogdev/pgdog`.
 
 - [ ] test on multiple VPSs. use docker swarm.
 
