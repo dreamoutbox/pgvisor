@@ -1,0 +1,24 @@
+[package]
+name = "pgvisor-cli"
+version = "0.4.0"
+edition = "2024"
+
+[lib]
+name = "pgvisor_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pgvisor"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+getrandom = { workspace = true }
+hex = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

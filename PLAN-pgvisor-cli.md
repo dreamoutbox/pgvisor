@@ -16,14 +16,14 @@ Existing repo context:
 
 ## Phases
 
-### Phase 1: Workspace crate scaffold & CLI argument skeleton [STATUS: TODO]
+### Phase 1: Workspace crate scaffold & CLI argument skeleton [STATUS: DONE]
 - Goal: Add `crates/pgvisor-cli` producing the `pgvisor` binary with parsed subcommands, global flags, and structured errors.
 - Tasks:
-  - [ ] Add `"crates/pgvisor-cli"` to `workspace.members` and `clap` (derive feature) to `[workspace.dependencies]` in `Cargo.toml`.
-  - [ ] Create `crates/pgvisor-cli/Cargo.toml` (`edition = "2024"`, `version = "0.4.0"`, `[[bin]] name = "pgvisor"`), depending only on lightweight crates (`clap`, `thiserror`, `anyhow`, `tracing`, `tracing-subscriber`, `hex`, `getrandom` or `rand`).
-  - [ ] Implement modular crate layout (one type per file, sparse `mod.rs`): `src/lib.rs`, `src/main.rs` (`tracing_subscriber` + `anyhow::Result` boundary), `src/error.rs` (`CliError` via `thiserror`), `src/cli/args.rs` (`CliArgs` with global `-C`/`--dir`, `-s`/`--silent`), and `src/cli/command.rs` (`CliCommand` enum: `Setup`, `Up`, `Down` with alias `stop`, `Restart`, `Status`, `Logs`, `Clean`).
-  - [ ] Stub command handlers returning structured unimplemented messages so the binary compiles and `--help` / `--version` work end-to-end.
-  - [ ] Add argument parsing unit tests in `crates/pgvisor-cli/tests/cli_args_test.rs` covering subcommands, aliases, defaults, and invalid options.
+  - [x] Add `"crates/pgvisor-cli"` to `workspace.members` and `clap` (derive feature) to `[workspace.dependencies]` in `Cargo.toml`.
+  - [x] Create `crates/pgvisor-cli/Cargo.toml` (`edition = "2024"`, `version = "0.4.0"`, `[[bin]] name = "pgvisor"`), depending only on lightweight crates (`clap`, `thiserror`, `anyhow`, `tracing`, `tracing-subscriber`, `hex`, `getrandom` or `rand`).
+  - [x] Implement modular crate layout (one type per file, sparse `mod.rs`): `src/lib.rs`, `src/main.rs` (`tracing_subscriber` + `anyhow::Result` boundary), `src/error.rs` (`CliError` via `thiserror`), `src/cli/args.rs` (`CliArgs` with global `-C`/`--dir`, `-s`/`--silent`), and `src/cli/command.rs` (`CliCommand` enum: `Setup`, `Up`, `Down` with alias `stop`, `Restart`, `Status`, `Logs`, `Clean`).
+  - [x] Stub command handlers returning structured unimplemented messages so the binary compiles and `--help` / `--version` work end-to-end.
+  - [x] Add argument parsing unit tests in `crates/pgvisor-cli/tests/cli_args_test.rs` covering subcommands, aliases, defaults, and invalid options.
 - Done when: `cargo check --workspace` passes, `cargo nextest run --test-threads 1 --fail-fast -p pgvisor-cli` passes, and `cargo run -p pgvisor-cli -- --help` lists all subcommands cleanly.
 
 ### Phase 2: Server preflight checks & Docker Compose runner abstraction [STATUS: TODO]
