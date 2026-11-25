@@ -57,11 +57,11 @@ Existing repo context:
   - [x] Add unit tests in `crates/pgvisor-cli/tests/lifecycle_commands_test.rs` testing `.env` parsing, missing-setup guidance, `clean` confirmation guard, and command argument forwarding.
 - Done when: `cargo check --workspace` and `cargo nextest run --test-threads 1 --fail-fast -p pgvisor-cli` pass.
 
-### Phase 5: End-to-end integration test for `pgvisor` CLI [STATUS: TODO]
+### Phase 5: End-to-end integration test for `pgvisor` CLI [STATUS: DONE]
 - Goal: Verify a real server-style setup-to-clean lifecycle outside the repo tree using Docker.
 - Tasks:
-  - [ ] Add `tests/test-cli-setup.sh` (reusing `tests/lib/helper.sh`) that builds `pgvisor`, creates an isolated temporary directory outside the repo compose paths, runs `pgvisor setup --non-interactive --image dreamoutbox/pgvisor:latest` with non-colliding test ports, verifies `.env` permissions (`0600`) and non-default secrets, runs `pgvisor up` and `pgvisor status`, verifies SQL write + polling read through the proxy (per replication-lag testing rules), and verifies `pgvisor restart`, `pgvisor down`, and `pgvisor clean --yes`.
-  - [ ] Verify `Dockerfile` still builds cleanly with the new workspace member present.
+  - [x] Add `tests/test-cli-setup.sh` (reusing `tests/lib/helper.sh`) that builds `pgvisor`, creates an isolated temporary directory outside the repo compose paths, runs `pgvisor setup --non-interactive --image dreamoutbox/pgvisor:latest` with non-colliding test ports, verifies `.env` permissions (`0600`) and non-default secrets, runs `pgvisor up` and `pgvisor status`, verifies SQL write + polling read through the proxy (per replication-lag testing rules), and verifies `pgvisor restart`, `pgvisor down`, and `pgvisor clean --yes`.
+  - [x] Verify `Dockerfile` still builds cleanly with the new workspace member present.
 - Done when: `tests/test-cli-setup.sh` passes end-to-end and `cargo nextest run --test-threads 1 --fail-fast` passes.
 
 ### Phase 6: GitHub CI release binary workflow [STATUS: DONE]
