@@ -6,86 +6,7 @@
 
 {% block content %}
 <style>
-    .action-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 28px;
-    }
-
-    .action-header h1 {
-        font-size: 1.6rem;
-        font-weight: 700;
-        margin-bottom: 4px;
-    }
-
-    .action-header p {
-        color: var(--text-muted);
-        font-size: 0.9rem;
-    }
-
-    .btn {
-        padding: 8px 16px;
-        border-radius: 6px;
-        font-weight: 600;
-        font-size: 0.875rem;
-        cursor: pointer;
-        border: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        text-decoration: none;
-        transition: all 0.2s;
-    }
-
-    .btn-primary {
-        background: var(--primary);
-        color: #0f172a;
-    }
-
-    .btn-primary:hover {
-        opacity: 0.9;
-        box-shadow: 0 0 12px rgba(56, 189, 248, 0.4);
-    }
-
-    .btn-secondary {
-        background: var(--bg-card-hover);
-        color: var(--text-main);
-        border: 1px solid var(--border);
-    }
-
-    .btn-secondary:hover {
-        background: #475569;
-    }
-
-    .btn-danger {
-        background: rgba(248, 113, 113, 0.15);
-        color: var(--danger);
-        border: 1px solid rgba(248, 113, 113, 0.3);
-    }
-
-    .btn-danger:hover {
-        background: var(--danger);
-        color: #fff;
-    }
-
-    .btn-sm {
-        padding: 5px 10px;
-        font-size: 0.8rem;
-    }
-
-    .btn-success {
-        background: rgba(74, 222, 128, 0.2);
-        color: var(--success);
-        border: 1px solid rgba(74, 222, 128, 0.4);
-    }
-
-    .btn-success:hover {
-        background: var(--success);
-        color: #0f172a;
-    }
-
-    .modal-backdrop {
+    .pgv-modal-backdrop {
         position: fixed;
         top: 0;
         left: 0;
@@ -95,10 +16,10 @@
         display: none;
         justify-content: center;
         align-items: center;
-        z-index: 1000;
+        z-index: 1050;
     }
 
-    .modal {
+    .pgv-modal {
         background: var(--bg-card);
         border: 1px solid var(--border);
         border-radius: 12px;
@@ -108,12 +29,12 @@
         box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
     }
 
-    .modal h2 {
+    .pgv-modal h2 {
         font-size: 1.25rem;
         margin-bottom: 12px;
     }
 
-    .modal p {
+    .pgv-modal p {
         color: var(--text-muted);
         font-size: 0.9rem;
         margin-bottom: 20px;
@@ -223,34 +144,42 @@
     </div>
 </div>
 
-<div class="grid">
-    <div class="card">
-        <h3>Total Snapshots</h3>
-        <div class="value">{{ summary.total_backups }}</div>
-        <small style="color: var(--text-muted)">Retention: {{ summary.retention_days }} days{% if let Some(limit) = summary.keep_count %} &bull; Keep: {{ limit }}{% endif %}</small>
+<div class="row row-cols-1 row-cols-sm-2 row-cols-lg-4 g-3 mb-4 mt-3">
+    <div class="col">
+        <div class="card h-100"><div class="card-body">
+            <h3 class="small text-secondary mb-2">Total Snapshots</h3>
+            <div class="fs-3 fw-bold">{{ summary.total_backups }}</div>
+            <small style="color: var(--text-muted)">Retention: {{ summary.retention_days }} days{% if let Some(limit) = summary.keep_count %} &bull; Keep: {{ limit }}{% endif %}</small>
+        </div></div>
     </div>
-    <div class="card">
-        <h3>Total Storage Used</h3>
-        <div class="value">{{ summary.total_size_pretty }}</div>
-        <small style="color: var(--text-muted)">Compressed OpenDAL tarballs</small>
+    <div class="col">
+        <div class="card h-100"><div class="card-body">
+            <h3 class="small text-secondary mb-2">Total Storage Used</h3>
+            <div class="fs-3 fw-bold">{{ summary.total_size_pretty }}</div>
+            <small style="color: var(--text-muted)">Compressed OpenDAL tarballs</small>
+        </div></div>
     </div>
-    <div class="card">
-        <h3>Latest Snapshot</h3>
-        <div class="value" style="font-size: 1.15rem; margin-top: 4px; line-height: 1.4;">
-            {% if let Some(latest) = summary.latest_backup %}
-            {{ latest }}
-            {% else %}
-            None recorded
-            {% endif %}
-        </div>
-        <small style="color: var(--text-muted)">Physical basebackup</small>
+    <div class="col">
+        <div class="card h-100"><div class="card-body">
+            <h3 class="small text-secondary mb-2">Latest Snapshot</h3>
+            <div class="fs-5 fw-bold mt-1">
+                {% if let Some(latest) = summary.latest_backup %}
+                {{ latest }}
+                {% else %}
+                None recorded
+                {% endif %}
+            </div>
+            <small style="color: var(--text-muted)">Physical basebackup</small>
+        </div></div>
     </div>
-    <div class="card">
-        <h3>Storage Target</h3>
-        <div class="value" style="font-size: 1.15rem; margin-top: 4px; color: var(--primary);">
-            {{ summary.storage_bucket }}
-        </div>
-        <small style="color: var(--text-muted)">{{ summary.storage_endpoint }}</small>
+    <div class="col">
+        <div class="card h-100"><div class="card-body">
+            <h3 class="small text-secondary mb-2">Storage Target</h3>
+            <div class="fs-5 fw-bold mt-1" style="color: var(--primary);">
+                {{ summary.storage_bucket }}
+            </div>
+            <small style="color: var(--text-muted)">{{ summary.storage_endpoint }}</small>
+        </div></div>
     </div>
 </div>
 
@@ -285,7 +214,8 @@
     </div>
 </div>
 
-<table>
+<div class="table-responsive">
+<table class="table table-bordered table-hover align-middle mb-0">
     <thead>
         <tr>
             <th>Snapshot ID</th>
@@ -405,10 +335,11 @@
         {% endif %}
     </tbody>
 </table>
+</div>
 
 <!-- Create Backup Modal -->
-<div id="backupModal" class="modal-backdrop">
-    <div class="modal">
+<div id="backupModal" class="pgv-modal-backdrop">
+    <div class="pgv-modal">
         <h2>Trigger Physical Backup</h2>
         <p>This creates a consistent physical basebackup of the PostgreSQL leader via <code>pg_basebackup</code> and
             uploads the archive to OpenDAL / MinIO.</p>
@@ -434,8 +365,8 @@
 </div>
 
 <!-- Upload / Import Backup Modal -->
-<div id="uploadModal" class="modal-backdrop">
-    <div class="modal">
+<div id="uploadModal" class="pgv-modal-backdrop">
+    <div class="pgv-modal">
         <h2>Import Backup Archive</h2>
         <p>Upload a PostgreSQL basebackup archive (<code>.tar.gz</code> or <code>.tar</code>). It will be validated, saved to OpenDAL / S3 storage, and made available for cluster restore or PITR.</p>
 
@@ -474,8 +405,8 @@
 </div>
 
 <!-- Restore Modal -->
-<div id="restoreModal" class="modal-backdrop">
-    <div class="modal">
+<div id="restoreModal" class="pgv-modal-backdrop">
+    <div class="pgv-modal">
         <h2 style="color: var(--warning);">Confirm Cluster Restore</h2>
         <p>Restoring will recover PostgreSQL from snapshot <strong id="restoreSnapshotId"
                 style="color: var(--primary);"></strong>. This recovers database files to the state captured at snapshot

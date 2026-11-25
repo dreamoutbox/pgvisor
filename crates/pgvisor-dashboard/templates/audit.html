@@ -81,7 +81,7 @@
                 statements for PITR disaster recovery.
             </p>
         </div>
-        <div style="display: flex; gap: 10px; align-items: center;">
+        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
             <button onclick="window.location.reload()"
                 style="background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border); padding: 8px 16px; border-radius: 6px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 6px;">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -94,34 +94,45 @@
     </header>
 
     <!-- Top KPI Summary Cards -->
-    <div class="grid">
-        <div class="card">
-            <h3>TOTAL AUDIT EVENTS</h3>
-            <div class="value" style="color: var(--primary);">{{ stats.total_events }}</div>
-            <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 4px;">Persisted to S3 Object Storage
+    <div class="row row-cols-1 row-cols-md-3 g-3">
+        <div class="col">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h3 class="small text-secondary text-uppercase mb-2">TOTAL AUDIT EVENTS</h3>
+                    <div class="fs-3 fw-bold" style="color: var(--primary);">{{ stats.total_events }}</div>
+                    <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 4px;">Persisted to S3 Object
+                        Storage</div>
+                </div>
             </div>
         </div>
-        <div class="card">
-            <h3>DANGEROUS SQL DETECTED</h3>
-            {% if stats.dangerous_sql_count > 0 %}
-            <div class="value val-warn">{{ stats.dangerous_sql_count }}</div>
-            {% else %}
-            <div class="value val-ok">{{ stats.dangerous_sql_count }}</div>
-            {% endif %}
-            <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 4px;">DROP TABLE, TRUNCATE, DELETE
+        <div class="col">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h3 class="small text-secondary text-uppercase mb-2">DANGEROUS SQL DETECTED</h3>
+                    {% if stats.dangerous_sql_count > 0 %}
+                    <div class="fs-3 fw-bold val-warn">{{ stats.dangerous_sql_count }}</div>
+                    {% else %}
+                    <div class="fs-3 fw-bold val-ok">{{ stats.dangerous_sql_count }}</div>
+                    {% endif %}
+                    <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 4px;">DROP TABLE, TRUNCATE,
+                        DELETE</div>
+                </div>
             </div>
         </div>
-        <div class="card">
-            <h3>LATEST PITR CANDIDATE</h3>
-            <div class="value"
-                style="font-size: 1.1rem; margin-top: 6px; font-family: monospace; color: var(--accent);">
-                {% if let Some(target) = stats.latest_pitr_target %}
-                {{ target }}
-                {% else %}
-                None Recorded
-                {% endif %}
-            </div>
-            <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 4px;">Target for Point-in-Time Recovery
+        <div class="col">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h3 class="small text-secondary text-uppercase mb-2">LATEST PITR CANDIDATE</h3>
+                    <div class="fs-5 fw-bold mt-1" style="font-family: monospace; color: var(--accent);">
+                        {% if let Some(target) = stats.latest_pitr_target %}
+                        {{ target }}
+                        {% else %}
+                        None Recorded
+                        {% endif %}
+                    </div>
+                    <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 4px;">Target for Point-in-Time
+                        Recovery</div>
+                </div>
             </div>
         </div>
     </div>
@@ -177,7 +188,7 @@
 
     <!-- Audit Events Table -->
     <div style="border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg-card);">
-        <table class="audit-table">
+        <table class="table table-bordered table-hover align-middle audit-table mb-0">
             <thead>
                 <tr>
                     <th style="width: 170px;">Timestamp (UTC)</th>

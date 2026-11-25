@@ -4,68 +4,18 @@
 {% block nav_nodes %}active{% endblock %}
 
 {% block content %}
-<style>
-    .btn {
-        padding: 6px 12px;
-        border-radius: 6px;
-        font-weight: 500;
-        cursor: pointer;
-        transition: all 0.2s;
-        border: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        text-decoration: none;
-    }
-    .btn-sm {
-        padding: 4px 10px;
-        font-size: 0.8rem;
-    }
-    .btn-primary {
-        background: var(--primary);
-        color: #0f172a;
-    }
-    .btn-primary:hover {
-        background: #7dd3fc;
-    }
-    .btn-secondary {
-        background: var(--bg-card-hover);
-        color: var(--text-main);
-        border: 1px solid var(--border);
-    }
-    .btn-secondary:hover {
-        background: #475569;
-    }
-    .toast {
-        position: fixed;
-        bottom: 24px;
-        right: 24px;
-        padding: 12px 20px;
-        border-radius: 8px;
-        background: var(--bg-card);
-        border: 1px solid var(--border);
-        color: var(--text-main);
-        font-size: 0.9rem;
-        display: none;
-        align-items: center;
-        gap: 10px;
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
-        z-index: 2000;
-    }
-</style>
-
-<header style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
+<header class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-3">
     <div>
-        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
-            <a href="/nodes" class="btn btn-sm btn-secondary" style="font-weight: 600;">&larr; Back to Nodes</a>
-            <h1 style="margin: 0; font-size: 1.5rem;">Node #{{ node.node_id }} Diagnostics</h1>
-            <code style="font-size: 1rem; color: var(--primary); background: rgba(56, 189, 248, 0.1); padding: 2px 8px; border-radius: 4px;">{{ node.address }}</code>
+        <div class="d-flex align-items-center gap-2 mb-1">
+            <a href="/nodes" class="btn btn-sm btn-outline-secondary fw-semibold">&larr; Back to Nodes</a>
+            <h1 class="h4 fw-bold mb-0">Node #{{ node.node_id }} Diagnostics</h1>
+            <code class="fs-6 text-info bg-info bg-opacity-10 px-2 py-1 rounded">{{ node.address }}</code>
         </div>
-        <p style="color: var(--text-muted); font-size: 0.9rem; margin: 0;">
+        <p class="text-secondary small mb-0">
             Full-page real-time sidecar supervisor &amp; PostgreSQL server logs and diagnostic configuration inspector
         </p>
     </div>
-    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+    <div class="d-flex gap-2 align-items-center flex-wrap">
         {% match node.role %}
             {% when NodeRole::Leader %}
                 <span class="badge badge-leader">Leader</span>

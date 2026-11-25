@@ -4,60 +4,73 @@
 {% block nav_overview %}active{% endblock %}
 
 {% block content %}
-<header>
+<header class="d-flex justify-content-between align-items-center mb-4">
     <div>
-        <h1>Cluster: {{ overview.cluster_id }}</h1>
-        <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 4px;">Consensus Term: {{ overview.current_term }} | Quorum Required: {{ overview.quorum_size }}</p>
+        <h1 class="h3 fw-bold mb-1">Cluster: {{ overview.cluster_id }}</h1>
+        <p class="text-secondary small mb-0">Consensus Term: {{ overview.current_term }} | Quorum Required: {{ overview.quorum_size }}</p>
     </div>
-    <div style="display: flex; align-items: center; gap: 12px;">
-        <span id="live-indicator" class="badge badge-healthy" style="display: flex; align-items: center; gap: 6px;">
-            <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--success); box-shadow: 0 0 6px var(--success);"></span>
+    <div class="d-flex align-items-center gap-2">
+        <span id="live-indicator" class="badge rounded-pill badge-healthy d-flex align-items-center gap-2">
+            <span class="rounded-circle bg-success d-inline-block" style="width: 6px; height: 6px;"></span>
             Live Telemetry (5s poll)
         </span>
-        <button id="refresh-btn" onclick="fetchSnapshot()" style="background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 500;">
+        <button id="refresh-btn" onclick="fetchSnapshot()" class="btn btn-outline-secondary btn-sm">
             Refresh
         </button>
     </div>
 </header>
 
-<div class="grid">
-    <div class="card">
-        <h3>Total Nodes</h3>
-        <div class="value">{{ overview.total_nodes }}</div>
+<div class="row row-cols-1 row-cols-sm-2 row-cols-lg-3 row-cols-xl-6 g-3 mb-4">
+    <div class="col">
+        <div class="card h-100"><div class="card-body">
+            <h3 class="small text-secondary mb-2">Total Nodes</h3>
+            <div class="fs-3 fw-bold">{{ overview.total_nodes }}</div>
+        </div></div>
     </div>
-    <div class="card">
-        <h3>Healthy Nodes</h3>
-        <div class="value" style="color: var(--success);">{{ overview.healthy_nodes }}</div>
+    <div class="col">
+        <div class="card h-100"><div class="card-body">
+            <h3 class="small text-secondary mb-2">Healthy Nodes</h3>
+            <div class="fs-3 fw-bold text-success">{{ overview.healthy_nodes }}</div>
+        </div></div>
     </div>
-    <div class="card">
-        <h3>Current Raft Leader</h3>
-        <div class="value" style="font-size: 1.25rem; color: var(--primary);">
-            {% match overview.leader_id %}
-                {% when Some with (id) %}
-                    Node #{{ id }}
-                {% when None %}
-                    None (Election in progress)
-            {% endmatch %}
-        </div>
+    <div class="col">
+        <div class="card h-100"><div class="card-body">
+            <h3 class="small text-secondary mb-2">Current Raft Leader</h3>
+            <div class="fs-5 fw-bold text-info">
+                {% match overview.leader_id %}
+                    {% when Some with (id) %}
+                        Node #{{ id }}
+                    {% when None %}
+                        None (Election in progress)
+                {% endmatch %}
+            </div>
+        </div></div>
     </div>
-    <div class="card">
-        <h3>Total Basebackups</h3>
-        <div class="value">{{ overview.total_backups }}</div>
+    <div class="col">
+        <div class="card h-100"><div class="card-body">
+            <h3 class="small text-secondary mb-2">Total Basebackups</h3>
+            <div class="fs-3 fw-bold">{{ overview.total_backups }}</div>
+        </div></div>
     </div>
-    <div class="card">
-        <h3>Total Cluster Queries</h3>
-        <div class="value" id="kpi-proxy-total" style="color: var(--primary);">0</div>
-        <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;" id="kpi-proxy-breakdown">Reads: 0 | Writes: 0</p>
+    <div class="col">
+        <div class="card h-100"><div class="card-body">
+            <h3 class="small text-secondary mb-2">Total Cluster Queries</h3>
+            <div class="fs-3 fw-bold text-info" id="kpi-proxy-total">0</div>
+            <p class="small text-secondary mb-0 mt-1" id="kpi-proxy-breakdown">Reads: 0 | Writes: 0</p>
+        </div></div>
     </div>
-    <div class="card">
-        <h3>Max Replication Lag</h3>
-        <div class="value" id="kpi-max-lag" style="color: var(--warning);">0 B</div>
-        <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">Across all replicas</p>
+    <div class="col">
+        <div class="card h-100"><div class="card-body">
+            <h3 class="small text-secondary mb-2">Max Replication Lag</h3>
+            <div class="fs-3 fw-bold text-warning" id="kpi-max-lag">0 B</div>
+            <p class="small text-secondary mb-0 mt-1">Across all replicas</p>
+        </div></div>
     </div>
 </div>
 
-<h2 style="font-size: 1.25rem; margin-bottom: 16px;">Node Topology</h2>
-<table style="margin-bottom: 32px;">
+<h2 class="h5 fw-semibold mb-3">Node Topology</h2>
+<div class="table-responsive mb-4">
+<table class="table table-bordered table-hover align-middle mb-0">
     <thead>
         <tr>
             <th>Node ID</th>
@@ -71,30 +84,30 @@
     <tbody>
         {% for node in overview.nodes %}
         <tr>
-            <td><strong>#{{ node.node_id }}</strong> {% if node.is_local %}<span style="font-size: 0.75rem; color: var(--accent);">(local)</span>{% endif %}</td>
+            <td><strong>#{{ node.node_id }}</strong> {% if node.is_local %}<span class="small text-info">(local)</span>{% endif %}</td>
             <td><code>{{ node.address }}</code></td>
             <td>
                 {% match node.role %}
                     {% when NodeRole::Leader %}
-                        <span class="badge badge-leader">Leader</span>
+                        <span class="badge rounded-pill badge-leader">Leader</span>
                     {% when NodeRole::Standby %}
-                        <span class="badge badge-standby">Standby</span>
+                        <span class="badge rounded-pill badge-standby">Standby</span>
                     {% when NodeRole::Learner %}
-                        <span class="badge badge-standby">Learner</span>
+                        <span class="badge rounded-pill badge-standby">Learner</span>
                 {% endmatch %}
             </td>
             <td>
                 {% match node.state %}
                     {% when NodeHealthState::Healthy %}
-                        <span class="badge badge-healthy">Healthy</span>
+                        <span class="badge rounded-pill badge-healthy">Healthy</span>
                     {% when NodeHealthState::Degraded %}
-                        <span class="badge badge-degraded">Degraded</span>
+                        <span class="badge rounded-pill badge-degraded">Degraded</span>
                     {% when NodeHealthState::Fenced %}
-                        <span class="badge badge-fenced">Fenced</span>
+                        <span class="badge rounded-pill badge-fenced">Fenced</span>
                     {% when NodeHealthState::Stopped %}
-                        <span class="badge badge-offline">Stopped</span>
+                        <span class="badge rounded-pill badge-offline">Stopped</span>
                     {% when NodeHealthState::Offline %}
-                        <span class="badge badge-offline">Offline</span>
+                        <span class="badge rounded-pill badge-offline">Offline</span>
                 {% endmatch %}
             </td>
             <td>{{ node.replication_lag_bytes }} bytes</td>
@@ -103,6 +116,7 @@
         {% endfor %}
     </tbody>
 </table>
+</div>
 
 <h2 style="font-size: 1.25rem; margin-bottom: 16px;">Cluster Metrics &amp; Telemetry</h2>
 

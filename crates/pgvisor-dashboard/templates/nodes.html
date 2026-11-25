@@ -5,62 +5,7 @@
 
 {% block content %}
 <style>
-    .btn {
-        padding: 6px 12px;
-        border-radius: 6px;
-        font-weight: 500;
-        cursor: pointer;
-        transition: all 0.2s;
-        border: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        text-decoration: none;
-    }
-
-    .btn-sm {
-        padding: 4px 10px;
-        font-size: 0.8rem;
-    }
-
-    .btn-primary {
-        background: var(--primary);
-        color: #0f172a;
-    }
-
-    .btn-primary:hover {
-        background: #7dd3fc;
-    }
-
-    .btn-secondary {
-        background: var(--bg-card-hover);
-        color: var(--text-main);
-        border: 1px solid var(--border);
-    }
-
-    .btn-secondary:hover {
-        background: #475569;
-    }
-
-    .btn-danger {
-        background: #ef4444;
-        color: #ffffff;
-    }
-
-    .btn-danger:hover {
-        background: #dc2626;
-    }
-
-    .btn-success {
-        background: #10b981;
-        color: #0f172a;
-    }
-
-    .btn-success:hover {
-        background: #059669;
-    }
-
-    .modal-backdrop {
+    .pgv-modal-backdrop {
         position: fixed;
         top: 0;
         left: 0;
@@ -70,10 +15,10 @@
         display: none;
         justify-content: center;
         align-items: center;
-        z-index: 1000;
+        z-index: 1050;
     }
 
-    .modal {
+    .pgv-modal {
         background: var(--bg-card);
         border: 1px solid var(--border);
         border-radius: 12px;
@@ -83,26 +28,39 @@
         box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
     }
 
-    .modal h2 {
+    .pgv-modal h2 {
         font-size: 1.25rem;
         margin-bottom: 12px;
     }
 
-    .modal p {
+    .pgv-modal p {
         color: var(--text-muted);
         font-size: 0.9rem;
         margin-bottom: 16px;
         line-height: 1.5;
     }
 
+    .step-list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 12px 14px;
+        margin-bottom: 20px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.5);
+        font-size: 0.85rem;
+        color: var(--text-muted);
+    }
+
     .modal-actions {
         display: flex;
         justify-content: flex-end;
         gap: 10px;
-        margin-top: 24px;
+        margin-top: 20px;
     }
 
-    .toast {
+    .toast-custom {
         position: fixed;
         bottom: 24px;
         right: 24px;
@@ -128,329 +86,332 @@
         border-color: var(--danger);
         color: var(--danger);
     }
-
-    .step-list {
-        background: var(--bg-main);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 12px 16px;
-        font-size: 0.85rem;
-        color: var(--text-muted);
-        margin-bottom: 16px;
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-    }
 </style>
 
-<header>
-    <div>
-        <h1>Cluster Nodes</h1>
-        <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 4px;">Detailed health, replication lag, process supervision status, and manual failover / switchover controls</p>
-    </div>
+<header class="mb-4">
+    <h1 class="h3 fw-bold mb-1">Cluster Nodes</h1>
+    <p class="text-secondary small mb-0">Detailed health, replication lag, process supervision status, and manual
+        failover / switchover controls</p>
 </header>
 
-<table>
-    <thead>
-        <tr>
-            <th>Node</th>
-            <th>Endpoint</th>
-            <th>Postgres Version</th>
-            <th>Role</th>
-            <th>Supervision Status</th>
-            <th>CPU</th>
-            <th>RAM</th>
-            <th>Disk</th>
-            <th>Replication Lag</th>
-            <th>Uptime</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for node in nodes %}
-        <tr>
-            <td><strong>Node #{{ node.node_id }}</strong> {% if node.is_local %}<span style="color: var(--accent); font-size: 0.8rem;">(Sidecar Local)</span>{% endif %}</td>
-            <td><code>{{ node.address }}</code></td>
-            <td>{{ node.pg_version }}</td>
-            <td>
-                {% match node.role %}
+<div class="table-responsive">
+    <table class="table table-bordered table-hover align-middle mb-0">
+        <thead>
+            <tr>
+                <th>Node</th>
+                <th>Endpoint</th>
+                <th>Postgres Version</th>
+                <th>Role</th>
+                <th>Supervision Status</th>
+                <th>CPU</th>
+                <th>RAM</th>
+                <th>Disk</th>
+                <th>Replication Lag</th>
+                <th>Uptime</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for node in nodes %}
+            <tr>
+                <td><strong>Node #{{ node.node_id }}</strong> {% if node.is_local %}<span
+                        style="color: var(--accent); font-size: 0.8rem;">(Sidecar Local)</span>{% endif %}</td>
+                <td><code>{{ node.address }}</code></td>
+                <td>{{ node.pg_version }}</td>
+                <td>
+                    {% match node.role %}
                     {% when NodeRole::Leader %}
-                        <span class="badge badge-leader">Raft Leader (Primary)</span>
+                    <span class="badge badge-leader">Raft Leader (Primary)</span>
                     {% when NodeRole::Standby %}
-                        <span class="badge badge-standby">Standby (Replica)</span>
+                    <span class="badge badge-standby">Standby (Replica)</span>
                     {% when NodeRole::Learner %}
-                        <span class="badge badge-standby">Learner</span>
-                {% endmatch %}
-            </td>
-            <td>
-                {% match node.state %}
+                    <span class="badge badge-standby">Learner</span>
+                    {% endmatch %}
+                </td>
+                <td>
+                    {% match node.state %}
                     {% when NodeHealthState::Healthy %}
-                        <span class="badge badge-healthy">Online / Healthy</span>
+                    <span class="badge badge-healthy">Online / Healthy</span>
                     {% when NodeHealthState::Degraded %}
-                        <span class="badge badge-degraded">Degraded</span>
+                    <span class="badge badge-degraded">Degraded</span>
                     {% when NodeHealthState::Fenced %}
-                        <span class="badge badge-fenced">Fenced (Quorum Lost)</span>
+                    <span class="badge badge-fenced">Fenced (Quorum Lost)</span>
                     {% when NodeHealthState::Stopped %}
-                        <span class="badge badge-offline">Stopped</span>
+                    <span class="badge badge-offline">Stopped</span>
                     {% when NodeHealthState::Offline %}
-                        <span class="badge badge-offline">Offline</span>
-                {% endmatch %}
-            </td>
-            <td>
-                <div style="display: flex; flex-direction: column; gap: 4px; min-width: 70px;">
-                    <span style="font-size: 0.85rem; font-family: monospace;">{{ node.cpu_pretty() }}</span>
-                    <div style="background: rgba(255,255,255,0.1); border-radius: 4px; height: 5px; width: 100%; overflow: hidden;">
-                        <div style="background: {% if node.cpu_percent > 85.0 %}var(--danger){% else if node.cpu_percent > 65.0 %}var(--warning){% else %}var(--primary){% endif %}; height: 100%; width: {{ node.cpu_percent.clamp(0.0, 100.0) }}%;"></div>
+                    <span class="badge badge-offline">Offline</span>
+                    {% endmatch %}
+                </td>
+                <td>
+                    <div style="display: flex; flex-direction: column; gap: 4px; min-width: 70px;">
+                        <span style="font-size: 0.85rem; font-family: monospace;">{{ node.cpu_pretty() }}</span>
+                        <div
+                            style="background: rgba(255,255,255,0.1); border-radius: 4px; height: 5px; width: 100%; overflow: hidden;">
+                            <div
+                                style="background: {% if node.cpu_percent > 85.0 %}var(--danger){% else if node.cpu_percent > 65.0 %}var(--warning){% else %}var(--primary){% endif %}; height: 100%; width: {{ node.cpu_percent.clamp(0.0, 100.0) }}%;">
+                            </div>
+                        </div>
                     </div>
-                </div>
-            </td>
-            <td>
-                <div style="display: flex; flex-direction: column; gap: 4px; min-width: 105px;">
-                    <span style="font-size: 0.8rem; font-family: monospace;">{{ node.memory_pretty() }}</span>
-                    <div style="background: rgba(255,255,255,0.1); border-radius: 4px; height: 5px; width: 100%; overflow: hidden;">
-                        <div style="background: {% if node.memory_percent() > 85.0 %}var(--danger){% else if node.memory_percent() > 65.0 %}var(--warning){% else %}var(--primary){% endif %}; height: 100%; width: {{ node.memory_percent().clamp(0.0, 100.0) }}%;"></div>
+                </td>
+                <td>
+                    <div style="display: flex; flex-direction: column; gap: 4px; min-width: 105px;">
+                        <span style="font-size: 0.8rem; font-family: monospace;">{{ node.memory_pretty() }}</span>
+                        <div
+                            style="background: rgba(255,255,255,0.1); border-radius: 4px; height: 5px; width: 100%; overflow: hidden;">
+                            <div
+                                style="background: {% if node.memory_percent() > 85.0 %}var(--danger){% else if node.memory_percent() > 65.0 %}var(--warning){% else %}var(--primary){% endif %}; height: 100%; width: {{ node.memory_percent().clamp(0.0, 100.0) }}%;">
+                            </div>
+                        </div>
                     </div>
-                </div>
-            </td>
-            <td>
-                <span style="font-size: 0.85rem; font-family: monospace;">{{ node.disk_pretty() }}</span>
-            </td>
-            <td>{{ node.replication_lag_bytes }} B</td>
-            <td>{{ node.uptime_secs }}s</td>
-            <td>
-                <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
-                {% match node.state %}
-                    {% when NodeHealthState::Healthy %}
+                </td>
+                <td>
+                    <span style="font-size: 0.85rem; font-family: monospace;">{{ node.disk_pretty() }}</span>
+                </td>
+                <td>{{ node.replication_lag_bytes }} B</td>
+                <td>{{ node.uptime_secs }}s</td>
+                <td>
+                    <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+                        {% match node.state %}
+                        {% when NodeHealthState::Healthy %}
                         {% match node.role %}
-                            {% when NodeRole::Standby %}
-                                <button class="btn btn-sm btn-primary" onclick="openSwitchoverModal('{{ node.node_id }}', '{{ node.address }}')">
-                                    Promote
-                                </button>
-                            {% when NodeRole::Leader %}
-                            {% when NodeRole::Learner %}
+                        {% when NodeRole::Standby %}
+                        <button class="btn btn-sm btn-primary"
+                            onclick="openSwitchoverModal('{{ node.node_id }}', '{{ node.address }}')">
+                            Promote
+                        </button>
+                        {% when NodeRole::Leader %}
+                        {% when NodeRole::Learner %}
                         {% endmatch %}
-                        <button class="btn btn-sm btn-secondary" onclick="openNodeActionModal('restart', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
+                        <button class="btn btn-sm btn-secondary"
+                            onclick="openNodeActionModal('restart', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
                             Restart
                         </button>
-                        <button class="btn btn-sm btn-danger" onclick="openNodeActionModal('stop', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
+                        <button class="btn btn-sm btn-danger"
+                            onclick="openNodeActionModal('stop', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
                             Stop
                         </button>
                         <a href="/nodes/{{ node.node_id }}/inspect" class="btn btn-sm btn-secondary">
                             Inspect
                         </a>
-                    {% when NodeHealthState::Stopped %}
-                        <button class="btn btn-sm btn-success" onclick="openNodeActionModal('start', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
+                        {% when NodeHealthState::Stopped %}
+                        <button class="btn btn-sm btn-success"
+                            onclick="openNodeActionModal('start', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
                             Start
                         </button>
                         <a href="/nodes/{{ node.node_id }}/inspect" class="btn btn-sm btn-secondary">
                             Inspect
                         </a>
-                    {% when NodeHealthState::Fenced %}
-                        <button class="btn btn-sm btn-success" onclick="openNodeActionModal('start', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
+                        {% when NodeHealthState::Fenced %}
+                        <button class="btn btn-sm btn-success"
+                            onclick="openNodeActionModal('start', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
                             Start
                         </button>
-                        <button class="btn btn-sm btn-secondary" onclick="openNodeActionModal('restart', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
+                        <button class="btn btn-sm btn-secondary"
+                            onclick="openNodeActionModal('restart', '{{ node.node_id }}', '{{ node.address }}', '{{ node.role }}')">
                             Restart
                         </button>
                         <a href="/nodes/{{ node.node_id }}/inspect" class="btn btn-sm btn-secondary">
                             Inspect
                         </a>
-                    {% when NodeHealthState::Degraded %}
+                        {% when NodeHealthState::Degraded %}
                         <span style="color: var(--text-muted); font-size: 0.8rem;">Restoring...</span>
                         <a href="/nodes/{{ node.node_id }}/inspect" class="btn btn-sm btn-secondary">
                             Inspect
                         </a>
-                    {% when NodeHealthState::Offline %}
+                        {% when NodeHealthState::Offline %}
                         <span style="color: var(--text-muted); font-size: 0.8rem;">Unreachable</span>
-                {% endmatch %}
-                </div>
-            </td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
+                        {% endmatch %}
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
 
-<!-- Switchover Modal -->
-<div id="switchoverModal" class="modal-backdrop">
-    <div class="modal">
-        <h2>Confirm Manual Leader Switchover</h2>
-        <p>Transfer read-write primary leadership to <strong id="targetNodeLabel" style="color: var(--primary);">Node</strong> (<code id="targetNodeAddr"></code>).</p>
-        
-        <div class="step-list">
-            <div>1. Gracefully demotes current leader (stops new writes, flushes WAL).</div>
-            <div>2. Promotes target standby to read-write primary.</div>
-            <div>3. Re-points remaining standbys to the new leader.</div>
-            <div>4. Drains proxy connection pool and reroutes client connections.</div>
-            <div>5. Demoted node auto-rejoins as a standby replica.</div>
-        </div>
+    <!-- Switchover Modal -->
+    <div id="switchoverModal" class="pgv-modal-backdrop">
+        <div class="pgv-modal">
+            <h2>Confirm Manual Leader Switchover</h2>
+            <p>Transfer read-write primary leadership to <strong id="targetNodeLabel"
+                    style="color: var(--primary);">Node</strong> (<code id="targetNodeAddr"></code>).</p>
 
-        <div class="modal-actions">
-            <button class="btn btn-secondary" onclick="closeSwitchoverModal()">Cancel</button>
-            <button id="btnSubmitSwitchover" class="btn btn-primary" onclick="submitSwitchover()">Confirm Switchover</button>
-        </div>
-    </div>
-</div>
+            <div class="step-list">
+                <div>1. Gracefully demotes current leader (stops new writes, flushes WAL).</div>
+                <div>2. Promotes target standby to read-write primary.</div>
+                <div>3. Re-points remaining standbys to the new leader.</div>
+                <div>4. Drains proxy connection pool and reroutes client connections.</div>
+                <div>5. Demoted node auto-rejoins as a standby replica.</div>
+            </div>
 
-<!-- Node Action Modal (Start / Stop / Restart) -->
-<div id="nodeActionModal" class="modal-backdrop">
-    <div class="modal">
-        <h2 id="nodeActionTitle">Confirm Node Action</h2>
-        <p id="nodeActionDesc">Are you sure you want to perform this lifecycle action?</p>
-
-        <div id="nodeActionLeaderWarning" class="step-list" style="display: none; border-color: var(--danger); color: #f87171;">
-            <div><strong>WARNING: Node is currently the active cluster Leader!</strong></div>
-            <div>Stopping this node will trigger an automatic failover election among standby replicas.</div>
-            <div>Active client connections will be drained and rerouted to the newly elected leader.</div>
-        </div>
-
-        <div class="modal-actions">
-            <button class="btn btn-secondary" onclick="closeNodeActionModal()">Cancel</button>
-            <button id="btnSubmitNodeAction" class="btn btn-primary" onclick="submitNodeAction()">Confirm</button>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeSwitchoverModal()">Cancel</button>
+                <button id="btnSubmitSwitchover" class="btn btn-primary" onclick="submitSwitchover()">Confirm
+                    Switchover</button>
+            </div>
         </div>
     </div>
-</div>
+
+    <!-- Node Action Modal (Start / Stop / Restart) -->
+    <div id="nodeActionModal" class="pgv-modal-backdrop">
+        <div class="pgv-modal">
+            <h2 id="nodeActionTitle">Confirm Node Action</h2>
+            <p id="nodeActionDesc">Are you sure you want to perform this lifecycle action?</p>
+
+            <div id="nodeActionLeaderWarning" class="step-list"
+                style="display: none; border-color: var(--danger); color: #f87171;">
+                <div><strong>WARNING: Node is currently the active cluster Leader!</strong></div>
+                <div>Stopping this node will trigger an automatic failover election among standby replicas.</div>
+                <div>Active client connections will be drained and rerouted to the newly elected leader.</div>
+            </div>
+
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeNodeActionModal()">Cancel</button>
+                <button id="btnSubmitNodeAction" class="btn btn-primary" onclick="submitNodeAction()">Confirm</button>
+            </div>
+        </div>
+    </div>
 
 
 
-<!-- Toast -->
-<div id="toast" class="toast">
-    <span id="toastMsg"></span>
-</div>
+    <!-- Toast -->
+    <div id="toast" class="toast">
+        <span id="toastMsg"></span>
+    </div>
 
-<script>
-    let selectedTargetNodeId = null;
-    let selectedActionNodeId = null;
-    let selectedActionKind = null;
+    <script>
+        let selectedTargetNodeId = null;
+        let selectedActionNodeId = null;
+        let selectedActionKind = null;
 
-    function showToast(msg, isError = false) {
-        const toast = document.getElementById('toast');
-        const toastMsg = document.getElementById('toastMsg');
-        toastMsg.textContent = msg;
-        toast.className = 'toast ' + (isError ? 'toast-error' : 'toast-success');
-        toast.style.display = 'flex';
-        setTimeout(() => { toast.style.display = 'none'; }, 4000);
-    }
+        function showToast(msg, isError = false) {
+            const toast = document.getElementById('toast');
+            const toastMsg = document.getElementById('toastMsg');
+            toastMsg.textContent = msg;
+            toast.className = 'toast ' + (isError ? 'toast-error' : 'toast-success');
+            toast.style.display = 'flex';
+            setTimeout(() => { toast.style.display = 'none'; }, 4000);
+        }
 
-    function openSwitchoverModal(nodeId, nodeAddr) {
-        selectedTargetNodeId = parseInt(nodeId, 10);
-        document.getElementById('targetNodeLabel').textContent = 'Node #' + nodeId;
-        document.getElementById('targetNodeAddr').textContent = nodeAddr;
-        document.getElementById('switchoverModal').style.display = 'flex';
-    }
+        function openSwitchoverModal(nodeId, nodeAddr) {
+            selectedTargetNodeId = parseInt(nodeId, 10);
+            document.getElementById('targetNodeLabel').textContent = 'Node #' + nodeId;
+            document.getElementById('targetNodeAddr').textContent = nodeAddr;
+            document.getElementById('switchoverModal').style.display = 'flex';
+        }
 
-    function closeSwitchoverModal() {
-        document.getElementById('switchoverModal').style.display = 'none';
-        selectedTargetNodeId = null;
-    }
+        function closeSwitchoverModal() {
+            document.getElementById('switchoverModal').style.display = 'none';
+            selectedTargetNodeId = null;
+        }
 
-    async function submitSwitchover() {
-        if (!selectedTargetNodeId) return;
+        async function submitSwitchover() {
+            if (!selectedTargetNodeId) return;
 
-        const btn = document.getElementById('btnSubmitSwitchover');
-        btn.disabled = true;
-        btn.textContent = 'Executing Switchover...';
+            const btn = document.getElementById('btnSubmitSwitchover');
+            btn.disabled = true;
+            btn.textContent = 'Executing Switchover...';
 
-        try {
-            const resp = await fetch('/api/cluster/switchover', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ target_node_id: selectedTargetNodeId })
-            });
+            try {
+                const resp = await fetch('/api/cluster/switchover', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ target_node_id: selectedTargetNodeId })
+                });
 
-            const data = await resp.json();
-            if (resp.ok) {
-                closeSwitchoverModal();
-                showToast(data.message || 'Switchover successful! Reloading...');
-                setTimeout(() => {
-                    window.location.reload();
-                }, 1500);
-            } else {
-                showToast(data.error || 'Switchover failed', true);
+                const data = await resp.json();
+                if (resp.ok) {
+                    closeSwitchoverModal();
+                    showToast(data.message || 'Switchover successful! Reloading...');
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1500);
+                } else {
+                    showToast(data.error || 'Switchover failed', true);
+                    btn.disabled = false;
+                    btn.textContent = 'Confirm Switchover';
+                }
+            } catch (err) {
+                showToast('Network error during switchover: ' + err.message, true);
                 btn.disabled = false;
                 btn.textContent = 'Confirm Switchover';
             }
-        } catch (err) {
-            showToast('Network error during switchover: ' + err.message, true);
-            btn.disabled = false;
-            btn.textContent = 'Confirm Switchover';
         }
-    }
 
-    function openNodeActionModal(action, nodeId, nodeAddr, role) {
-        selectedActionNodeId = parseInt(nodeId, 10);
-        selectedActionKind = action;
+        function openNodeActionModal(action, nodeId, nodeAddr, role) {
+            selectedActionNodeId = parseInt(nodeId, 10);
+            selectedActionKind = action;
 
-        const titleElem = document.getElementById('nodeActionTitle');
-        const descElem = document.getElementById('nodeActionDesc');
-        const warningElem = document.getElementById('nodeActionLeaderWarning');
-        const submitBtn = document.getElementById('btnSubmitNodeAction');
+            const titleElem = document.getElementById('nodeActionTitle');
+            const descElem = document.getElementById('nodeActionDesc');
+            const warningElem = document.getElementById('nodeActionLeaderWarning');
+            const submitBtn = document.getElementById('btnSubmitNodeAction');
 
-        const actionCap = action.charAt(0).toUpperCase() + action.slice(1);
-        titleElem.textContent = `Confirm ${actionCap} - Node #${nodeId}`;
+            const actionCap = action.charAt(0).toUpperCase() + action.slice(1);
+            titleElem.textContent = `Confirm ${actionCap} - Node #${nodeId}`;
 
-        if (action === 'stop') {
-            submitBtn.className = 'btn btn-danger';
-            submitBtn.textContent = 'Confirm Stop';
-            if (role === 'leader' || role === 'Leader') {
-                warningElem.style.display = 'flex';
-                descElem.textContent = `Gracefully stop PostgreSQL on Node #${nodeId} (${nodeAddr}).`;
-            } else {
+            if (action === 'stop') {
+                submitBtn.className = 'btn btn-danger';
+                submitBtn.textContent = 'Confirm Stop';
+                if (role === 'leader' || role === 'Leader') {
+                    warningElem.style.display = 'flex';
+                    descElem.textContent = `Gracefully stop PostgreSQL on Node #${nodeId} (${nodeAddr}).`;
+                } else {
+                    warningElem.style.display = 'none';
+                    descElem.textContent = `Stop PostgreSQL on standby Node #${nodeId} (${nodeAddr}). The replica will pause replication until restarted.`;
+                }
+            } else if (action === 'restart') {
+                submitBtn.className = 'btn btn-primary';
+                submitBtn.textContent = 'Confirm Restart';
                 warningElem.style.display = 'none';
-                descElem.textContent = `Stop PostgreSQL on standby Node #${nodeId} (${nodeAddr}). The replica will pause replication until restarted.`;
+                descElem.textContent = `Gracefully restart PostgreSQL child process on Node #${nodeId} (${nodeAddr}).`;
+            } else if (action === 'start') {
+                submitBtn.className = 'btn btn-success';
+                submitBtn.textContent = 'Confirm Start';
+                warningElem.style.display = 'none';
+                descElem.textContent = `Start PostgreSQL child process on Node #${nodeId} (${nodeAddr}) and rejoin cluster.`;
             }
-        } else if (action === 'restart') {
-            submitBtn.className = 'btn btn-primary';
-            submitBtn.textContent = 'Confirm Restart';
-            warningElem.style.display = 'none';
-            descElem.textContent = `Gracefully restart PostgreSQL child process on Node #${nodeId} (${nodeAddr}).`;
-        } else if (action === 'start') {
-            submitBtn.className = 'btn btn-success';
-            submitBtn.textContent = 'Confirm Start';
-            warningElem.style.display = 'none';
-            descElem.textContent = `Start PostgreSQL child process on Node #${nodeId} (${nodeAddr}) and rejoin cluster.`;
+
+            document.getElementById('nodeActionModal').style.display = 'flex';
         }
 
-        document.getElementById('nodeActionModal').style.display = 'flex';
-    }
+        function closeNodeActionModal() {
+            document.getElementById('nodeActionModal').style.display = 'none';
+            selectedActionNodeId = null;
+            selectedActionKind = null;
+        }
 
-    function closeNodeActionModal() {
-        document.getElementById('nodeActionModal').style.display = 'none';
-        selectedActionNodeId = null;
-        selectedActionKind = null;
-    }
+        async function submitNodeAction() {
+            if (!selectedActionNodeId || !selectedActionKind) return;
 
-    async function submitNodeAction() {
-        if (!selectedActionNodeId || !selectedActionKind) return;
+            const btn = document.getElementById('btnSubmitNodeAction');
+            btn.disabled = true;
+            const originalText = btn.textContent;
+            btn.textContent = 'Processing...';
 
-        const btn = document.getElementById('btnSubmitNodeAction');
-        btn.disabled = true;
-        const originalText = btn.textContent;
-        btn.textContent = 'Processing...';
+            try {
+                const resp = await fetch(`/api/nodes/${selectedActionNodeId}/${selectedActionKind}`, {
+                    method: 'POST'
+                });
 
-        try {
-            const resp = await fetch(`/api/nodes/${selectedActionNodeId}/${selectedActionKind}`, {
-                method: 'POST'
-            });
-
-            const data = await resp.json();
-            if (resp.ok) {
-                closeNodeActionModal();
-                showToast(data.message || `${selectedActionKind} action succeeded! Reloading...`);
-                setTimeout(() => {
-                    window.location.reload();
-                }, 1500);
-            } else {
-                showToast(data.error || `Failed to ${selectedActionKind} node`, true);
+                const data = await resp.json();
+                if (resp.ok) {
+                    closeNodeActionModal();
+                    showToast(data.message || `${selectedActionKind} action succeeded! Reloading...`);
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1500);
+                } else {
+                    showToast(data.error || `Failed to ${selectedActionKind} node`, true);
+                    btn.disabled = false;
+                    btn.textContent = originalText;
+                }
+            } catch (err) {
+                showToast(`Network error: ${err.message}`, true);
                 btn.disabled = false;
                 btn.textContent = originalText;
             }
-        } catch (err) {
-            showToast(`Network error: ${err.message}`, true);
-            btn.disabled = false;
-            btn.textContent = originalText;
         }
-    }
 
 
-</script>
-{% endblock %}
+    </script>
+    {% endblock %}

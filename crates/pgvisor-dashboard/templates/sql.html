@@ -4,51 +4,48 @@
 {% block nav_sql %}active{% endblock %}
 
 {% block content %}
-<header>
+<header class="d-flex justify-content-between align-items-center mb-4">
     <div>
-        <h1>SQL Console</h1>
-        <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 4px;">Guarded read-only SQL query execution
-            with statement timeout and session isolation</p>
+        <h1 class="h3 fw-bold mb-1">SQL Console</h1>
+        <p class="text-secondary small mb-0">Guarded read-only SQL query execution with statement timeout and session isolation</p>
     </div>
     <div>
-        <span class="badge badge-healthy" title="Mutation statements strictly blocked">Read-Only Guarded</span>
+        <span class="badge rounded-pill badge-healthy" title="Mutation statements strictly blocked">Read-Only Guarded</span>
     </div>
 </header>
 
-<div class="card" style="margin-bottom: 24px;">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <span style="font-size: 0.85rem; color: var(--text-muted);">Allowed: SELECT, SHOW, EXPLAIN, WITH. Blocked:
-            INSERT, UPDATE, DELETE, DDL. Max Rows: 500. Timeout: 5s.</span>
-        <span id="exec-status" style="font-size: 0.85rem; color: var(--text-muted);"></span>
-    </div>
-    <textarea id="sql-input"
-        style="width: 100%; height: 120px; background: #0b0f19; border: 1px solid var(--border); border-radius: 6px; padding: 12px; color: #f8fafc; font-family: monospace; font-size: 0.95rem; resize: vertical;"
-        placeholder="SELECT datname, numbackends, xact_commit, xact_rollback FROM pg_stat_database;"></textarea>
-    <div style="margin-top: 12px; display: flex; justify-content: flex-end; gap: 12px;">
-        <button id="run-btn" onclick="executeSql()"
-            style="background: var(--primary); color: #0b0f19; border: none; padding: 8px 20px; border-radius: 6px; font-weight: 600; cursor: pointer;">Execute
-            Query</button>
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <span class="small text-secondary">Allowed: SELECT, SHOW, EXPLAIN, WITH. Blocked: INSERT, UPDATE, DELETE, DDL. Max Rows: 500. Timeout: 5s.</span>
+            <span id="exec-status" class="small text-secondary"></span>
+        </div>
+        <textarea id="sql-input" rows="5" class="form-control font-monospace bg-dark border-secondary-subtle mb-3"
+            placeholder="SELECT datname, numbackends, xact_commit, xact_rollback FROM pg_stat_database;"></textarea>
+        <div class="d-flex justify-content-end">
+            <button id="run-btn" onclick="executeSql()" class="btn btn-info fw-semibold">Execute Query</button>
+        </div>
     </div>
 </div>
 
-<div id="result-container" class="card" style="display: none;">
-    <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
-        <h3 id="result-meta" style="color: var(--text-main);">Query Results</h3>
-        <span id="timing-badge" class="badge badge-standby">0 ms</span>
-    </div>
-    <div id="table-wrapper" style="overflow-x: auto;">
-        <table id="result-table">
-            <thead id="result-head"></thead>
-            <tbody id="result-body"></tbody>
-        </table>
+<div id="result-container" class="card mb-4" style="display: none;">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h3 id="result-meta" class="h6 mb-0">Query Results</h3>
+            <span id="timing-badge" class="badge rounded-pill badge-standby">0 ms</span>
+        </div>
+        <div id="table-wrapper" class="table-responsive">
+            <table id="result-table" class="table table-bordered table-hover align-middle mb-0">
+                <thead id="result-head"></thead>
+                <tbody id="result-body"></tbody>
+            </table>
+        </div>
     </div>
 </div>
 
-<div id="error-box" class="card"
-    style="display: none; border-color: var(--danger); background: rgba(248, 113, 113, 0.1);">
-    <h3 style="color: var(--danger); margin-bottom: 8px;">Execution Error</h3>
-    <pre id="error-message"
-        style="color: #fca5a5; font-family: monospace; font-size: 0.9rem; white-space: pre-wrap;"></pre>
+<div id="error-box" class="alert alert-danger" style="display: none;" role="alert">
+    <h3 class="h6 alert-heading mb-2">Execution Error</h3>
+    <pre id="error-message" class="font-monospace small mb-0" style="white-space: pre-wrap;"></pre>
 </div>
 
 <script>
