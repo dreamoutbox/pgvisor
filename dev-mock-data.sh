@@ -17,9 +17,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROXY_HOST="${PGVISOR_HOST:-127.0.0.1}"
 PROXY_PORT="${PGVISOR_PORT:-5432}"
 DASHBOARD_URL="${PGVISOR_DASHBOARD_URL:-http://127.0.0.1:8080}"
-ADMIN_TOKEN="${PGVISOR_ADMIN_TOKEN:-postgres}"
+API_TOKEN="${PGVISOR_API_TOKEN:-}"
 NODE_CONTAINER="${PGVISOR_NODE_CONTAINER:-pgvisor-node1}"
 PGUSER="${PGUSER:-postgres}"
+API_PASSWORD="${PGVISOR_API_PASSWORD:-${POSTGRES_PASSWORD:-postgres}}"
 PGDATABASE="${PGDATABASE:-postgres}"
 DELAY_SECONDS="${PGVISOR_DELAY_SECONDS:-1}"
 
@@ -42,8 +43,16 @@ while [[ $# -gt 0 ]]; do
             DASHBOARD_URL="${1#*=}"
             shift
             ;;
+        --user=*)
+            PGUSER="${1#*=}"
+            shift
+            ;;
+        --password=*)
+            API_PASSWORD="${1#*=}"
+            shift
+            ;;
         --token=*)
-            ADMIN_TOKEN="${1#*=}"
+            API_TOKEN="${1#*=}"
             shift
             ;;
         --container=*)
@@ -57,11 +66,13 @@ while [[ $# -gt 0 ]]; do
             echo "slowly inserts additional rows with delay, and triggers incremental backup 'incr2'."
             echo ""
             echo "Options:"
-            echo "  --delay=N            Delay in seconds between slow inserts (default: 3)"
+            echo "  --delay=N            Delay in seconds between slow inserts (default: 1)"
             echo "  --host=HOST          Postgres proxy host (default: 127.0.0.1)"
             echo "  --port=PORT          Postgres proxy port (default: 5432)"
             echo "  --dashboard-url=URL  Dashboard HTTP URL (default: http://127.0.0.1:8080)"
-            echo "  --token=TOKEN        Admin token for dashboard API (default: postgres)"
+            echo "  --user=USER          PostgreSQL / API superuser (default: postgres)"
+            echo "  --password=PASSWORD  PostgreSQL / API password (default: postgres)"
+            echo "  --token=TOKEN        Pre-issued API session token (skips /api/auth/login)"
             echo "  --container=NAME     Docker container fallback for psql (default: pgvisor-node1)"
             echo "  -h, --help           Show this help message"
             exit 0
@@ -74,12 +85,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Prepare authentication header for dashboard API
-AUTH_HEADER=()
-if [ -n "${ADMIN_TOKEN}" ]; then
-    AUTH_HEADER=(-H "Authorization: Bearer ${ADMIN_TOKEN}")
-fi
-
 # Helper to extract JSON field using jq, python3, or grep/sed
 json_extract() {
     local field="$1"
@@ -90,6 +95,33 @@ json_extract() {
     else
         grep -o "\"${field}\":\"[^\"]*\"" | head -n 1 | cut -d':' -f2 | tr -d '"'
     fi
+}
+
+# Authenticate against Dashboard/Sidecar API via POST /api/auth/login unless a token was provided
+AUTH_HEADER=()
+api_login() {
+    if [ -n "${API_TOKEN}" ]; then
+        AUTH_HEADER=(-H "Authorization: Bearer ${API_TOKEN}")
+        return 0
+    fi
+
+    local resp token
+    for _ in $(seq 1 15); do
+        resp=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"${PGUSER}\",\"password\":\"${API_PASSWORD}\"}" \
+            "${DASHBOARD_URL}/api/auth/login" 2>/dev/null || true)
+        token=$(printf '%s' "${resp}" | json_extract "token")
+        if [ -n "${token}" ]; then
+            API_TOKEN="${token}"
+            AUTH_HEADER=(-H "Authorization: Bearer ${API_TOKEN}")
+            return 0
+        fi
+        sleep 1
+    done
+
+    echo "Error: Failed to authenticate with ${DASHBOARD_URL}/api/auth/login as '${PGUSER}'. Response: ${resp}" >&2
+    return 1
 }
 
 # Helper to execute SQL with retry
@@ -126,10 +158,10 @@ trigger_backup() {
     local b_label="$2"
 
     local resp
-    resp=$(curl -s -f -X POST "${DASHBOARD_URL}/api/backups" \
+    resp=$(curl -s -X POST "${DASHBOARD_URL}/api/backups" \
         "${AUTH_HEADER[@]}" \
         -H "Content-Type: application/json" \
-        -d "{\"backup_type\": \"${b_type}\", \"label\": \"${b_label}\"}")
+        -d "{\"backup_type\": \"${b_type}\", \"label\": \"${b_label}\"}" || true)
 
     echo "${resp}"
 }
@@ -144,6 +176,8 @@ echo "============================================================="
 echo "  PgVisor: Demo Data Setup & Backup Sequence"
 echo "  Proxy: ${PROXY_HOST}:${PROXY_PORT} | Dashboard: ${DASHBOARD_URL}"
 echo "============================================================="
+
+api_login
 
 # ------------------------------------------------------------------------------
 # Step 1: Initialize demo table and seed initial rows
@@ -280,7 +314,7 @@ echo "3. Incremental backup 'incr2': ${INCR2_SNAPSHOT_ID} (${INCR2_CREATED_AT})"
 echo ""
 echo "To test Quick Point-In-Time-Recovery (automatic snapshot selection):"
 echo "  curl -X POST \"${DASHBOARD_URL}/api/backups/quick-restore\" \\"
-echo "    -H \"Authorization: Bearer ${ADMIN_TOKEN}\" \\"
+echo "    -H \"Authorization: Bearer ${API_TOKEN}\" \\"
 echo "    -H \"Content-Type: application/json\" \\"
 echo "    -d '{\"recovery_target_time\": \"<ISO-8601-TIMESTAMP>\"}'"
 echo "============================================================="
