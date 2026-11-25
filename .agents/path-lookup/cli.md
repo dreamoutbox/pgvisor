@@ -11,3 +11,5 @@
 - `crates/pgvisor-cli/src/commands/` = `UpCommand`, `DownCommand`, `RestartCommand`, `StatusCommand`, `LogsCommand`, and `CleanCommand`
 - `crates/pgvisor-cli/tests/` = Unit tests (`cli_args_test.rs`, `docker_runner_test.rs`, `setup_command_test.rs`, `lifecycle_commands_test.rs`)
 - `tests/test-cli-setup.sh` = End-to-end Docker Compose lifecycle test for `pgvisor setup` -> `up` -> `clean`
+- `dev-build-cli.sh` = Dev helper script to compile the `pgvisor` CLI binary (`--release` optional)
+- `dev-run-cli.sh` = Dev wrapper script running `target/<profile>/pgvisor`, invoking `dev-build-cli.sh` if missing

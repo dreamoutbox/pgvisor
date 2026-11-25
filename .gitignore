@@ -21,3 +21,6 @@ bug-notes/
 debug-s3-bucket-snapshot/
 bugs/
 bug-note.txt
+
+test-cli/
+
